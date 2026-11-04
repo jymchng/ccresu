@@ -178,9 +178,16 @@ type Session struct {
 	// session was last seen, so a later resume can prove the conversation grew.
 	TranscriptSize  int64
 	TranscriptLines int64
-	DiscoveredAt    time.Time
-	LastSeenAt      time.Time
-	UpdatedAt       time.Time
+	// RetryAt is the instant the wait ends for a session in RETRY_WAIT: the
+	// backoff ccresu computed when the attempt failed, written down rather than
+	// re-derived. Leaving RETRY_WAIT clears it, so a stale wait is never reported
+	// for a session that moved on. A WAITING_FOR_RESET session's instant lives on
+	// its Schedule row instead, and nil here means exactly "no retry pending" —
+	// it is a pointer so that "no retry" cannot be mistaken for a real instant.
+	RetryAt      *time.Time `json:"retry_at,omitempty"`
+	DiscoveredAt time.Time
+	LastSeenAt   time.Time
+	UpdatedAt    time.Time
 }
 
 // UsageLimit is one detected usage-limit event.

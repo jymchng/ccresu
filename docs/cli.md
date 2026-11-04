@@ -61,9 +61,20 @@ $ ccresu sessions
 $ ccresu inspect 4d1f9c2a-7e35-4b18-9a6f-2c8d0e1f3a45
 ```
 
-`inspect` shows the session, its last usage limit, the resolved reset instant
-with the zone it was written in, the schedule and the notification state — enough
-to explain why a wait is where it is.
+`inspect` leads with **when the next attempt is due and why** — an absolute UTC
+instant plus a countdown (`at: 2026-11-04 19:29:00 UTC (in 45s)`), or `none` with
+the reason (`session is not enabled`, `attempt budget spent; use 'ccresu retry'`,
+`no usage limit detected yet`). It then shows the last usage limit, the resolved
+reset instant with the zone it was written in, the schedule and the notification
+state — enough to explain why a wait is where it is.
+
+`sessions` carries the same answer as its `NEXT ATTEMPT` column: `in 2h14m` while
+a wait is pending, `none (<reason>)` when nothing is scheduled. Both read the
+stored schedule or the stored retry instant rather than re-deriving a time, so
+what is printed is what the daemon will do. With `--json`, `sessions` adds
+`next_attempt_at` (RFC 3339, `null` when nothing is scheduled) and
+`next_attempt_reason` to each row, and `inspect` adds a `next_attempt` object
+holding `scheduled`, `at`, `reason` and a ready-made `human` countdown.
 
 ### Resume now
 

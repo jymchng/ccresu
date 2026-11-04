@@ -277,7 +277,12 @@ func TestMigrateFromEmptyAndRollback(t *testing.T) {
 		}
 	}
 
-	// Roll back the newest version: it is undone and its table goes with it.
+	// The newest migration adds the retry instant, so it is present now.
+	if !sessionColumns(ctx, t, store)["retry_at"] {
+		t.Fatalf("next_attempt_at missing after migrate: %v", sessionColumns(ctx, t, store))
+	}
+
+	// Roll back the newest version: it is undone, one version at a time.
 	// Asserting on the version the runner reports keeps this test honest as
 	// migrations are added.
 	reverted, err := store.Rollback(ctx, latest-1)
@@ -289,6 +294,14 @@ func TestMigrateFromEmptyAndRollback(t *testing.T) {
 	}
 	if version, err := store.Version(ctx); err != nil || version != latest-1 {
 		t.Fatalf("Version after rollback = %d, %v", version, err)
+	}
+	if sessionColumns(ctx, t, store)["retry_at"] {
+		t.Fatalf("next_attempt_at survived its rollback: %v", sessionColumns(ctx, t, store))
+	}
+
+	// Roll back the schedules migration: its table goes with it.
+	if _, err := store.Rollback(ctx, 2); err != nil {
+		t.Fatalf("rollback to 2: %v", err)
 	}
 	if tables()["schedules"] {
 		t.Fatalf("schedules survived rollback: %v", tables())

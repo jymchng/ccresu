@@ -6,13 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // sessionColumns is the canonical column list for session queries. Keeping it in
 // one place means a new column is added (or forgotten) in exactly one spot.
 const sessionColumns = `id, project_path, transcript_path, provider, session_type,
 	pid, ppid, process_start_time, state, enabled, recoverable, reason, last_error,
-	transcript_size, transcript_lines, discovered_at, last_seen_at, updated_at`
+	transcript_size, transcript_lines, retry_at, discovered_at, last_seen_at, updated_at`
 
 // SessionFilter narrows a session query. Zero values mean "no constraint".
 type SessionFilter struct {
@@ -72,13 +73,14 @@ func (s *Store) UpsertSession(ctx context.Context, session Session) (bool, error
 	err := s.InTx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `
 			INSERT INTO sessions (`+sessionColumns+`)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (id) DO NOTHING`,
 			session.ID, session.ProjectPath, session.TranscriptPath, session.Provider,
 			string(session.Type), session.PID, session.PPID, int64(session.ProcessStartTime),
 			string(session.State), boolToInt(session.Enabled), boolToInt(session.Recoverable),
 			session.Reason, session.LastError, session.TranscriptSize, session.TranscriptLines,
-			timeToDB(session.DiscoveredAt), timeToDB(session.LastSeenAt), timeToDB(session.UpdatedAt),
+			timePtrToDB(session.RetryAt), timeToDB(session.DiscoveredAt),
+			timeToDB(session.LastSeenAt), timeToDB(session.UpdatedAt),
 		)
 		if err != nil {
 			return fmt.Errorf("insert session %s: %w", session.ID, err)
@@ -228,8 +230,18 @@ func (s *Store) SetSessionEnabled(ctx context.Context, id string, enabled bool) 
 			target = StateDisabled
 		}
 		now := timeToDB(s.now().UTC())
+		// A pending retry belongs to RETRY_WAIT, so disabling a waiting session
+		// has to drop the instant with the state. Nothing here can move a
+		// session *into* RETRY_WAIT, so any target other than RETRY_WAIT leaves
+		// no wait behind; keeping the column would let a disabled session carry
+		// a retry instant that nothing will ever act on.
+		clearRetry := target != StateRetryWait
+		retryAt := "retry_at"
+		if clearRetry {
+			retryAt = "NULL"
+		}
 		result, err := tx.ExecContext(ctx,
-			`UPDATE sessions SET enabled = ?, state = ?, updated_at = ? WHERE id = ?`,
+			`UPDATE sessions SET enabled = ?, state = ?, retry_at = `+retryAt+`, updated_at = ? WHERE id = ?`,
 			boolToInt(enabled), string(target), now, id)
 		if err != nil {
 			return fmt.Errorf("set session %s enabled=%t: %w", id, enabled, err)
@@ -263,6 +275,35 @@ func enabledReason(enabled bool) string {
 	return "session disabled by operator"
 }
 
+// SetSessionRetryAt records the instant a retrying session will be tried again:
+// the backoff ccresu computed for it, written down rather than re-derived.
+//
+// Only RETRY_WAIT uses it: every other state either has a Schedule row or is not
+// waiting at all. A zero instant clears the column, which is what TransitionSession
+// does whenever a session leaves RETRY_WAIT.
+func (s *Store) SetSessionRetryAt(ctx context.Context, id string, at time.Time) error {
+	if s == nil || s.db == nil {
+		return ErrClosed
+	}
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("%w: session id is required", ErrInvalid)
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET retry_at = ?, updated_at = ? WHERE id = ?`,
+		timeToDB(at), timeToDB(s.now().UTC()), id)
+	if err != nil {
+		return fmt.Errorf("set session %s retry instant: %w", id, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set session %s retry instant: %w", id, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("%w: session %s", ErrNotFound, id)
+	}
+	return nil
+}
+
 // TransitionSession moves a session to a new state and appends the audit row.
 //
 // It returns the recorded transition. An attemptID of 0 means "not tied to a
@@ -293,6 +334,16 @@ func (s *Store) TransitionSession(ctx context.Context, id string, to State, reas
 		}
 		if affected == 0 {
 			return fmt.Errorf("%w: session %s", ErrNotFound, id)
+		}
+		// The retry wait belongs to RETRY_WAIT and to nothing else: leaving that
+		// state means the wait is over, so the column is cleared here rather
+		// than left to be stale. Entering RETRY_WAIT leaves it alone, because
+		// the caller writes the instant it computed immediately afterwards.
+		if to != StateRetryWait {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE sessions SET retry_at = NULL WHERE id = ?`, id); err != nil {
+				return fmt.Errorf("clear session %s retry instant: %w", id, err)
+			}
 		}
 		transition = Transition{
 			SessionID:  id,
@@ -407,13 +458,14 @@ func scanSession(row scanner) (Session, error) {
 		sessionType, state                  string
 		enabled, recoverable                int64
 		processStartTime                    int64
+		retryAt                             any
 		discoveredAt, lastSeenAt, updatedAt any
 	)
 	err := row.Scan(
 		&session.ID, &session.ProjectPath, &session.TranscriptPath, &session.Provider,
 		&sessionType, &session.PID, &session.PPID, &processStartTime,
 		&state, &enabled, &recoverable, &session.Reason, &session.LastError,
-		&session.TranscriptSize, &session.TranscriptLines,
+		&session.TranscriptSize, &session.TranscriptLines, &retryAt,
 		&discoveredAt, &lastSeenAt, &updatedAt,
 	)
 	if err != nil {
@@ -428,6 +480,9 @@ func scanSession(row scanner) (Session, error) {
 	session.Enabled = intToBool(enabled)
 	session.Recoverable = intToBool(recoverable)
 	session.ProcessStartTime = uint64(processStartTime)
+	if session.RetryAt, err = timePtrFromDB(retryAt); err != nil {
+		return Session{}, err
+	}
 	if session.DiscoveredAt, err = timeFromDB(discoveredAt); err != nil {
 		return Session{}, err
 	}

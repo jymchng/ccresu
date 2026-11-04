@@ -273,6 +273,30 @@ func timeToDB(t time.Time) any {
 	return t.UTC().UnixMilli()
 }
 
+// timePtrToDB converts an optional time to the stored representation. A nil
+// pointer becomes NULL, which is how "no instant" is recorded, and an empty
+// non-nil time becomes NULL too so the two directions agree.
+func timePtrToDB(t *time.Time) any {
+	if t == nil {
+		return nil
+	}
+	return timeToDB(*t)
+}
+
+// timePtrFromDB converts a stored value back to an optional time. NULL becomes a
+// nil pointer, so an absent instant can never be read as the zero instant — the
+// distinction "no retry pending" depends on.
+func timePtrFromDB(v any) (*time.Time, error) {
+	t, err := timeFromDB(v)
+	if err != nil {
+		return nil, err
+	}
+	if t.IsZero() {
+		return nil, nil
+	}
+	return &t, nil
+}
+
 // timeFromDB converts a stored value back to a UTC time.
 func timeFromDB(v any) (time.Time, error) {
 	switch value := v.(type) {

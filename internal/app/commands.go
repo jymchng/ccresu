@@ -229,8 +229,18 @@ func (a *App) cmdSessions(ctx context.Context, args []string) error {
 		return fmt.Errorf("list sessions: %w", err)
 	}
 
+	schedules, err := rt.Store.LoadSchedules(ctx)
+	if err != nil {
+		return fmt.Errorf("load schedules: %w", err)
+	}
+	scheduleBySession := make(map[string]storage.Schedule, len(schedules))
+	for _, schedule := range schedules {
+		scheduleBySession[schedule.SessionID] = schedule
+	}
+
+	now := rt.Clock.Now()
 	if a.json {
-		return a.writeJSON(a.stdout, sessions)
+		return a.writeJSON(a.stdout, sessionReports(sessions, scheduleBySession, now))
 	}
 	if len(sessions) == 0 {
 		fmt.Fprintln(a.stdout, "no sessions match")
@@ -243,9 +253,11 @@ func (a *App) cmdSessions(ctx context.Context, args []string) error {
 		if note == "" {
 			note = session.LastError
 		}
+		next := nextAttemptCell(recovery.NextAttemptFor(session, schedulePtr(scheduleBySession, session.ID), now), now)
 		rows = append(rows, []string{
 			shortID(session.ID),
 			string(session.State),
+			next,
 			yesNo(session.Enabled),
 			yesNo(session.Recoverable),
 			truncateText(session.ProjectPath, 40),
@@ -253,9 +265,57 @@ func (a *App) cmdSessions(ctx context.Context, args []string) error {
 			truncateText(note, 40),
 		})
 	}
-	a.table(a.stdout, []string{"SESSION", "STATE", "ENABLED", "RECOVERABLE", "PROJECT", "LAST SEEN", "NOTE"}, rows)
+	a.table(a.stdout, []string{"SESSION", "STATE", "NEXT ATTEMPT", "ENABLED", "RECOVERABLE", "PROJECT", "LAST SEEN", "NOTE"}, rows)
 	fmt.Fprintf(a.stdout, "\n%d session(s)\n", len(sessions))
 	return nil
+}
+
+// schedulePtr returns the stored schedule for a session, or nil when it has none.
+// A nil schedule and a zero Schedule mean different things to NextAttemptFor.
+func schedulePtr(bySession map[string]storage.Schedule, sessionID string) *storage.Schedule {
+	schedule, ok := bySession[sessionID]
+	if !ok {
+		return nil
+	}
+	return &schedule
+}
+
+// nextAttemptCell renders the next attempt for a table column: the humanised
+// countdown when something is scheduled, and "none (<reason>)" when nothing is,
+// so a reader never has to open `inspect` to find out why a row is idle.
+func nextAttemptCell(next recovery.NextAttempt, now time.Time) string {
+	if next.Scheduled {
+		return recovery.HumanizeUntil(next.At, now)
+	}
+	return truncateText("none ("+next.Reason+")", 30)
+}
+
+// sessionReport is the JSON shape of one listed session: every stored column plus
+// the derived next attempt, so a script gets the machine-readable instant next to
+// the row it describes.
+type sessionReport struct {
+	storage.Session
+	// NextAttemptAt is the instant ccresu will next act, or null when nothing is
+	// scheduled. The field is a pointer so "not scheduled" and "scheduled at the
+	// zero time" cannot be confused.
+	NextAttemptAt *time.Time `json:"next_attempt_at"`
+	// NextAttemptReason explains the instant, or why there is none.
+	NextAttemptReason string `json:"next_attempt_reason"`
+}
+
+// sessionReports joins sessions with their schedules into the JSON report.
+func sessionReports(sessions []storage.Session, bySession map[string]storage.Schedule, now time.Time) []sessionReport {
+	reports := make([]sessionReport, 0, len(sessions))
+	for _, session := range sessions {
+		next := recovery.NextAttemptFor(session, schedulePtr(bySession, session.ID), now)
+		report := sessionReport{Session: session, NextAttemptReason: next.Reason}
+		if next.Scheduled {
+			at := next.At
+			report.NextAttemptAt = &at
+		}
+		reports = append(reports, report)
+	}
+	return reports
 }
 
 // cmdInspect prints everything known about one session.
@@ -298,13 +358,21 @@ func (a *App) cmdInspect(ctx context.Context, args []string) error {
 		return fmt.Errorf("transitions for %s: %w", id, err)
 	}
 
+	now := rt.Clock.Now()
+	var scheduleArg *storage.Schedule
+	if scheduleErr == nil {
+		scheduleArg = &schedule
+	}
+	next := recovery.NextAttemptFor(session, scheduleArg, now)
+
 	if a.json {
 		return a.writeJSON(a.stdout, map[string]any{
-			"session":     session,
-			"usage_limit": optional(limitErr, limit),
-			"attempt":     optional(attemptErr, attempt),
-			"schedule":    optional(scheduleErr, schedule),
-			"transitions": transitions,
+			"session":      session,
+			"usage_limit":  optional(limitErr, limit),
+			"attempt":      optional(attemptErr, attempt),
+			"schedule":     optional(scheduleErr, schedule),
+			"transitions":  transitions,
+			"next_attempt": nextAttemptReport(next, now),
 		})
 	}
 
@@ -322,6 +390,17 @@ func (a *App) cmdInspect(ctx context.Context, args []string) error {
 	a.field(a.stdout, "transcript", emptyDash(session.TranscriptPath))
 	a.field(a.stdout, "type", session.Type)
 	a.field(a.stdout, "last seen", formatTime(session.LastSeenAt, loc))
+
+	// The next attempt is its own block, above the raw records, because it is the
+	// question an operator actually opens `inspect` to answer.
+	fmt.Fprintln(a.stdout, "")
+	fmt.Fprintln(a.stdout, "Next attempt")
+	if next.Scheduled {
+		a.field(a.stdout, "at", formatTime(next.At, time.UTC)+" ("+recovery.HumanizeUntil(next.At, now)+")")
+	} else {
+		a.field(a.stdout, "at", "none")
+	}
+	a.field(a.stdout, "why", next.Reason)
 
 	if limitErr == nil {
 		fmt.Fprintln(a.stdout, "")
@@ -379,6 +458,23 @@ func (a *App) cmdInspect(ctx context.Context, args []string) error {
 		a.table(a.stdout, []string{"WHEN", "TRANSITION", "REASON"}, rows)
 	}
 	return nil
+}
+
+// nextAttemptReport is the JSON form of a resolved next attempt. It carries both
+// the machine-readable instant and the humanised countdown, so a script needs no
+// duration formatting of its own and a log line needs no timestamp arithmetic.
+func nextAttemptReport(next recovery.NextAttempt, now time.Time) map[string]any {
+	report := map[string]any{
+		"scheduled": next.Scheduled,
+		"reason":    next.Reason,
+		"human":     recovery.HumanizeUntil(next.At, now),
+	}
+	if next.Scheduled {
+		report["at"] = next.At.UTC().Format(time.RFC3339Nano)
+	} else {
+		report["at"] = nil
+	}
+	return report
 }
 
 // optional returns err when the row is missing, and the value otherwise, so a

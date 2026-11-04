@@ -33,6 +33,7 @@ type Store interface {
 	TransitionSession(ctx context.Context, id string, to storage.State, reason string, attemptID int64) (storage.Transition, error)
 	RecordTransition(ctx context.Context, transition storage.Transition) error
 	SetSessionError(ctx context.Context, id, message string) error
+	SetSessionRetryAt(ctx context.Context, id string, at time.Time) error
 	SetSessionTranscriptMetrics(ctx context.Context, id, path string, size, lines int64) error
 	StartAttempt(ctx context.Context, sessionID string, usageLimitID int64, command string) (storage.RecoveryAttempt, error)
 	FinishAttempt(ctx context.Context, attemptID int64, result storage.AttemptResult) (storage.RecoveryAttempt, error)
@@ -554,6 +555,12 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 		}
 		if err := state.move(StateRetryWait, truncate(reason), attempt.ID); err != nil {
 			return Outcome{SessionID: outcome.SessionID, State: state.current}, err
+		}
+		// Persist the instant the wait ends, so `ccresu sessions` and
+		// `ccresu inspect` can report when the next attempt is due instead of
+		// parsing it back out of the human-readable reason above.
+		if err := m.store.SetSessionRetryAt(ctx, outcome.SessionID, m.now().Add(delay)); err != nil {
+			m.log.Warn("record next attempt", "session", outcome.SessionID, "error", err)
 		}
 		_ = m.store.SetSessionError(ctx, outcome.SessionID, truncate(cause.Error()))
 		outcome.State = state.current
