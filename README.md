@@ -718,6 +718,7 @@ material is kept in this repository under [`docs/`](docs/README.md), so it is
 readable offline and reviewable in pull requests.
 
 Hosted pages: [installation](https://jymchng.github.io/ccresu/docs/installation/)
+· [tutorial](https://jymchng.github.io/ccresu/docs/tutorial/)
 · [configuration](https://jymchng.github.io/ccresu/docs/configuration/)
 · [CLI](https://jymchng.github.io/ccresu/docs/cli/)
 · [recovery](https://jymchng.github.io/ccresu/docs/recovery/)

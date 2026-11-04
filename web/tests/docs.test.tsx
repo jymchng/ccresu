@@ -7,12 +7,13 @@ import { docs, getDoc } from "@/lib/docs";
 import { normalizeHref } from "./helpers";
 
 describe("documentation", () => {
-  it("registers the nine required pages with unique slugs", () => {
-    expect(docs).toHaveLength(9);
+  it("registers the ten required pages with unique slugs", () => {
+    expect(docs).toHaveLength(10);
     const slugs = docs.map((doc) => doc.slug);
     expect(new Set(slugs).size).toBe(slugs.length);
     expect(slugs).toEqual([
       "installation",
+      "tutorial",
       "configuration",
       "cli",
       "recovery",

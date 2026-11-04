@@ -4,6 +4,7 @@ import { repo, site, localApi } from "@/lib/site";
 
 const productLinks = [
   { href: "/docs/installation/", label: "Installation" },
+  { href: "/docs/tutorial/", label: "Tutorial" },
   { href: "/docs/cli/", label: "CLI reference" },
   { href: "/docs/configuration/", label: "Configuration" },
   { href: "/docs/recovery/", label: "How recovery works" },

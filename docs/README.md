@@ -61,6 +61,7 @@ ccresu status --json
 
 | Document | Read it for |
 | --- | --- |
+| [tutorial.md](tutorial.md) | A hands-on walkthrough: config, first run, detection, resume, manual actions, API |
 | [cli.md](cli.md) | Every command, flag and exit code |
 | [configuration.md](configuration.md) | Every setting, its default and its environment override |
 | [recovery.md](recovery.md) | Detection, scheduling, resumption and the state machine |

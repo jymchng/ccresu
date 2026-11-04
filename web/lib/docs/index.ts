@@ -7,11 +7,13 @@ import { recoveryDoc } from "./recovery";
 import { securityDoc } from "./security";
 import { telegramDoc } from "./telegram";
 import { troubleshootingDoc } from "./troubleshooting";
+import { tutorialDoc } from "./tutorial";
 import type { DocPage } from "./types";
 
 /** The documentation pages, in the order the navigation shows them. */
 export const docs: readonly DocPage[] = [
   installationDoc,
+  tutorialDoc,
   configurationDoc,
   cliDoc,
   recoveryDoc,

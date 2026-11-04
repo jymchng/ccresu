@@ -8,7 +8,7 @@ import { repo } from "@/lib/site";
 export const metadata: Metadata = {
   title: "Documentation",
   description:
-    "Installation, configuration, CLI reference, recovery mechanism, Telegram setup, deployment, security, troubleshooting and known limitations for ccresu.",
+    "Installation, a hands-on tutorial, configuration, CLI reference, recovery mechanism, Telegram setup, deployment, security, troubleshooting and known limitations for ccresu.",
 };
 
 export default function DocsIndexPage() {
