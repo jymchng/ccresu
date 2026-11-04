@@ -101,17 +101,49 @@ tests are deterministic.
 
 ## Deployment
 
-`.github/workflows/deploy-website.yml` publishes only from `main`, and only when
-something under `web/**` (or the workflow itself) changes, or on manual
+`.github/workflows/deploy-website.yml` publishes on **every push to `main`** (no
+`paths:` filter — a README- or docs-only change republishes too) and on manual
 dispatch:
 
 1. `npm ci`, lint, type-check, test, build — the same gates as CI.
-2. `actions/configure-pages` + `upload-pages-artifact` with `web/out`.
-3. `actions/deploy-pages` in a separate job whose only permissions are
-   `pages: write` and `id-token: write`.
+2. The exported `web/out` is force-pushed to the **`gh-pages` branch**, which is
+   what Pages actually serves.
 
-The first deploy needs the repository's Pages source set to **GitHub Actions**;
-after that, publishing is automatic. To preview the real export locally:
+Publishing a branch rather than calling `actions/deploy-pages` is deliberate.
+The artifact path was tried first and never worked here: the deployment stayed
+`queued` → `in_progress` with an empty status until the 10-minute poll aborted
+it, twice, and the site kept returning 404. A branch push needs nothing but a
+`contents: write` token, and the published tree can be inspected afterwards
+(`git ls-tree -r --name-only origin/gh-pages`).
+
+### The Pages setting must match, or the site 404s silently
+
+Pages serves the repository only when its source is the `gh-pages` branch.
+Check it whenever a green "Deploy website" run still leaves the site 404 —
+that is exactly what happened on 2026-11-04, when the repository reported
+`build_type: "workflow"` while the workflow was pushing a branch: the push
+succeeded, the landing page returned 404.
+
+```bash
+gh api repos/jymchng/ccresu/pages --jq '{status, build_type, source}'
+# good: {"status":"built","build_type":"legacy","source":{"branch":"gh-pages","path":"/"}}
+
+# fix it (or use Settings → Pages → Deploy from a branch → gh-pages / root):
+gh api -X PUT repos/jymchng/ccresu/pages \
+  -f build_type=legacy -f 'source[branch]=gh-pages' -f 'source[path]=/'
+gh api -X POST repos/jymchng/ccresu/pages/builds    # rebuild now
+gh api repos/jymchng/ccresu/pages/builds/latest --jq .status   # → "built"
+```
+
+A correct deploy is verifiable from the outside in one command — and that curl
+is the check the workflow itself cannot do:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://jymchng.github.io/ccresu/docs/installation/
+# 200, served as /index.html because trailingSlash is true
+```
+
+To preview the real export locally:
 
 ```bash
 cd web && npm run build
