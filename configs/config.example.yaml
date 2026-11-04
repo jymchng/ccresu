@@ -72,7 +72,7 @@ telegram:
   enabled: false
   bot_token: ""              # prefer the CCRESU_TELEGRAM__BOT_TOKEN environment variable
   chat_id: ""
-  parse_mode: HTML
+  parse_mode: HTML            # the only accepted value: the templates are HTML
   notify_limit_detected: true
   notify_waiting: false
   notify_recovery_started: true

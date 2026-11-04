@@ -135,6 +135,7 @@ waits:
   guessing, so the resume can lag the real reset.
 - **Global flags are position-sensitive.** `ccresu --json status` works;
   `ccresu status --json` exits 2 with `flag provided but not defined: -json`.
-- **`markdown` parse mode is accepted by the config but the templates are
-  HTML-only.** Leave `telegram.parse_mode: HTML` (the default).
+- **`telegram.parse_mode` must be `HTML`.** It is the only mode the templates
+  can render; `MarkdownV2` and `Markdown` are rejected by `config validate` and
+  by the client rather than sent as markup Telegram cannot read.
 - **The website is not a client.** It cannot reach your daemon, and does not try.

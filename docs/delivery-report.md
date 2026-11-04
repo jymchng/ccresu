@@ -50,9 +50,9 @@ Run at `HEAD` on a clean tree:
 | --- | --- | --- |
 | Formatting | `gofmt -l .` | no output |
 | Vet | `go vet ./...` | clean |
-| Tests | `go test ./...` | all 14 Go packages with tests pass |
+| Tests | `go test ./...` | all 13 Go packages with tests pass |
 | Race | `go test -race ./...` | pass |
-| Coverage | `make cover-check` | **86.2%** (gate 80%) |
+| Coverage | `make cover-check` | **86.7%** (gate 80%) |
 | Website lint | `npm run lint` | clean |
 | Website types | `npx tsc --noEmit` | clean |
 | Website tests | `npm run test` | 7 files, 36 tests pass |
@@ -69,9 +69,9 @@ Per-package statement coverage:
 | `internal/detector` | 98.6% | ≥95% |
 | `internal/process` | 98.3% | ≥80% |
 | `internal/scheduler` | 96.0% | ≥95% |
-| `internal/telegram` | 95.8% | ≥90% |
+| `internal/telegram` | 96.3% | ≥90% |
 | `internal/clock` | 93.3% | — |
-| `internal/recovery` | 92.3% | ≥90% |
+| `internal/recovery` | 98.5% | ≥90% |
 | `internal/claude` | 90.0% | ≥80% |
 | `internal/server` | 87.9% | ≥80% |
 | `internal/storage` | 87.5% | ≥85% |
@@ -108,10 +108,9 @@ still in force, so the session goes back to waiting instead of resuming
 
 Tracked as open goals, not hidden:
 
-- `internal/recovery` edge paths (`verify.go`, `manager.go`) can go deeper than
-  the current 92.3%.
-- `telegram.parse_mode` still accepts `MarkdownV2` while the templates are
-  HTML-only; the safe value is `HTML` (the default).
+- `internal/recovery` edge paths (`verify.go`, `manager.go`) are now at 98.5%
+  (was 92.3%); the eight statements left are unreachable defensive branches
+  tracked as an open goal.
 - A failed pre-resume status check can attempt an illegal
   `CHECKING_SESSION → PERMANENTLY_FAILED` transition instead of `RETRY_WAIT`.
 - Global flags are accepted before the subcommand only (`ccresu --json status`

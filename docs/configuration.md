@@ -151,7 +151,9 @@ detector:
 ### `telegram`
 
 See [telegram.md](telegram.md). Keys: `enabled` (`false`), `bot_token`, `chat_id`,
-`parse_mode` (`HTML`), and the `notify_*` toggles (`limit_detected`,
+`parse_mode` (`HTML` — the only accepted value; `MarkdownV2` and `Markdown` are
+rejected at config validation because the templates emit HTML), and the
+`notify_*` toggles (`limit_detected`,
 `waiting`
 (default `false`), `recovery_started`, `recovery_success`,
 `recovery_failure`, `permanent_failure`, `session_completed` — all `true` by

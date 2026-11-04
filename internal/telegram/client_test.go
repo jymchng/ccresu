@@ -59,6 +59,8 @@ func TestNewClientValidatesItsOptions(t *testing.T) {
 		{"whitespace token", Options{Token: "12 34", ChatID: "42"}, ErrInvalidConfig},
 		{"no chat", Options{Token: testToken}, ErrInvalidConfig},
 		{"bad parse mode", Options{Token: testToken, ChatID: "42", ParseMode: "LaTeX"}, ErrInvalidConfig},
+		{"markdownv2 is not supported", Options{Token: testToken, ChatID: "42", ParseMode: "MarkdownV2"}, ErrInvalidConfig},
+		{"markdown is not supported", Options{Token: testToken, ChatID: "42", ParseMode: "Markdown"}, ErrInvalidConfig},
 		{"bad base url", Options{Token: testToken, ChatID: "42", BaseURL: "api.telegram.org"}, ErrInvalidConfig},
 	}
 	for _, tc := range cases {
@@ -568,5 +570,65 @@ func TestRenderThenSendEscapesAHostileValueOnTheWire(t *testing.T) {
 	}
 	if seen.payload["parse_mode"] != ParseModeHTML {
 		t.Errorf("parse_mode = %v, want %s, or escaping means nothing", seen.payload["parse_mode"], ParseModeHTML)
+	}
+}
+
+// TestAMalformedBaseURLCannotEchoTheToken proves the one error built from the
+// request URL is scrubbed where it is created. That URL carries the bot token,
+// so an unredacted parse failure would print the secret into a log line — the
+// only place the redaction guarantee could otherwise be bypassed.
+func TestAMalformedBaseURLCannotEchoTheToken(t *testing.T) {
+	// An unclosed IPv6 literal passes the http:// check in NewClient and then
+	// fails url.Parse, which is exactly the path that echoes the URL.
+	client, err := NewClient(Options{
+		Token:       testToken,
+		ChatID:      "42",
+		BaseURL:     "http://[::1",
+		MaxAttempts: 1,
+		Logger:      discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	_, err = client.SendMessage(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("SendMessage succeeded against a malformed base URL")
+	}
+	message := err.Error()
+	if strings.Contains(message, testToken) || strings.Contains(message, "TEST-token-value") {
+		t.Fatalf("error = %q, want the bot token redacted", message)
+	}
+	if !strings.Contains(message, "failed") {
+		t.Errorf("error = %q, want it to still identify the failure", message)
+	}
+}
+
+// TestPostRedactsTheTokenInItsOwnErrors checks the guarantee at the layer that
+// creates the error. call() also scrubs what it receives, so a test that stops
+// at SendMessage cannot prove this branch: only calling post directly shows
+// whether the raw http.NewRequestWithContext error — the one carrying the
+// token-bearing URL — is safe on its own.
+func TestPostRedactsTheTokenInItsOwnErrors(t *testing.T) {
+	client, err := NewClient(Options{
+		Token:   testToken,
+		ChatID:  "42",
+		BaseURL: "http://[::1",
+		Logger:  discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	_, _, _, err = client.post(context.Background(), "sendMessage", []byte("{}"))
+	if err == nil {
+		t.Fatal("post succeeded against a malformed base URL")
+	}
+	message := err.Error()
+	if strings.Contains(message, testToken) || strings.Contains(message, "123456:") {
+		t.Fatalf("post error = %q, want the bot token redacted", message)
+	}
+	if !strings.Contains(message, "missing ']'") {
+		t.Errorf("post error = %q, want the underlying parse failure preserved", message)
 	}
 }

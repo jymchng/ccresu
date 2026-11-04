@@ -196,10 +196,8 @@ func (c *Config) validateRecovery(add problemAdder) {
 }
 
 func (c *Config) validateTelegram(add problemAdder) {
-	switch normalizeParseMode(c.Telegram.ParseMode) {
-	case "HTML", "MarkdownV2", "Markdown":
-	default:
-		add("telegram.parse_mode must be one of HTML, MarkdownV2, Markdown (got %q)", c.Telegram.ParseMode)
+	if mode := normalizeParseMode(c.Telegram.ParseMode); mode != "HTML" {
+		add("telegram.parse_mode must be HTML, the only mode ccresu sends (got %q)", c.Telegram.ParseMode)
 	}
 	if !c.Telegram.Enabled {
 		return
@@ -254,8 +252,13 @@ func (c *Config) validateStorage(add problemAdder) {
 	}
 }
 
-// normalizeParseMode maps the configured value onto the Telegram API spelling,
+// normalizeParseMode maps a configured value onto the Telegram API spelling,
 // treating an empty value as the documented HTML default.
+//
+// This only normalises spelling for display and comparison; it does not make a
+// mode usable. HTML is the only mode ccresu renders (its templates emit
+// <b>/<code> spans and escape for the HTML parser), so validateTelegram rejects
+// everything else and NewClient refuses it too.
 func normalizeParseMode(mode string) string {
 	trimmed := strings.TrimSpace(mode)
 	if trimmed == "" {

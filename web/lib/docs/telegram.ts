@@ -56,7 +56,7 @@ export const telegramDoc: DocPage = {
       kind: "ul",
       items: [
         "Messages are HTML-escaped: a project path or session id containing `<` or `&` cannot break the message or inject markup.",
-        "The templates are HTML, so keep `parse_mode: HTML`; the inherited Markdown variants are not supported by the templates and would arrive as literal markup.",
+        "The templates are HTML, so `parse_mode: HTML` is the only accepted value; `MarkdownV2` and `Markdown` are rejected at config validation rather than arriving as literal markup.",
         "HTTP 429 responses honour `retry_after`, and transient failures retry with backoff.",
         "Delivery state is persisted per event, so the same event is not sent twice across restarts.",
         "Sending happens off the recovery path: a slow or failing Telegram API cannot delay or fail a resume.",

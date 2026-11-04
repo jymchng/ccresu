@@ -79,7 +79,11 @@ lands.
 
 ## Escaping and length
 
-`parse_mode` is `HTML` and is the only mode ccresu sends. Every interpolated
+`parse_mode` is `HTML` and is the only mode ccresu sends: `MarkdownV2` and
+`Markdown` are rejected by config validation and by `NewClient`, because there
+is no Markdown escaper or Markdown template behind them — accepting the value
+would send literal `<b>` tags and unescaped metacharacters, mangling the message
+or getting it rejected outright. Every interpolated
 value — session id, project path, the raw limit banner, a CLI error — is escaped
 in a single pass for `&`, `<`, `>`, `"`, identifiers are wrapped in `<code>`
 and titles in `<b>`. A project directory named `a<b>&c` therefore cannot break

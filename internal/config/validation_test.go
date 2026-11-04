@@ -127,6 +127,8 @@ func TestValidateFieldRules(t *testing.T) {
 		{"max concurrent", func(c *Config) { c.Recovery.MaxConcurrentRecoveries = 0 }, "recovery.max_concurrent_recoveries"},
 
 		{"parse mode", func(c *Config) { c.Telegram.ParseMode = "Richtext" }, "telegram.parse_mode"},
+		{"parse mode markdownv2", func(c *Config) { c.Telegram.ParseMode = "MarkdownV2" }, "telegram.parse_mode must be HTML"},
+		{"parse mode markdown", func(c *Config) { c.Telegram.ParseMode = "Markdown" }, "telegram.parse_mode must be HTML"},
 		{"telegram token missing", func(c *Config) {
 			c.Telegram.Enabled = true
 			c.Telegram.BotToken = ""

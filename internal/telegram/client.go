@@ -67,7 +67,9 @@ type Options struct {
 	// InitialBackoff and MaxBackoff shape the retry wait.
 	InitialBackoff time.Duration
 	MaxBackoff     time.Duration
-	// ParseMode is "HTML" (the default) or "MarkdownV2".
+	// ParseMode is the Bot API parse mode. Only "HTML" is supported: the
+	// templates emit HTML spans and escape for the HTML parser, so any other
+	// mode is rejected here instead of shipping markup Telegram cannot read.
 	ParseMode string
 	// Clock drives the retry waits. Nil means the system clock.
 	Clock clock.Clock
@@ -117,10 +119,12 @@ func NewClient(opts Options) (*Client, error) {
 	switch strings.ToLower(parseMode) {
 	case "", "html":
 		parseMode = ParseModeHTML
-	case "markdownv2", "markdown":
-		parseMode = "MarkdownV2"
 	default:
-		return nil, fmt.Errorf("%w: unsupported parse mode %q", ErrInvalidConfig, opts.ParseMode)
+		// A per-mode escaper and per-mode templates would be needed to send
+		// anything else; ccresu has neither, so the mode is refused rather than
+		// sent and silently mangled.
+		return nil, fmt.Errorf("%w: unsupported parse mode %q: ccresu only sends %s",
+			ErrInvalidConfig, opts.ParseMode, ParseModeHTML)
 	}
 
 	baseURL := strings.TrimSpace(opts.BaseURL)
@@ -329,7 +333,10 @@ func (c *Client) post(ctx context.Context, method string, body []byte) (int, htt
 
 	request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, c.endpoint(method), bytes.NewReader(body))
 	if err != nil {
-		return 0, nil, nil, err
+		// This is the one error built from the request URL, and the URL carries
+		// the bot token. Scrubbing it at the origin keeps the guarantee local
+		// instead of relying on every caller to remember.
+		return 0, nil, nil, errors.New(c.redact(err.Error()))
 	}
 	request.Header.Set("Content-Type", "application/json")
 
