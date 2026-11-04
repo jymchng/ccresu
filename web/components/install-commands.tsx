@@ -4,19 +4,21 @@ import { useState } from "react";
 
 import { CopyButton } from "@/components/copy-button";
 import { cn } from "@/lib/utils";
-import { assetName, exampleVersion, repo, type Platform } from "@/lib/site";
+import { assetName, exampleVersion, installTargets, releaseDownloadBase, type Platform } from "@/lib/site";
 
 /**
  * Installation commands per platform.
  *
  * The asset names come from `lib/site.ts`, which documents the same convention
  * the release workflow must produce, so the site cannot advertise a file the
- * release does not build.
+ * release does not build. The download base is the pinned-tag form
+ * (`/releases/download/v<version>`), the only shape GitHub serves for a specific
+ * version.
  */
 export function installCommand(os: Platform, arch: "amd64" | "arm64"): string {
   const version = exampleVersion;
   const asset = assetName(version, os, arch);
-  const base = `${repo.latestRelease}/download/v${version}`;
+  const base = releaseDownloadBase(version);
 
   if (os === "windows") {
     return [
@@ -52,12 +54,17 @@ export function installCommand(os: Platform, arch: "amd64" | "arm64"): string {
   ].join("\n");
 }
 
-const options: ReadonlyArray<{ id: string; label: string; os: Platform; arch: "amd64" | "arm64" }> = [
-  { id: "linux-amd64", label: "Linux x86-64", os: "linux", arch: "amd64" },
-  { id: "linux-arm64", label: "Linux ARM64", os: "linux", arch: "arm64" },
-  { id: "darwin-arm64", label: "macOS Apple silicon", os: "darwin", arch: "arm64" },
-  { id: "windows-amd64", label: "Windows", os: "windows", arch: "amd64" },
-];
+/**
+ * The platform tabs come from `installTargets` in `lib/site.ts`, so the section
+ * offers exactly the six targets the documentation says are published. Adding a
+ * release target cannot leave the landing page behind.
+ */
+const options = installTargets.map((target) => ({
+  id: `${target.os}-${target.arch}`,
+  label: target.label,
+  os: target.os,
+  arch: target.arch,
+}));
 
 export function InstallCommands() {
   const [selected, setSelected] = useState(options[0]?.id ?? "linux-amd64");

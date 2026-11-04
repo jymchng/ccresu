@@ -1,4 +1,4 @@
-import { exampleVersion, assetName, repo } from "@/lib/site";
+import { exampleVersion, assetName, releaseDownloadBase, repo } from "@/lib/site";
 
 import type { DocPage } from "./types";
 
@@ -27,17 +27,17 @@ export const installationDoc: DocPage = {
     {
       kind: "code",
       label: "Linux, x86-64",
-      code: `VERSION=${exampleVersion}\nASSET=${linuxAsset}\nBASE=${repo.latestRelease}/download/v$VERSION\n\nmkdir -p ~/.local/bin\ncurl -fsSLO "$BASE/$ASSET"\ncurl -fsSLO "$BASE/checksums.txt"\nsha256sum --check --ignore-missing checksums.txt\ntar -xzf "$ASSET" ccresu\ninstall -m 0755 ccresu ~/.local/bin/ccresu\nrm -f "$ASSET" checksums.txt ccresu\nccresu version`,
+      code: `VERSION=${exampleVersion}\nASSET=${linuxAsset}\nBASE=${releaseDownloadBase(exampleVersion)}\n\nmkdir -p ~/.local/bin\ncurl -fsSLO "$BASE/$ASSET"\ncurl -fsSLO "$BASE/checksums.txt"\nsha256sum --check --ignore-missing checksums.txt\ntar -xzf "$ASSET" ccresu\ninstall -m 0755 ccresu ~/.local/bin/ccresu\nrm -f "$ASSET" checksums.txt ccresu\nccresu version`,
     },
     {
       kind: "code",
       label: "macOS, Apple silicon",
-      code: `VERSION=${exampleVersion}\nASSET=${macAsset}\nBASE=${repo.latestRelease}/download/v$VERSION\n\nmkdir -p ~/.local/bin\ncurl -fsSLO "$BASE/$ASSET"\ncurl -fsSLO "$BASE/checksums.txt"\nshasum -a 256 --check --ignore-missing checksums.txt\ntar -xzf "$ASSET" ccresu\ninstall -m 0755 ccresu ~/.local/bin/ccresu\nxattr -d com.apple.quarantine ~/.local/bin/ccresu 2>/dev/null || true`,
+      code: `VERSION=${exampleVersion}\nASSET=${macAsset}\nBASE=${releaseDownloadBase(exampleVersion)}\n\nmkdir -p ~/.local/bin\ncurl -fsSLO "$BASE/$ASSET"\ncurl -fsSLO "$BASE/checksums.txt"\nshasum -a 256 --check --ignore-missing checksums.txt\ntar -xzf "$ASSET" ccresu\ninstall -m 0755 ccresu ~/.local/bin/ccresu\nxattr -d com.apple.quarantine ~/.local/bin/ccresu 2>/dev/null || true`,
     },
     {
       kind: "code",
       label: "Windows, x86-64 (PowerShell)",
-      code: `$VERSION = "${exampleVersion}"\n$Asset = "${winAsset}"\n$Base = "${repo.latestRelease}/download/v$VERSION"\n\nInvoke-WebRequest "$Base/$Asset" -OutFile $Asset\nInvoke-WebRequest "$Base/checksums.txt" -OutFile checksums.txt\n$Expected = (Select-String -Path checksums.txt -Pattern $Asset).Line.Split()[0]\nif ((Get-FileHash $Asset -Algorithm SHA256).Hash -ne $Expected.ToUpper()) { throw "checksum mismatch" }\nExpand-Archive $Asset -DestinationPath "$env:LOCALAPPDATA\\ccresu"`,
+      code: `$VERSION = "${exampleVersion}"\n$Asset = "${winAsset}"\n$Base = "${releaseDownloadBase(exampleVersion)}"\n\nInvoke-WebRequest "$Base/$Asset" -OutFile $Asset\nInvoke-WebRequest "$Base/checksums.txt" -OutFile checksums.txt\n$Expected = (Select-String -Path checksums.txt -Pattern $Asset).Line.Split()[0]\nif ((Get-FileHash $Asset -Algorithm SHA256).Hash -ne $Expected.ToUpper()) { throw "checksum mismatch" }\nExpand-Archive $Asset -DestinationPath "$env:LOCALAPPDATA\\ccresu"`,
     },
     {
       kind: "note",

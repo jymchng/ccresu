@@ -3,7 +3,16 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { InstallCommands, installCommand } from "@/components/install-commands";
-import { assetName, exampleVersion } from "@/lib/site";
+import { installationDoc } from "@/lib/docs/installation";
+import type { Block } from "@/lib/docs/types";
+import {
+  assetName,
+  assetUrl,
+  exampleVersion,
+  installTargets,
+  releaseDownloadBase,
+  repo,
+} from "@/lib/site";
 
 describe("install commands", () => {
   it("names the assets the release workflow publishes", () => {
@@ -52,12 +61,60 @@ describe("install commands", () => {
     );
     expect(screen.getByText(/linux_amd64\.tar\.gz/)).toBeInTheDocument();
 
-    await user.click(screen.getByRole("tab", { name: "Windows" }));
+    await user.click(screen.getByRole("tab", { name: "Windows x86-64" }));
 
-    expect(screen.getByRole("tab", { name: "Windows" })).toHaveAttribute(
+    expect(screen.getByRole("tab", { name: "Windows x86-64" })).toHaveAttribute(
       "aria-selected",
       "true",
     );
     expect(screen.getByText(/windows_amd64\.zip/)).toBeInTheDocument();
+  });
+
+  it("offers every published target as a tab", () => {
+    render(<InstallCommands />);
+
+    const tabs = screen.getAllByRole("tab");
+
+    expect(tabs).toHaveLength(installTargets.length);
+    expect(tabs.map((tab) => tab.textContent)).toEqual(
+      installTargets.map((target) => target.label),
+    );
+  });
+
+  it("downloads from the pinned-tag URL GitHub actually serves", () => {
+    // The two halves the installer scripts join with a slash.
+    expect(assetUrl(exampleVersion, "linux", "amd64")).toBe(
+      `${releaseDownloadBase(exampleVersion)}/${assetName(exampleVersion, "linux", "amd64")}`,
+    );
+
+    for (const target of installTargets) {
+      const command = installCommand(target.os, target.arch);
+
+      expect(command).toContain(releaseDownloadBase(exampleVersion));
+      expect(command).toContain(assetName(exampleVersion, target.os, target.arch));
+      // `/releases/latest/download/<tag>/<asset>` is a 404; only the two
+      // documented shapes resolve.
+      expect(command).not.toContain("/latest/download/");
+      expect(command).toContain(
+        `https://github.com/${repo.owner}/${repo.name}/releases/download/v${exampleVersion}`,
+      );
+    }
+  });
+
+  it("installation doc uses the same download base as the landing page", () => {
+    const codeBlocks = installationDoc.blocks.filter(
+      (block): block is Extract<Block, { kind: "code" }> => block.kind === "code",
+    );
+    const downloadBlocks = codeBlocks.filter((block) =>
+      block.code.includes("/$ASSET"),
+    );
+
+    expect(downloadBlocks.length).toBeGreaterThan(0);
+
+    for (const block of downloadBlocks) {
+      expect(block.code).toContain(releaseDownloadBase(exampleVersion));
+      expect(block.code).not.toContain("/latest/download/");
+      expect(block.code).toContain("checksums.txt");
+    }
   });
 });

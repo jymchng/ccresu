@@ -43,6 +43,29 @@ export function assetName(version: string, os: Platform, arch: Arch): string {
   return `ccresu_${version}_${os}_${arch}.${extension}`;
 }
 
+/**
+ * Base URL of one tag's downloadable assets.
+ *
+ * GitHub serves assets from exactly two shapes — `/releases/download/<tag>/<asset>`
+ * for a pinned tag and `/releases/latest/download/<asset>` for whatever is newest.
+ * These are not interchangeable: appending a tag to the `latest` form
+ * (`/releases/latest/download/<tag>/<asset>`) is a 404, which is why the pinned
+ * tag is expressed the way GitHub documents it.
+ */
+export function releaseDownloadBase(version: string): string {
+  return `${repo.url}/releases/download/v${version}`;
+}
+
+/** Full download URL for one release target. */
+export function assetUrl(version: string, os: Platform, arch: Arch): string {
+  return `${releaseDownloadBase(version)}/${assetName(version, os, arch)}`;
+}
+
+/** Download URL of the checksum file that covers every asset in a release. */
+export function checksumsUrl(version: string): string {
+  return `${releaseDownloadBase(version)}/checksums.txt`;
+}
+
 /** The asset shown in the installation section; kept in sync with the release workflow. */
 export const exampleVersion = "0.1.0";
 
