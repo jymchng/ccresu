@@ -3,6 +3,7 @@ package recovery
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"strings"
 	"testing"
@@ -403,7 +404,15 @@ func TestRecoverRecognisesAnAlreadyResumedSessionEvenIfBookkeepingFails(t *testi
 	inner := newTestStore(t)
 	seedSession(t, inner, recoverableSession(sessionA))
 	faulty := newFaultStore(inner, "SetSessionTranscriptMetrics", 0)
-	manager := testManager(t, faulty, runningGrowthProvider(10, 14), nil)
+	// The transcript must already have grown on the *first* status read: a
+	// provider that only grows on the second call would fall through to a real
+	// resume, and the test would silently cover the wrong branch.
+	provider := &providerStub{statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
+		status := statusFor(sessionID, 14, 280)
+		status.Running = true
+		return status, nil
+	}}
+	manager := testManager(t, faulty, provider, nil)
 
 	outcome, err := manager.Recover(context.Background(), sessionA)
 	if err != nil {
@@ -415,8 +424,68 @@ func TestRecoverRecognisesAnAlreadyResumedSessionEvenIfBookkeepingFails(t *testi
 	if !outcome.Verification.Proven {
 		t.Error("Proven = false, want true: the transcript grew on its own")
 	}
+	if provider.resumeCount() != 0 {
+		t.Errorf("resume calls = %d, want 0: the already-resumed shortcut must be taken, not a real resume",
+			provider.resumeCount())
+	}
+	if !containsNote(outcome.Verification.Notes, "already continued on its own") {
+		t.Errorf("notes = %v, want the already-resumed explanation", outcome.Verification.Notes)
+	}
 	if faulty.count("SetSessionTranscriptMetrics") == 0 {
 		t.Error("the metrics write was never attempted, so this test proved nothing")
+	}
+}
+
+// TestRecoverRefusesToClaimAnAlreadyResumedSessionItCannotRecord proves the
+// shortcut is only reported as success when the RESUMED transition was actually
+// persisted: an unrecorded success would let a restart resume the same session a
+// second time.
+func TestRecoverRefusesToClaimAnAlreadyResumedSessionItCannotRecord(t *testing.T) {
+	inner := newTestStore(t)
+	seedSession(t, inner, recoverableSession(sessionA))
+	// 1 = CHECKING_SESSION, 2 = RESUMED on the already-resumed shortcut.
+	faulty := newFaultStore(inner, "TransitionSession", 2)
+	provider := &providerStub{statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
+		status := statusFor(sessionID, 14, 280)
+		status.Running = true
+		return status, nil
+	}}
+	manager := testManager(t, faulty, provider, nil)
+
+	outcome, err := manager.Recover(context.Background(), sessionA)
+	if err == nil || !strings.Contains(err.Error(), errInjected.Error()) {
+		t.Fatalf("Recover = %v, want the injected storage failure", err)
+	}
+	if outcome.Resumed || outcome.State == StateResumed {
+		t.Errorf("outcome = %+v, want no RESUMED claim when the transition was not written", outcome)
+	}
+	if provider.resumeCount() != 0 {
+		t.Errorf("resume calls = %d, want 0", provider.resumeCount())
+	}
+}
+
+// TestRecoverRefusesToClaimAWaitItCannotRecord covers the sibling case one step
+// later: a limit that has not cleared must end in WAITING_FOR_RESET, and when
+// that transition cannot be written the caller must be told rather than be
+// handed a state the database does not hold.
+func TestRecoverRefusesToClaimAWaitItCannotRecord(t *testing.T) {
+	inner := newTestStore(t)
+	seedSession(t, inner, recoverableSession(sessionA))
+	// 1 = CHECKING_SESSION, 2 = CHECKING_LIMIT, 3 = WAITING_FOR_RESET.
+	faulty := newFaultStore(inner, "TransitionSession", 3)
+	manager := testManager(t, faulty, growthProvider(10, 12), func(cfg *Config) {
+		cfg.LimitRecheck = func(context.Context, string) (bool, error) { return false, nil }
+	})
+
+	outcome, err := manager.Recover(context.Background(), sessionA)
+	if err == nil || !strings.Contains(err.Error(), errInjected.Error()) {
+		t.Fatalf("Recover = %v, want the injected storage failure", err)
+	}
+	if errors.Is(err, ErrLimitNotCleared) {
+		t.Error("error is ErrLimitNotCleared: the wait was never recorded, so reporting it would be a lie")
+	}
+	if outcome.State == StateWaitingForReset {
+		t.Errorf("state = WAITING_FOR_RESET although the transition was not written")
 	}
 }
 
@@ -598,6 +667,19 @@ func TestClassifyTreatsAPathErrorAsTransient(t *testing.T) {
 	}
 	if !Retryable(err) {
 		t.Error("Retryable(path error) = false, want true")
+	}
+}
+
+// TestClassifyTreatsADeadlineAsTransient covers the other transient shape that
+// never spells its name in the message: a wrapped context deadline. Treating a
+// timeout as permanent would abandon a session that only needed longer.
+func TestClassifyTreatsADeadlineAsTransient(t *testing.T) {
+	err := fmt.Errorf("resume: %w", context.DeadlineExceeded)
+	if got := Classify(err); got != ClassRetryable {
+		t.Errorf("Classify(%v) = %s, want RETRYABLE", err, got)
+	}
+	if !Retryable(err) {
+		t.Error("Retryable(deadline) = false, want true")
 	}
 }
 
