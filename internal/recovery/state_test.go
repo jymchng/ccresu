@@ -63,6 +63,26 @@ func TestHappyPathEdgesAreLegal(t *testing.T) {
 	}
 }
 
+func TestPermanentlyFailedIsReachableFromEveryLiveState(t *testing.T) {
+	// The budget guard runs before any check, so it can find the session in any
+	// state that still permits automatic work. Every one of those needs the edge,
+	// otherwise the terminal state and its reason are lost to a rejected
+	// transition, and ErrMaxAttempts comes back as an ordinary failure.
+	live := append([]State{StateDiscovered, StateRunning}, PendingStates()...)
+	for _, from := range live {
+		if !CanTransition(from, StatePermanentlyFailed) {
+			t.Errorf("%s has no edge to PERMANENTLY_FAILED; an exhausted budget there is unwritable", from)
+		}
+	}
+	// Settled and terminal states keep their edges: recovery never runs on them,
+	// so nothing may claim a budget verdict from there.
+	for _, from := range []State{StateResumed, StateCompleted, StateUserTerminated, StateDisabled, StateUnrecoverable} {
+		if CanTransition(from, StatePermanentlyFailed) {
+			t.Errorf("%s must not reach PERMANENTLY_FAILED", from)
+		}
+	}
+}
+
 func TestCanTransitionMatchesTable(t *testing.T) {
 	for _, from := range allStates() {
 		allowed := TransitionsFrom(from)

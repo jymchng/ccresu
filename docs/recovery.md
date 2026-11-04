@@ -84,10 +84,10 @@ edge is rejected with `ErrInvalidTransition`. The interesting ones:
 
 | From | Allowed |
 | --- | --- |
-| `RUNNING` | `USAGE_LIMIT_DETECTED`, `COMPLETED`, `USER_TERMINATED`, `DISABLED` |
-| `WAITING_FOR_RESET` | itself (unknown-reset re-poll or a restart), `RESET_TIME_REACHED`, `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED` |
-| `CHECKING_SESSION` | `CHECKING_LIMIT`, `RESUMED` (it resumed on its own), `RETRY_WAIT` (the status check itself failed) |
-| `CHECKING_LIMIT` | `RESUMING`, `RETRY_WAIT`, `WAITING_FOR_RESET` (the limit is still in force) |
+| `RUNNING` | `USAGE_LIMIT_DETECTED`, `COMPLETED`, `USER_TERMINATED`, `DISABLED`, `PERMANENTLY_FAILED` (budget spent) |
+| `WAITING_FOR_RESET` | itself (unknown-reset re-poll or a restart), `RESET_TIME_REACHED`, `PERMANENTLY_FAILED` (budget spent), `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED` |
+| `CHECKING_SESSION` | `CHECKING_LIMIT`, `RESUMED` (it resumed on its own), `RETRY_WAIT` (the status check itself failed), `PERMANENTLY_FAILED` (budget spent) |
+| `CHECKING_LIMIT` | `RESUMING`, `RETRY_WAIT`, `WAITING_FOR_RESET` (the limit is still in force), `PERMANENTLY_FAILED` (budget spent) |
 | `RESUMING` | `RESUMED`, `RETRY_WAIT`, `PERMANENTLY_FAILED` |
 | `RETRY_WAIT` | `CHECKING_SESSION`, `WAITING_FOR_RESET`, `PERMANENTLY_FAILED` |
 | `RESUMED` | `RUNNING`, `COMPLETED`, `USER_TERMINATED`, `DISABLED` — never straight back to `RESUMING` |
@@ -110,9 +110,18 @@ A failure **before** the resume is issued — the status check in
 attempt row exists, so no budget was spent, and the session rests in
 `RETRY_WAIT` whatever the error is classified as (an `UNRECOVERABLE` verdict
 still wins). Calling such a session `PERMANENTLY_FAILED` would claim a budget it
-never used, and the state machine has no edge for it. Its transition reason says
-so explicitly, e.g. `the pre-resume check failed (permanent); no attempt was
-spent, next check in 1m0s: …`, so `ccresu history` explains the wait.
+never used. Its transition reason says so explicitly, e.g. `the pre-resume check
+failed (permanent); no attempt was spent, next check in 1m0s: …`, so
+`ccresu history` explains the wait.
+
+The **attempt budget** is the mirror image. It is a property of the session, not
+of one path through the machine, so `PERMANENTLY_FAILED` is legal from every
+state that still permits automatic work — including `WAITING_FOR_RESET`, where
+the scheduler parks a session whose limit is still in force, and
+`CHECKING_SESSION`, where a crash mid-check leaves one. The guard runs before any
+check, records `maximum attempts reached (10)`, and returns
+`errors.Is(err, ErrMaxAttempts)` as a terminal error; `ccresu retry` or
+`ccresu recover --force` is then the only way forward.
 
 ## Verification: proof, not optimism
 

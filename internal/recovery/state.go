@@ -53,54 +53,72 @@ var ErrInvalidTransition = errors.New("recovery: invalid state transition")
 // (disable, terminate, retry) or an off-nominal observation (already resumed,
 // limit not actually cleared) is recorded instead of being forced through the
 // happy path or silently dropped.
+//
+// PERMANENTLY_FAILED is reachable from every state that still permits automatic
+// work, not only from RESUMING and RETRY_WAIT. The attempt budget belongs to the
+// session, not to one path through the machine: the guard that enforces it runs
+// before any check, and it finds sessions parked in WAITING_FOR_RESET (the limit
+// was still in force on the last poll) or left in CHECKING_SESSION by a crash
+// mid-check just as often as it finds them in RETRY_WAIT. Refusing those edges
+// would lose both the terminal state and the reason for it, and report an
+// exhausted budget as an ordinary failure. It sits next to DISABLED and
+// USER_TERMINATED for the same reason: a verdict about the session as a whole,
+// legal from anywhere that is not already settled.
 var transitions = map[State]map[State]struct{}{
 	StateDiscovered: {
-		StateRunning:       {},
-		StateDisabled:      {},
-		StateUnrecoverable: {},
+		StateRunning:           {},
+		StateDisabled:          {},
+		StateUnrecoverable:     {},
+		StatePermanentlyFailed: {}, // budget already spent when it was discovered
 	},
 	StateRunning: {
 		StateUsageLimitDetected: {},
 		StateCompleted:          {},
 		StateUserTerminated:     {},
 		StateDisabled:           {},
+		StatePermanentlyFailed:  {},
 	},
 	StateUsageLimitDetected: {
-		StateWaitingForReset: {},
-		StateUnrecoverable:   {},
-		StateUserTerminated:  {},
-		StateDisabled:        {},
+		StateWaitingForReset:   {},
+		StateUnrecoverable:     {},
+		StateUserTerminated:    {},
+		StateDisabled:          {},
+		StatePermanentlyFailed: {},
 	},
 	StateWaitingForReset: {
 		// A repeat entry is legal: an unknown-reset session re-enters the
 		// waiting state after every poll, and a restart re-observes the wait.
-		StateWaitingForReset:  {},
-		StateResetTimeReached: {},
-		StateUnrecoverable:    {},
-		StateUserTerminated:   {},
-		StateDisabled:         {},
+		StateWaitingForReset:   {},
+		StateResetTimeReached:  {},
+		StateUnrecoverable:     {},
+		StateUserTerminated:    {},
+		StateDisabled:          {},
+		StatePermanentlyFailed: {},
 	},
 	StateResetTimeReached: {
-		StateCheckingSession: {},
-		StateUnrecoverable:   {},
-		StateUserTerminated:  {},
-		StateDisabled:        {},
+		StateCheckingSession:   {},
+		StateUnrecoverable:     {},
+		StateUserTerminated:    {},
+		StateDisabled:          {},
+		StatePermanentlyFailed: {},
 	},
 	StateCheckingSession: {
-		StateCheckingLimit:  {},
-		StateResumed:        {}, // it resumed on its own; nothing to do
-		StateRetryWait:      {}, // the status check itself failed
-		StateUnrecoverable:  {},
-		StateUserTerminated: {},
-		StateDisabled:       {},
+		StateCheckingLimit:     {},
+		StateResumed:           {}, // it resumed on its own; nothing to do
+		StateRetryWait:         {}, // the status check itself failed
+		StateUnrecoverable:     {},
+		StateUserTerminated:    {},
+		StateDisabled:          {},
+		StatePermanentlyFailed: {},
 	},
 	StateCheckingLimit: {
-		StateResuming:        {},
-		StateRetryWait:       {},
-		StateWaitingForReset: {}, // the limit is still in force
-		StateUnrecoverable:   {},
-		StateUserTerminated:  {},
-		StateDisabled:        {},
+		StateResuming:          {},
+		StateRetryWait:         {},
+		StateWaitingForReset:   {}, // the limit is still in force
+		StateUnrecoverable:     {},
+		StateUserTerminated:    {},
+		StateDisabled:          {},
+		StatePermanentlyFailed: {},
 	},
 	StateResuming: {
 		StateResumed:           {},

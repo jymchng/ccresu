@@ -874,6 +874,106 @@ func TestRecoverReportsAnAlreadyResumedSession(t *testing.T) {
 	}
 }
 
+// exhaustBudget records n finished, failed attempts for a session.
+func exhaustBudget(t *testing.T, store *storage.Store, sessionID string, n int) {
+	t.Helper()
+	ctx := context.Background()
+	for i := 0; i < n; i++ {
+		attempt, err := store.StartAttempt(ctx, sessionID, 0, "claude -p --resume")
+		if err != nil {
+			t.Fatalf("start attempt %d: %v", i+1, err)
+		}
+		if _, err := store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
+			State:      StateRetryWait,
+			Success:    false,
+			Error:      "previous failure",
+			FinishedAt: time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC),
+		}); err != nil {
+			t.Fatalf("finish attempt %d: %v", i+1, err)
+		}
+	}
+}
+
+func TestRecoverRecordsAnExhaustedBudgetFromEveryLiveState(t *testing.T) {
+	// The budget guard has to be able to write PERMANENTLY_FAILED from wherever
+	// the session actually stands when the budget runs out: the scheduler parks a
+	// session in WAITING_FOR_RESET while the limit is still in force, and a crash
+	// mid-check leaves it in CHECKING_SESSION. Asking for an edge the machine does
+	// not define loses both the terminal state and the reason for it, and reports
+	// ErrMaxAttempts as an ordinary failure.
+	ctx := context.Background()
+	states := []State{
+		StateDiscovered,
+		StateRunning,
+		StateUsageLimitDetected,
+		StateWaitingForReset,
+		StateResetTimeReached,
+		StateCheckingSession,
+		StateCheckingLimit,
+		StateResuming,
+		StateRetryWait,
+	}
+	for _, from := range states {
+		t.Run(string(from), func(t *testing.T) {
+			store := newTestStore(t)
+			session := recoverableSession(sessionA)
+			session.State = from
+			seedSession(t, store, session)
+			exhaustBudget(t, store, sessionA, DefaultMaxAttempts)
+
+			manager := testManager(t, store, growthProvider(10, 12), nil)
+			outcome, err := manager.Recover(ctx, sessionA)
+			if !errors.Is(err, ErrMaxAttempts) {
+				t.Fatalf("Recover error = %v, want it to satisfy errors.Is(err, ErrMaxAttempts)", err)
+			}
+			var terminal *terminalError
+			if !errors.As(err, &terminal) || terminal.State != StatePermanentlyFailed {
+				t.Fatalf("error = %v (%T), want a terminal PERMANENTLY_FAILED error", err, err)
+			}
+			if outcome.State != StatePermanentlyFailed {
+				t.Errorf("outcome state = %s, want PERMANENTLY_FAILED", outcome.State)
+			}
+
+			// The verdict must be on disk, not only in the returned error: that is
+			// what stops the next daemon run from trying again.
+			stored, readErr := store.GetSession(ctx, sessionA)
+			if readErr != nil {
+				t.Fatalf("read back session: %v", readErr)
+			}
+			if stored.State != StatePermanentlyFailed {
+				t.Errorf("persisted state = %s, want PERMANENTLY_FAILED", stored.State)
+			}
+			// The persisted reason carries the budget; the returned error is the
+			// sentinel notice, and both must agree the budget is what ran out.
+			want := "maximum attempts reached (10)"
+			if stored.LastError != want {
+				t.Errorf("persisted error = %q, want %q", stored.LastError, want)
+			}
+			if !strings.Contains(err.Error(), "maximum attempts reached") {
+				t.Errorf("error = %q, want it to mention the exhausted budget", err)
+			}
+
+			// And the move itself is in the history, from the state it really left.
+			transitions, listErr := store.ListTransitions(ctx, sessionA, 0)
+			if listErr != nil {
+				t.Fatalf("list transitions: %v", listErr)
+			}
+			found := false
+			for _, tr := range transitions {
+				if tr.ToState == StatePermanentlyFailed && tr.FromState == from {
+					found = true
+					if tr.Reason != want {
+						t.Errorf("transition reason = %q, want %q", tr.Reason, want)
+					}
+				}
+			}
+			if !found {
+				t.Errorf("no recorded transition %s -> PERMANENTLY_FAILED in %+v", from, transitions)
+			}
+		})
+	}
+}
+
 func TestRecoverHonoursTheAttemptBudgetAndForce(t *testing.T) {
 	store := newTestStore(t)
 	session := recoverableSession(sessionA)

@@ -333,6 +333,12 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 		return Outcome{SessionID: sessionID, State: state.current}, err
 	}
 	if attempts >= m.maxAttempts && !req.Force {
+		// The budget is spent, so PERMANENTLY_FAILED is the truthful record
+		// whatever state the session was parked in. Unlike a failed pre-resume
+		// check — which rests in RETRY_WAIT because no attempt was spent — here
+		// the budget really is gone, and every live state has an edge to the
+		// terminal one. The move is not routed through RETRY_WAIT: that would
+		// record a "might work later" that this session no longer has.
 		reason := fmt.Sprintf("maximum attempts reached (%d)", m.maxAttempts)
 		if err := state.move(StatePermanentlyFailed, reason, 0); err != nil {
 			return Outcome{SessionID: sessionID, State: state.current}, err
@@ -496,9 +502,9 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 // A failure reported before the resume was issued — the pre-resume status check
 // or the limit check — has no attempt row behind it, so it spends no budget and
 // always rests in RETRY_WAIT (unless ccresu has proved the session
-// unrecoverable). Asking for PERMANENTLY_FAILED from CHECKING_SESSION or
-// CHECKING_LIMIT would be rejected by the state machine and the failure would
-// vanish: no attempt recorded, no transition, nothing on disk to explain it.
+// unrecoverable). That is a decision about the truth, not about which edges the
+// machine happens to define: PERMANENTLY_FAILED reports a budget that has been
+// spent, and this failure spent none of it.
 func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome, baseline Baseline,
 	attempt storage.RecoveryAttempt, verification Verification, cause error) (Outcome, error) {
 	class := Classify(cause)
@@ -517,7 +523,7 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 
 	target := targetFor(class, attemptNumber, m.maxAttempts)
 	if preResume {
-		target = reachableTarget(state.current, target)
+		target = preResumeTarget(target)
 	}
 
 	if !preResume {
@@ -566,27 +572,20 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 	return outcome, &terminalError{SessionID: outcome.SessionID, State: target, Cause: cause}
 }
 
-// reachableTarget narrows a failure's destination to an edge the machine allows
-// from where the session currently stands.
+// preResumeTarget is where a failure reported before the resume is issued ends.
 //
-// The pre-resume checks have no attempt row behind them, so a permanently
-// classified failure there has not spent the budget that PERMANENTLY_FAILED
-// reports as spent, and the machine has no CHECKING_SESSION or CHECKING_LIMIT
-// edge to it. Rather than lose the failure to a rejected transition, the session
-// rests in RETRY_WAIT, which every pre-resume state reaches and which the
-// daemon already backs off from; an unrecoverable verdict is left alone, because
-// it is legal from both states and no retry can answer it.
-func reachableTarget(from, target State) State {
-	if CanTransition(from, target) {
+// It is a policy, not a reachability trick: no attempt row exists yet, so no
+// budget was spent, and PERMANENTLY_FAILED — which reports a budget that is gone
+// — would be a lie about this session. An unrecoverable verdict is left alone,
+// because no retry can answer it and the machine allows that edge from both
+// pre-resume states. Both of those states also reach RETRY_WAIT, so the move is
+// always legal; if a future call site breaks that, move() says so loudly rather
+// than the failure being swallowed.
+func preResumeTarget(target State) State {
+	if target == StateUnrecoverable {
 		return target
 	}
-	if CanTransition(from, StateRetryWait) {
-		return StateRetryWait
-	}
-	// Unreachable today: every state that can reach a pre-resume check also
-	// reaches RETRY_WAIT. The fallback is kept so an illegal edge is reported by
-	// move() rather than silently swallowed if that ever stops being true.
-	return target
+	return StateRetryWait
 }
 
 // targetFor decides the state a failed attempt leaves the session in.
