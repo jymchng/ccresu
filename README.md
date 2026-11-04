@@ -760,6 +760,7 @@ The in-repository sources:
 | Document | Read it for |
 | --- | --- |
 | [docs/README.md](docs/README.md) | Overview and quick start |
+| [docs/tutorial.md](docs/tutorial.md) | A hands-on walkthrough from install to a resumed session |
 | [docs/cli.md](docs/cli.md) | Every command, flag and exit code |
 | [docs/configuration.md](docs/configuration.md) | Every setting, its default and its environment override |
 | [docs/recovery.md](docs/recovery.md) | Detection, scheduling, resumption and the state machine |

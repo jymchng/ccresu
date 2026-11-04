@@ -48,6 +48,9 @@ ccresu enable <session-id>
 ccresu daemon
 ```
 
+For the full walkthrough — installation, discovery, a limit being detected, the
+scheduled resume and the manual actions — see [tutorial.md](tutorial.md).
+
 `ccresu status` gives a one-screen summary of the persisted state: how many
 sessions are known, what state they are in, how many recoveries and notifications
 are queued, and when the next schedule is due.
