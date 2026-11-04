@@ -189,10 +189,10 @@ transcripts below are real output from a scratch `HOME` on Linux, so the paths
 and session IDs are examples — yours will differ.
 
 > Throughout, `--config PATH` selects a configuration file other than the
-> default `~/.config/ccresu/config.yaml`, and `--json` switches a command to
-> machine-readable output. Both are global flags, so they go before the
-> subcommand: `ccresu --config ./test.yaml sessions`, not
-> `ccresu sessions --config ./test.yaml`.
+> default `~/.config/ccresu/config.yaml` (so does `CCRESU_CONFIG` in the
+> environment), and `--json` switches a command to machine-readable output. Both
+> are global flags, so they go before the subcommand: `ccresu --config
+> ./test.yaml sessions`, not `ccresu sessions --config ./test.yaml`.
 
 ### Step 1 — Create the configuration
 

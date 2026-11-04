@@ -14,6 +14,12 @@ for a global flag (`ccresu recover <id> --message --json` sends the text
 `--json`), because the command's own flag set does the parsing. `--` ends flag
 parsing, so a value that begins with `-` can still be passed.
 
+The configuration file is chosen in this order, first match wins: `-c/--config
+PATH`, then `CCRESU_CONFIG` in the environment, then
+`$XDG_CONFIG_HOME/ccresu/config.yaml` (else `~/.config/ccresu/config.yaml`). A
+leading `~` is expanded in all three, and everything derived from the file — such
+as the API token beside it — follows the file actually in use.
+
 Exit codes: `0` ok, `1` failure, `2` usage, `3` not found, `4` not eligible,
 `130` interrupted.
 
