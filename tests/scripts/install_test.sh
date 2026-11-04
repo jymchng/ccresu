@@ -21,7 +21,15 @@
 #   6. a checksums.txt without an entry for the asset aborts with nothing
 #      installed;
 #   7. --dry-run writes nothing and downloads nothing;
-#   8. argument errors are usage errors, not partial installs.
+#   8. argument errors are usage errors, not partial installs;
+#   9. an explicitly exported XDG_CONFIG_HOME/XDG_DATA_HOME is honoured instead
+#      of the ~/.config and ~/.local/share defaults.
+#
+# The installer resolves its directories from XDG_* when they are set, so every
+# invocation below runs with those variables scrubbed: the suite asserts paths
+# relative to an isolated HOME, and a runner that exports XDG_CONFIG_HOME (the
+# GitHub-hosted images do) would otherwise send the config somewhere the
+# assertions never look. Scenario 9 opts back in deliberately.
 #
 # Usage: bash tests/scripts/install_test.sh
 # Requires: a POSIX userland (tar, sha256sum), curl, python3 (the mirror) and Go
@@ -225,11 +233,33 @@ PY
 
 # run_install HOME_DIR ARGS... - runs the installer with an isolated HOME and
 # records its output and exit code in INSTALL_OUTPUT / INSTALL_STATUS.
+#
+# XDG_* is scrubbed so the ambient environment cannot redirect the paths the
+# caller is about to assert on. `env -u` is used rather than unsetting in this
+# shell so the suite itself keeps its own environment intact.
 run_install() {
 	local home="$1"
 	shift
 	mkdir -p "$home"
-	if INSTALL_OUTPUT="$(HOME="$home" CCRESU_ALLOW_ROOT=1 CCRESU_BASE_URL="$BASE_URL" \
+	if INSTALL_OUTPUT="$(env -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME \
+		-u CCRESU_PREFIX HOME="$home" CCRESU_ALLOW_ROOT=1 CCRESU_BASE_URL="$BASE_URL" \
+		bash "$INSTALL_SCRIPT" "$@" 2>&1)"; then
+		INSTALL_STATUS=0
+	else
+		INSTALL_STATUS=$?
+	fi
+}
+
+# run_install_with_xdg HOME_DIR CONFIG_HOME DATA_HOME ARGS... - the same, but
+# with the XDG base directories exported, so the test can prove the installer
+# obeys them (scenario 9).
+run_install_with_xdg() {
+	local home="$1" config_home="$2" data_home="$3"
+	shift 3
+	mkdir -p "$home"
+	if INSTALL_OUTPUT="$(env -u XDG_STATE_HOME -u XDG_CACHE_HOME -u CCRESU_PREFIX \
+		HOME="$home" XDG_CONFIG_HOME="$config_home" XDG_DATA_HOME="$data_home" \
+		CCRESU_ALLOW_ROOT=1 CCRESU_BASE_URL="$BASE_URL" \
 		bash "$INSTALL_SCRIPT" "$@" 2>&1)"; then
 		INSTALL_STATUS=0
 	else
@@ -378,6 +408,29 @@ main() {
 	assert_contains "$INSTALL_OUTPUT" "absolute path" "a relative prefix must be reported"
 	assert_absent "$prefix/ccresu" "a usage error installed a binary"
 	pass "argument errors are reported without installing anything"
+
+	# --- 9. XDG base directories -------------------------------------------
+	# The installer resolves its config and data directories from XDG_* when they
+	# are set. Pin the behaviour: an exported XDG_CONFIG_HOME / XDG_DATA_HOME wins
+	# over ~/.config and ~/.local/share, and the files it creates stay private.
+	home="$WORK/home-xdg"
+	prefix="$home/.local/bin"
+	local xdg_config="$WORK/xdg/config" xdg_data="$WORK/xdg/data"
+	run_install_with_xdg "$home" "$xdg_config" "$xdg_data" --version 0.1.0
+	assert_equal "$INSTALL_STATUS" 0 "an install with XDG directories exported must succeed"$'\n'"$INSTALL_OUTPUT"
+	assert_exists "$xdg_config/ccresu/config.yaml" "the installer must honour XDG_CONFIG_HOME"
+	assert_absent "$home/.config/ccresu/config.yaml" \
+		"the installer must not fall back to ~/.config when XDG_CONFIG_HOME is set"
+	assert_equal "$(stat -c '%a' "$xdg_config/ccresu/config.yaml")" "600" \
+		"an XDG configuration file must be private"
+	assert_contains "$INSTALL_OUTPUT" "config:    $xdg_config/ccresu/config.yaml" \
+		"the installer must report the XDG configuration path"
+	assert_exists "$xdg_data/ccresu" "the installer must honour XDG_DATA_HOME"
+	assert_absent "$home/.local/share/ccresu" \
+		"the installer must not fall back to ~/.local/share when XDG_DATA_HOME is set"
+	assert_equal "$(version_of "$prefix/ccresu")" "ccresu 0.1.0" \
+		"the prefix must still come from HOME, not from XDG_DATA_HOME"
+	pass "XDG_CONFIG_HOME and XDG_DATA_HOME are honoured over the HOME defaults"
 
 	printf '\n%d installer scenario checks passed\n' "$TESTS"
 }
