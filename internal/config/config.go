@@ -15,6 +15,7 @@ type Config struct {
 	App        App        `yaml:"app"`
 	Claude     Claude     `yaml:"claude"`
 	Monitoring Monitoring `yaml:"monitoring"`
+	Detector   Detector   `yaml:"detector"`
 	Scheduler  Scheduler  `yaml:"scheduler"`
 	Recovery   Recovery   `yaml:"recovery"`
 	Telegram   Telegram   `yaml:"telegram"`
@@ -51,6 +52,34 @@ type Monitoring struct {
 	Enabled                 bool `yaml:"enabled"`
 	DetectUsageLimits       bool `yaml:"detect_usage_limits"`
 	DetectSessionCompletion bool `yaml:"detect_session_completion"`
+}
+
+// Detector holds usage-limit detection tuning.
+type Detector struct {
+	// Threshold is the minimum confidence for a detection, in (0, 1]. It
+	// matches DefaultDetectorThreshold.
+	Threshold float64 `yaml:"threshold"`
+	// CustomPatterns are extra rules evaluated alongside the built-in ones, so
+	// a new Claude Code phrasing can be taught without a new release.
+	CustomPatterns []DetectorPattern `yaml:"custom_patterns"`
+}
+
+// DetectorPattern is one user-defined detection rule.
+type DetectorPattern struct {
+	// ID names the rule and must be unique.
+	ID string `yaml:"id"`
+	// Kind overrides the detected limit kind: five_hour, weekly or other.
+	// Empty keeps the inference from the message text.
+	Kind string `yaml:"kind"`
+	// Pattern is a Go regular expression matched against normalised text
+	// (lowercase, single-spaced, ASCII punctuation). It must compile.
+	Pattern string `yaml:"pattern"`
+	// Confidence is the score for a match, in (0, 1].
+	Confidence float64 `yaml:"confidence"`
+	// RequiresReset discards the match unless a reset time was present.
+	RequiresReset bool `yaml:"requires_reset"`
+	// Description documents the phrasing the rule covers.
+	Description string `yaml:"description"`
 }
 
 // Scheduler holds reset-polling settings.

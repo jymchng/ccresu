@@ -63,6 +63,10 @@ func envSetters() []envSetter {
 		{EnvPrefix + "MONITORING__DETECT_USAGE_LIMITS", setBool(func(c *Config) *bool { return &c.Monitoring.DetectUsageLimits })},
 		{EnvPrefix + "MONITORING__DETECT_SESSION_COMPLETION", setBool(func(c *Config) *bool { return &c.Monitoring.DetectSessionCompletion })},
 
+		// Custom patterns are a structured list and stay file-only; the
+		// threshold is a single number and can be overridden here.
+		{EnvPrefix + "DETECTOR__THRESHOLD", setFloat(func(c *Config) *float64 { return &c.Detector.Threshold })},
+
 		{EnvPrefix + "SCHEDULER__POLL_INTERVAL", setDuration(func(c *Config) *Duration { return &c.Scheduler.PollInterval })},
 		{EnvPrefix + "SCHEDULER__UNKNOWN_RESET_INITIAL_INTERVAL", setDuration(func(c *Config) *Duration { return &c.Scheduler.UnknownResetInitialInterval })},
 		{EnvPrefix + "SCHEDULER__UNKNOWN_RESET_MAX_INTERVAL", setDuration(func(c *Config) *Duration { return &c.Scheduler.UnknownResetMaxInterval })},

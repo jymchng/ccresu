@@ -26,6 +26,10 @@ func Defaults() Config {
 			DetectUsageLimits:       true,
 			DetectSessionCompletion: true,
 		},
+		Detector: Detector{
+			Threshold:      DefaultDetectorThreshold,
+			CustomPatterns: []DetectorPattern{},
+		},
 		Scheduler: Scheduler{
 			PollInterval:                NewDuration(30e9),
 			UnknownResetInitialInterval: NewDuration(5 * 60e9),
@@ -72,6 +76,11 @@ func Defaults() Config {
 		},
 	}
 }
+
+// DefaultDetectorThreshold is the minimum detection confidence. It mirrors
+// detector.DefaultThreshold; it is duplicated here so that the configuration
+// package does not depend on the detector.
+const DefaultDetectorThreshold = 0.5
 
 // DefaultContinuationMessage is sent to Claude Code when a resumed session needs
 // an explicit nudge to keep working on its existing goal.

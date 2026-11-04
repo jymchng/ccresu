@@ -26,6 +26,7 @@ var everyEnvSetterSamples = map[string]string{
 	"CCRESU_MONITORING__ENABLED":                       "false",
 	"CCRESU_MONITORING__DETECT_USAGE_LIMITS":           "false",
 	"CCRESU_MONITORING__DETECT_SESSION_COMPLETION":     "false",
+	"CCRESU_DETECTOR__THRESHOLD":                       "0.7",
 	"CCRESU_SCHEDULER__POLL_INTERVAL":                  "1m",
 	"CCRESU_SCHEDULER__UNKNOWN_RESET_INITIAL_INTERVAL": "2m",
 	"CCRESU_SCHEDULER__UNKNOWN_RESET_MAX_INTERVAL":     "40m",

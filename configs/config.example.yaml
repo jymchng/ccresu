@@ -32,6 +32,24 @@ monitoring:
   detect_usage_limits: true
   detect_session_completion: true
 
+detector:
+  # Minimum confidence, in (0, 1], for a detection to count. The built-in
+  # canonical banners score 0.95-0.99; raising this above 0.99 disables them.
+  # Override with CCRESU_DETECTOR__THRESHOLD.
+  threshold: 0.5
+  # Extra detection rules, evaluated alongside the built-in ones. Use this to
+  # teach ccresu a phrasing it does not know yet without waiting for a release.
+  # Each pattern is a Go regular expression matched against NORMALISED text:
+  # lowercase, single-spaced, curly quotes and dashes folded to ASCII.
+  #
+  # custom_patterns:
+  #   - id: internal-proxy-limit
+  #     kind: five_hour            # optional: five_hour | weekly | other
+  #     pattern: 'proxy quota exhausted'
+  #     confidence: 0.9
+  #     requires_reset: false
+  #     description: our corporate proxy reports the limit differently
+
 scheduler:
   poll_interval: 30s
   unknown_reset_initial_interval: 5m

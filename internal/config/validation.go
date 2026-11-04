@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -42,6 +43,7 @@ func (c *Config) Validate() error {
 	c.validateApp(add)
 	c.validateClaude(add)
 	c.validateMonitoring(add)
+	c.validateDetector(add)
 	c.validateScheduler(add)
 	c.validateRecovery(add)
 	c.validateTelegram(add)
@@ -103,6 +105,41 @@ func (c *Config) validateMonitoring(add problemAdder) {
 	}
 	if !c.Monitoring.DetectUsageLimits && !c.Monitoring.DetectSessionCompletion {
 		add("monitoring is enabled but nothing is being detected: set detect_usage_limits or detect_session_completion")
+	}
+}
+
+// validateDetector checks the usage-limit detection rules.
+//
+// A custom rule is rejected unless its expression compiles, because a rule that
+// cannot run would silently fail to detect the very phrasing the user added it
+// for.
+func (c *Config) validateDetector(add problemAdder) {
+	if c.Detector.Threshold <= 0 || c.Detector.Threshold > 1 {
+		add("detector.threshold must be in the range (0, 1] (got %v)", c.Detector.Threshold)
+	}
+	seen := make(map[string]struct{}, len(c.Detector.CustomPatterns))
+	for i, pattern := range c.Detector.CustomPatterns {
+		id := strings.TrimSpace(pattern.ID)
+		if id == "" {
+			add("detector.custom_patterns[%d].id must not be empty", i)
+		} else if _, duplicate := seen[id]; duplicate {
+			add("detector.custom_patterns[%d].id %q is duplicated", i, id)
+		}
+		seen[id] = struct{}{}
+
+		if strings.TrimSpace(pattern.Pattern) == "" {
+			add("detector.custom_patterns[%d].pattern must not be empty", i)
+		} else if _, err := regexp.Compile(pattern.Pattern); err != nil {
+			add("detector.custom_patterns[%d].pattern is not a valid regular expression: %v", i, err)
+		}
+		if pattern.Confidence <= 0 || pattern.Confidence > 1 {
+			add("detector.custom_patterns[%d].confidence must be in the range (0, 1] (got %v)", i, pattern.Confidence)
+		}
+		switch strings.ToLower(strings.TrimSpace(pattern.Kind)) {
+		case "", "five_hour", "weekly", "other":
+		default:
+			add("detector.custom_patterns[%d].kind must be empty, five_hour, weekly or other (got %q)", i, pattern.Kind)
+		}
 	}
 }
 
