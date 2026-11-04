@@ -67,6 +67,11 @@ ccresu status --json
 | [deployment.md](deployment.md) | Running it as a service, logs, monitoring |
 | [upgrade.md](upgrade.md) | Installing, upgrading and uninstalling |
 | [security.md](security.md) | What it can touch, and what it keeps secret |
+| [troubleshooting.md](troubleshooting.md) | Symptom-to-cause tables, and known limitations |
+| [development.md](development.md) | Layout, seams, tests, conventions |
+| [releases.md](releases.md) | Tagging, assets, checksums |
+| [website.md](website.md) | The static landing and documentation site |
+| [delivery-report.md](delivery-report.md) | Measured gates, coverage and remaining gaps |
 
 Run `ccresu --help` for the command index, and `ccresu <command> --help` for the
 flags of one command.

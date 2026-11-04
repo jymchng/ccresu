@@ -28,6 +28,10 @@ The user-facing documentation lives in [`docs/`](docs/README.md):
 | [docs/deployment.md](docs/deployment.md) | Running it as a service, logs, monitoring |
 | [docs/upgrade.md](docs/upgrade.md) | Installing, upgrading and uninstalling |
 | [docs/security.md](docs/security.md) | What it can touch, and what it keeps secret |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Symptom-to-cause tables, and known limitations |
+| [docs/development.md](docs/development.md) | Layout, seams, tests, conventions |
+| [docs/releases.md](docs/releases.md) | Tagging, assets, checksums |
+| [docs/website.md](docs/website.md) | The static landing and documentation site |
 
 ## Verified Claude Code interfaces
 
