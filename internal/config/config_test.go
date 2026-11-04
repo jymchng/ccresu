@@ -329,6 +329,24 @@ func TestExpandPath(t *testing.T) {
 	}
 }
 
+func TestDefaultPathHonoursXDGConfigHome(t *testing.T) {
+	// `ccresu config init` writes to DefaultPath, so "honouring XDG" is this
+	// function's promise; the CLI tests stub it out and would not notice if it
+	// stopped reading the variable.
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CCRESU_CONFIG", "")
+
+	got, err := DefaultPath()
+	if err != nil {
+		t.Fatalf("DefaultPath: %v", err)
+	}
+	if want := filepath.Join(xdg, "ccresu", "config.yaml"); got != want {
+		t.Errorf("DefaultPath with XDG_CONFIG_HOME=%s = %q, want %q", xdg, got, want)
+	}
+}
+
 func TestDefaultDirectories(t *testing.T) {
 	t.Parallel()
 
