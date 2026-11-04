@@ -3,29 +3,37 @@ name: Deploy website
 # Publishes the landing page and the documentation site to GitHub Pages.
 #
 # The site is a static export (web/next.config.ts sets output: "export" and
-# basePath "/ccresu"), so Pages only ever serves files produced by
-# `npm run build` — no server rendering, no secrets, nothing dynamic.
+# basePath "/ccresu"), built by `npm run build` into web/out and then pushed to
+# the `gh-pages` branch, which Pages serves (build_type "legacy", source
+# gh-pages:/).
 #
-# There is deliberately NO `paths:` filter here. This workflow first shipped
-# with `paths: ["web/**", ".github/workflows/deploy-website.yml"]` and, in the
-# push that introduced it, GitHub created no run at all (`gh api
-# repos/.../actions/workflows/<id>/runs` returned total_count 0) even though
-# Pages was already enabled with build_type "workflow". A trigger that can
-# silently never fire is worse than a redundant two-minute build, so every push
-# to the production branch now publishes: the job runs the same lint, type
-# check, test and export gates as CI, so a broken site is still never
-# published, and a docs-only or README-only change refreshes the site too.
+# Why a branch and not actions/deploy-pages: the workflow originally uploaded a
+# Pages artifact and called `actions/deploy-pages`. The deployment record sat in
+# "queued"/"updating_pages" with an empty status for the full 10-minute poll
+# limit, twice, and the site stayed 404 — the Pages deployment API never
+# advanced for this repository. Publishing a branch is the older, dependable
+# path: it needs nothing but a git push and a `contents: write` token, and the
+# published tree is inspectable in the repository afterwards.
+#
+# There is deliberately NO `paths:` filter. Before, `paths: ["web/**", ...]`
+# matched the push that introduced this workflow yet produced no run at all, so
+# every push to the production branch now republishes. The build job runs the
+# same lint, type check, test and export gates as CI, so a broken site is still
+# never published, and a README- or docs-only change refreshes the site too.
 on:
   push:
     branches: [main]
   # Manual re-publish (e.g. after a transient Pages outage).
   workflow_dispatch:
 
+# Read-only by default; the publish job opts into contents: write.
 permissions:
   contents: read
 
 concurrency:
   group: pages
+  # A publish must not cancel one in flight: the branch would keep whichever
+  # force-push landed last.
   cancel-in-progress: false
 
 jobs:
@@ -35,14 +43,6 @@ jobs:
     # from another ref.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    # configure-pages reads the Pages site configuration through the API, which
-    # needs pages:write even in the build job; the token is short-lived and the
-    # job only uploads an artifact. deploy keeps its own identical grant so the
-    # two jobs do not share credentials.
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
     defaults:
       run:
         working-directory: web
@@ -75,25 +75,43 @@ jobs:
       - name: Build static export
         run: npm run build
 
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Upload the exported site
+        uses: actions/upload-artifact@v4
         with:
+          name: website-export
           path: web/out
+          if-no-files-found: error
+          retention-days: 7
 
   deploy:
-    name: Deploy to GitHub Pages
+    name: Publish to gh-pages
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      contents: write
     steps:
-      - name: Deploy
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Download the exported site
+        uses: actions/download-artifact@v4
+        with:
+          name: website-export
+          path: site
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          cd site
+          # Pages runs the branch through Jekyll unless this marker exists, and
+          # Jekyll would drop the _next/ asset directory.
+          touch .nojekyll
+          git init -q
+          git checkout -q -b gh-pages
+          git add -A
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -qm "deploy: website from ${SHA}"
+          git push -q --force "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" gh-pages
+          echo "published $(git rev-parse --short HEAD) to gh-pages"
