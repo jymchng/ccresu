@@ -82,7 +82,7 @@ export const configurationDoc: DocPage = {
     {
       kind: "code",
       label: "Validate, then print",
-      code: `ccresu config validate      # exits non-zero on the first invalid field\nccresu config show          # effective values after defaults and env overrides\nccresu --json config show   # the same, as JSON`,
+      code: `ccresu config init          # write the shipped example, mode 0600, never overwriting\nccresu config init --force  # replace an existing file with the shipped example\nccresu config validate      # exits non-zero on the first invalid field\nccresu config show          # effective values after defaults and env overrides\nccresu --json config show   # the same, as JSON`,
     },
     {
       kind: "note",

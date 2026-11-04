@@ -74,7 +74,7 @@ export const installationDoc: DocPage = {
     {
       kind: "ol",
       items: [
-        "Copy `configs/config.example.yaml` to `~/.config/ccresu/config.yaml` and edit it.",
+        "Create `~/.config/ccresu/config.yaml` with `ccresu config init`, then edit it.",
         "Run `ccresu config validate` to check the file, the environment overrides and every default.",
         "Run `ccresu doctor` to check the Claude Code CLI, transcript access, the database and the data directory.",
         "Start the watchdog with `ccresu daemon`, or install it as a service (see Deployment).",

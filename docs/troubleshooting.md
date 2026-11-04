@@ -22,7 +22,7 @@ journalctl --user -u ccresu.service -n 100 --no-pager
 | --- | --- |
 | `ccresu: unknown command "bogus"` (exit 2) | The command table is exact; check for a typo. `ccresu --help` lists every command. |
 | `flag provided but not defined: -json` (exit 2) | A flag was misspelled or does not belong to that command. Global flags work in either position (`ccresu --json status` and `ccresu status --json`); `ccresu <command> --help` lists the per-command flags, which include the global ones. |
-| `ccresu: configuration ... is not readable` | No file at the resolved path. `ccresu config validate` prints the path it tried; run the installer or copy `configs/config.example.yaml`. |
+| `ccresu: configuration ... is not readable` | No file at the resolved path. `ccresu config validate` prints the path it tried; run `ccresu config init` to write the shipped example there (or the installer, which does the same). |
 | `invalid configuration: <field>: <reason>` | Validation is strict and never silent. The message names the field — an unknown key, wrong type, negative duration, unparsable timezone, relative path where an absolute one is required, or out-of-range value. |
 | Exit `3` from `inspect`/`history` | Unknown session id (`recovery: session not found`). `ccresu sessions --all` lists what exists. |
 | Exit `4` from `recover` | The session is not eligible: settled (`RESUMED`, `COMPLETED`, `USER_TERMINATED`, `DISABLED`, `UNRECOVERABLE`), disabled, or out of attempts. `ccresu inspect <id>` shows the state and the last transition reason. |

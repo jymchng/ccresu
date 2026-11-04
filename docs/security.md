@@ -49,6 +49,8 @@ Do it by hand if you prefer:
 ```bash
 install -d -m 0700 ~/.config/ccresu ~/.local/share/ccresu
 install -m 0600 configs/config.example.yaml ~/.config/ccresu/config.yaml
+# shorter, and it works without a checkout: the example is embedded in the binary
+ccresu config init
 ```
 
 ## The API token

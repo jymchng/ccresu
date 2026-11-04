@@ -44,6 +44,7 @@ export const cliDoc: DocPage = {
         ["enable <session-id>", "Allow ccresu to recover a session."],
         ["disable <session-id>", "Stop ccresu from recovering a session without forgetting its history."],
         ["history <session-id>", "Print the state transitions and attempts; `--limit` caps how many are shown."],
+        ["config init", "Write the shipped example configuration to the resolved path with mode 0600. `--force` replaces an existing file; without it the command refuses and writes nothing."],
         ["config validate", "Validate the file, the environment overrides and every default."],
         ["config show", "Print the effective configuration with secrets redacted."],
         ["doctor", "Check the config, timezone, data directory, database schema, Claude Code CLI, transcript access, Telegram and discovery."],

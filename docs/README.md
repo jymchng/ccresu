@@ -30,6 +30,9 @@ go install github.com/jymchng/ccresu/cmd/ccresu@latest
 ## Quick start
 
 ```sh
+# create ~/.config/ccresu/config.yaml from the shipped example (mode 0600)
+ccresu config init
+
 # check that the environment is usable: config, store, Claude Code, notifier
 ccresu doctor
 

@@ -93,9 +93,19 @@ go build -o ~/.local/bin/ccresu ./cmd/ccresu
 Then create the configuration once:
 
 ```bash
-mkdir -p ~/.config/ccresu
-cp configs/config.example.yaml ~/.config/ccresu/config.yaml
-chmod 600 ~/.config/ccresu/config.yaml
+ccresu config init
+```
+
+`config init` writes the example configuration the binary carries — the same
+bytes the installer would have copied — to `~/.config/ccresu/config.yaml` with
+mode `0600`, creating `~/.config/ccresu` if it does not exist. It never replaces
+an existing file without `--force`, so it is safe to run at any time. Point it
+somewhere else with the global flag or a positional path:
+
+```bash
+ccresu --config ./test-config.yaml config init
+ccresu config init /etc/ccresu/config.yaml
+ccresu config init --force        # replace the file with the shipped example
 ```
 
 Whatever the route, confirm the binary is the one you expect:
@@ -109,7 +119,7 @@ Usage:
   ccresu --help | --version
 
 Commands:
-  config    validate (or print) the configuration
+  config    create, validate (or print) the configuration
   daemon    run the watchdog loop until interrupted
   disable   stop ccresu from recovering a session
   doctor    check the environment ccresu runs in
@@ -149,7 +159,7 @@ release build fills them in.
 
 ## Tutorial: your first recovered session
 
-Twelve steps, in order. Each one says what to run and what you should see. The
+Thirteen steps, in order. Each one says what to run and what you should see. The
 transcripts below are real output from a scratch `HOME` on Linux, so the paths
 and session IDs are examples — yours will differ.
 
@@ -159,7 +169,57 @@ and session IDs are examples — yours will differ.
 > subcommand: `ccresu --config ./test.yaml sessions`, not
 > `ccresu sessions --config ./test.yaml`.
 
-### Step 1 — Validate the configuration
+### Step 1 — Create the configuration
+
+Every install route ends the same way: one YAML file describes what ccresu
+watches and where it stores state. `config init` writes it for you — the shipped
+example, at the default path, readable only by you.
+
+```console
+$ ccresu config init
+configuration /home/you/.config/ccresu/config.yaml created (mode 0600)
+
+Next steps:
+  1. edit /home/you/.config/ccresu/config.yaml
+  2. ccresu config validate
+  3. ccresu doctor
+```
+
+The default path is `~/.config/ccresu/config.yaml`; `XDG_CONFIG_HOME` moves it,
+and the global `--config PATH` flag or a positional argument names the file
+explicitly:
+
+```bash
+# a throwaway configuration for a scratch environment
+ccresu --config /tmp/ccresu/config.yaml config init
+
+# the same thing, positionally
+ccresu config init /tmp/ccresu/config.yaml
+```
+
+Parent directories are created, and the file is `0600` — it is where the Telegram
+bot token and the API token end up. An existing file is **never** replaced
+silently:
+
+```console
+$ ccresu config init
+ccresu: configuration /home/you/.config/ccresu/config.yaml already exists; it was left untouched
+to keep it:          edit it, then run 'ccresu config validate'
+to replace it:       ccresu config init /home/you/.config/ccresu/config.yaml --force
+to use another file: ccresu --config PATH config init
+```
+
+That is exit code 1, and the file is byte-for-byte untouched. When you really do
+want the shipped example back, say so:
+
+```bash
+ccresu config init --force
+```
+
+`ccresu config init --json` reports the same thing for scripts: `path`, `created`,
+`replaced`, `mode`, `valid` and `next_steps`.
+
+### Step 2 — Validate the configuration
 
 ccresu reads one YAML file. Every field is validated before anything runs, so a
 typo is a startup error rather than a silent default.
@@ -194,7 +254,7 @@ ccresu: configuration /home/you/.config/ccresu/config.yaml is invalid:
 invalid configuration: read /home/you/.config/ccresu/config.yaml: open /home/you/.config/ccresu/config.yaml: no such file or directory
 ```
 
-### Step 2 — Check the environment
+### Step 3 — Check the environment
 
 `ccresu doctor` is the pre-flight check. It looks at the config, the timezone,
 the data directory, the database schema, the `claude` executable, transcript
@@ -216,7 +276,7 @@ warn    sessions        no sessions discovered yet
 `warn` on `sessions` is expected before the first scan (step 3). A `fail` line
 is the thing to fix; `--json` gives the same rows as objects for monitoring.
 
-### Step 3 — Run the watchdog
+### Step 4 — Run the watchdog
 
 `ccresu daemon` is the program that does the work: discover, detect, schedule,
 resume, verify, repeat. Run it in the foreground the first time so you can watch
@@ -245,9 +305,9 @@ ccresu API listening on 127.0.0.1:8787
 ```
 
 `ccresu serve [--addr HOST:PORT]` defaults to `server.host`/`server.port` from
-the configuration. Step 12 uses it.
+the configuration. Step 13 uses it.
 
-### Step 4 — Find your sessions
+### Step 5 — Find your sessions
 
 ```console
 $ ccresu sessions --all
@@ -284,7 +344,7 @@ no sessions match
 
 Flags: `--all`, `--state STATE` (repeatable), `--limit N` (0 means all).
 
-### Step 5 — Allow recovery of a session
+### Step 6 — Allow recovery of a session
 
 Recovery is opt-in per session: discovery records everything, but ccresu only
 resumes what you enable.
@@ -303,7 +363,7 @@ Disabling is honoured immediately and is not the same as forgetting the
 session — the row stays, its history stays, and `--state DISABLED` still lists
 it.
 
-### Step 6 — Inspect one session
+### Step 7 — Inspect one session
 
 `inspect` is the verbose view: identity, paths, when the next attempt is due and
 why, the latest detected limit, the stored schedule and the recent transitions.
@@ -352,7 +412,7 @@ code `3` — copy the full ID out of the JSON instead of retyping it:
 ccresu --json sessions --all | jq -r '.[].ID'
 ```
 
-### Step 7 — Watch a usage limit be detected and scheduled
+### Step 8 — Watch a usage limit be detected and scheduled
 
 Nothing to do here but leave the daemon running and let a session hit its limit.
 When the banner appears in a transcript, the daemon logs it and moves the
@@ -397,7 +457,7 @@ with a backoff (`scheduler.unknown_reset_initial_interval` up to
 `scheduler.unknown_reset_max_interval`) until the limit clears, and `inspect`
 shows `unknown reset: yes`.
 
-### Step 8 — Watch the resume happen
+### Step 9 — Watch the resume happen
 
 When the reset time arrives, ccresu re-checks the session, checks the limit has
 actually cleared, resumes **the same** session ID, and verifies the conversation
@@ -430,7 +490,7 @@ pending:       0
 schedules:     0
 ```
 
-### Step 9 — Act manually
+### Step 10 — Act manually
 
 Three commands let you bypass the wait, with different rules:
 
@@ -464,7 +524,7 @@ $ ccresu recover e60a3100-123a-4deb-b146-54705ff80268
 ccresu: recover e60a3100-123a-4deb-b146-54705ff80268: recovery: invalid state transition: DISCOVERED -> CHECKING_SESSION (legal targets: DISABLED, PERMANENTLY_FAILED, RUNNING, UNRECOVERABLE)
 ```
 
-### Step 10 — When the resume fails
+### Step 11 — When the resume fails
 
 Failures are retried with exponential backoff, and every attempt is numbered
 against `recovery.max_attempts`. The transitions show the budget being spent:
@@ -514,7 +574,7 @@ $ ccresu retry 7c1b2a44-0000-4000-8000-abcdefabcdef
 ccresu: retry 7c1b2a44-0000-4000-8000-abcdefabcdef: recovery: session 7c1b2a44-0000-4000-8000-abcdefabcdef ended in PERMANENTLY_FAILED: resume session 7c1b2a44-0000-4000-8000-abcdefabcdef: claude: malformed claude output: empty resume output
 ```
 
-### Step 11 — Turn on Telegram notifications (optional)
+### Step 12 — Turn on Telegram notifications (optional)
 
 Off by default; recovery never depends on it. Put the token in the environment
 so it stays out of backups and shell history:
@@ -549,7 +609,7 @@ Each event is a separate switch (`notify_limit_detected`,
 Delivery is queued in SQLite by a sender goroutine, so a slow Telegram cannot
 delay a resume. Full details: [docs/telegram.md](docs/telegram.md).
 
-### Step 12 — Script it: the REST and SSE API
+### Step 13 — Script it: the REST and SSE API
 
 `ccresu serve` exposes the same state over HTTP on `127.0.0.1:8787` under
 `/api/v1`. Read-only routes need no credentials; state-changing routes want a

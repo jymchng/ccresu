@@ -12,8 +12,25 @@ Resolution order, first match wins:
 3. `$XDG_CONFIG_HOME/ccresu/config.yaml`, else `~/.config/ccresu/config.yaml`.
 
 A leading `~` is expanded by ccresu itself. The annotated reference is
-`configs/config.example.yaml`; the installer copies it to
-`~/.config/ccresu/config.yaml` (mode `0600`) when you have no configuration yet.
+`configs/config.example.yaml`; `ccresu config init` writes exactly those bytes —
+the copy embedded in the binary — to the resolved path with mode `0600`. The
+installer does the same thing, so either route leaves you with the same file.
+
+```console
+$ ccresu config init
+configuration /home/you/.config/ccresu/config.yaml created (mode 0600)
+
+Next steps:
+  1. edit /home/you/.config/ccresu/config.yaml
+  2. ccresu config validate
+  3. ccresu doctor
+```
+
+`config init [PATH]` and the global `--config PATH` both override the resolved
+path, and missing parent directories are created (`0700`). An existing file is
+left untouched and the command exits `1`; `--force` replaces it with the shipped
+example and re-tightens the mode to `0600`. `--json` reports `path`, `created`,
+`replaced`, `mode`, `valid` and `next_steps` for scripts.
 
 ## Validate, then trust it
 
@@ -208,6 +225,9 @@ inside a `0700` directory. If you create it by hand:
 install -d -m 0700 ~/.config/ccresu
 install -m 0600 configs/config.example.yaml ~/.config/ccresu/config.yaml
 ```
+
+`ccresu config init` is the shorter equivalent and needs no checkout: the example
+is embedded in the binary, so it writes the same bytes with mode `0600`.
 
 ## Applying changes
 

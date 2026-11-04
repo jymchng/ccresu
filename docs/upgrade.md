@@ -30,7 +30,7 @@ The installer:
 4. verifies the sha256 of the archive and aborts if it does not match,
 5. extracts and installs the binary into `~/.local/bin` (mode `0755`),
 6. creates `~/.config/ccresu`, `~/.local/share/ccresu` and `~/.local/state/ccresu` (mode `0700`),
-7. installs `configs/config.example.yaml` as `~/.config/ccresu/config.yaml` (mode `0600`) if you have no configuration yet,
+7. installs `configs/config.example.yaml` as `~/.config/ccresu/config.yaml` (mode `0600`) if you have no configuration yet (`ccresu config init` does the same from the binary alone),
 8. optionally installs and starts the user-level systemd unit,
 9. verifies the result by running `ccresu version` and `ccresu config validate`.
 

@@ -3,27 +3,151 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/jymchng/ccresu/configs"
 	"github.com/jymchng/ccresu/internal/config"
 )
 
-// cmdConfig implements `ccresu config validate` and `ccresu config show`.
+// cmdConfig implements `ccresu config init`, `validate` and `show`.
 func (a *App) cmdConfig(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return usagef("config needs a subcommand: validate or show")
+		return usagef("config needs a subcommand: init, validate or show")
 	}
 	switch args[0] {
+	case "init":
+		return a.cmdConfigInit(args[1:])
 	case "validate":
 		return a.cmdConfigValidate(args[1:])
 	case "show":
 		return a.cmdConfigShow(ctx, args[1:])
 	default:
-		return usagef("unknown config subcommand %q (want validate or show)", args[0])
+		return usagef("unknown config subcommand %q (want init, validate or show)", args[0])
 	}
+}
+
+// cmdConfigInit writes the shipped example configuration to the resolved path.
+//
+// It exists because the alternative is a `mkdir`, a `cp` out of a release tarball
+// and a `chmod`: three commands that are easy to get wrong, and whose failure
+// mode is a silently world-readable file holding a bot token. Here the mode is
+// fixed at 0600, the parent directory is created, and the contents are the same
+// bytes the installer would have copied.
+func (a *App) cmdConfigInit(args []string) error {
+	set := a.flags("config init", "config init [PATH] [--force]")
+	force := set.Bool("force", false, "overwrite an existing configuration file")
+	if err := a.parseFlags(set, args); err != nil {
+		return err
+	}
+	explicit := a.configPath
+	switch rest := set.Args(); len(rest) {
+	case 0:
+	case 1:
+		explicit = rest[0]
+	default:
+		return usagef("config init takes at most one path, got %d arguments", len(rest))
+	}
+
+	path, err := a.resolveConfigPath(explicit)
+	if err != nil {
+		return err
+	}
+
+	replaced := false
+	switch _, statErr := os.Stat(path); {
+	case statErr == nil:
+		if !*force {
+			// Refusing is the point: silently replacing a configuration would
+			// throw away the Telegram token and every tuned setting in it. The
+			// message names all three ways forward so the operator never has to
+			// guess at a destructive flag.
+			return withCode(ExitFailure, fmt.Errorf(
+				"configuration %s already exists; it was left untouched\n"+
+					"to keep it:          edit it, then run 'ccresu config validate'\n"+
+					"to replace it:       ccresu config init %s --force\n"+
+					"to use another file: ccresu --config PATH config init", path, path))
+		}
+		replaced = true
+	case errors.Is(statErr, fs.ErrNotExist):
+		// The normal case: nothing there yet.
+	default:
+		return withCode(ExitFailure, fmt.Errorf("configuration %s cannot be inspected: %w", path, statErr))
+	}
+
+	// Prove the example still loads before writing it, so a bad embedded file is
+	// a failed command instead of an installed broken configuration.
+	if err := a.checkExample(); err != nil {
+		return err
+	}
+
+	if dir := filepath.Dir(path); dir != "" {
+		// 0700: the directory holds the API token too, so it is not a place to
+		// leave world-traversable.
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return withCode(ExitFailure, fmt.Errorf("create %s: %w", dir, err))
+		}
+	}
+	if err := os.WriteFile(path, configs.Example, 0o600); err != nil {
+		return withCode(ExitFailure, fmt.Errorf("write configuration %s: %w", path, err))
+	}
+	// WriteFile only applies the mode when it creates the file, and even then the
+	// process umask can narrow or widen what lands on disk. Chmod afterwards so
+	// the mode is the one that was promised, including on a --force overwrite of
+	// a file that had been left 0644.
+	if err := os.Chmod(path, 0o600); err != nil {
+		return withCode(ExitFailure, fmt.Errorf("set mode 0600 on %s: %w", path, err))
+	}
+
+	if a.json {
+		return a.writeJSON(a.stdout, map[string]any{
+			"path":       path,
+			"created":    !replaced,
+			"replaced":   replaced,
+			"mode":       "0600",
+			"valid":      true,
+			"next_steps": []string{"edit " + path, "ccresu config validate", "ccresu doctor"},
+		})
+	}
+	verb := "created"
+	if replaced {
+		verb = "replaced with the shipped example"
+	}
+	fmt.Fprintf(a.stdout, "configuration %s %s (mode 0600)\n", path, verb)
+	fmt.Fprintln(a.stdout)
+	fmt.Fprintln(a.stdout, "Next steps:")
+	fmt.Fprintf(a.stdout, "  1. edit %s\n", path)
+	fmt.Fprintln(a.stdout, "  2. ccresu config validate")
+	fmt.Fprintln(a.stdout, "  3. ccresu doctor")
+	return nil
+}
+
+// checkExample validates the embedded example through the same loader
+// `config validate` uses, against a throwaway path.
+//
+// The environment is deliberately not applied: the question is whether the file
+// the binary carries is valid on its own, and an operator's CCRESU_* overrides
+// must not be able to make the check fail for a reason that has nothing to do
+// with the file being written.
+func (a *App) checkExample() error {
+	dir, err := os.MkdirTemp("", "ccresu-config-init-")
+	if err != nil {
+		return withCode(ExitFailure, fmt.Errorf("check the shipped example: %w", err))
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	probe := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(probe, configs.Example, 0o600); err != nil {
+		return withCode(ExitFailure, fmt.Errorf("check the shipped example: %w", err))
+	}
+	if _, err := a.deps.LoadConfig(probe, nil); err != nil {
+		return withCode(ExitFailure, fmt.Errorf("the shipped example configuration does not validate: %w", err))
+	}
+	return nil
 }
 
 // cmdConfigValidate loads the configuration and reports every problem it finds.

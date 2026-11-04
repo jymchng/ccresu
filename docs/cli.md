@@ -30,7 +30,7 @@ Exit codes: `0` ok, `1` failure, `2` usage, `3` not found, `4` not eligible,
 | `enable` | `enable <session-id>` | Allows ccresu to recover a session. |
 | `disable` | `disable <session-id>` | Stops ccresu from recovering a session. |
 | `history` | `history <session-id> [--limit N]` | Attempts and state transitions (default `--limit 50`). |
-| `config` | `config validate [PATH]` / `config show` | Validates a configuration file, or prints the effective one. |
+| `config` | `config init [PATH] [--force]` / `config validate [PATH]` / `config show` | Creates the configuration from the shipped example, validates a file, or prints the effective one. |
 | `doctor` | `doctor` | Checks the environment ccresu runs in. |
 | `serve` | `serve [--addr HOST:PORT]` | Runs the local REST/SSE API (default `server.host:server.port`). |
 | `version` | `version` | Prints version and build metadata. |
@@ -38,6 +38,38 @@ Exit codes: `0` ok, `1` failure, `2` usage, `3` not found, `4` not eligible,
 `ccresu --version` and `ccresu --help` work without a subcommand.
 
 ## Common workflows
+
+### Create the configuration
+
+```console
+$ ccresu config init
+configuration /home/you/.config/ccresu/config.yaml created (mode 0600)
+
+Next steps:
+  1. edit /home/you/.config/ccresu/config.yaml
+  2. ccresu config validate
+  3. ccresu doctor
+```
+
+`config init` writes the example configuration embedded in the binary — the same
+bytes the release archive and the installer ship — to
+`~/.config/ccresu/config.yaml` (or `$XDG_CONFIG_HOME/ccresu/config.yaml`) with
+mode `0600`, creating the parent directory `0700` if needed. `config init PATH`,
+and the global `--config PATH`, choose a different file.
+
+It refuses to replace an existing file, and says how to proceed:
+
+```console
+$ ccresu config init
+ccresu: configuration /home/you/.config/ccresu/config.yaml already exists; it was left untouched
+to keep it:          edit it, then run 'ccresu config validate'
+to replace it:       ccresu config init /home/you/.config/ccresu/config.yaml --force
+to use another file: ccresu --config PATH config init
+```
+
+The exit code is `1` and the file is untouched. `--force` replaces it with the
+shipped example and sets the mode back to `0600`. `--json` reports `path`,
+`created`, `replaced`, `mode`, `valid` and `next_steps`.
 
 ### Check the environment
 
