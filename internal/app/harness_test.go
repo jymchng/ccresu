@@ -25,6 +25,35 @@ import (
 // byte-for-byte reproducible.
 var harnessBaseTime = time.Date(2026, 1, 5, 12, 0, 0, 0, time.UTC)
 
+// syncBuffer is a bytes.Buffer guarded by a mutex. Several daemon tests start a
+// CLI invocation on its own goroutine and poll the captured output from the test
+// goroutine, so the buffer must tolerate a concurrent Write and String.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+// Write appends p to the buffer.
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+// String returns everything captured so far.
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// Reset discards the captured output.
+func (b *syncBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
+}
+
 // fakeNotifier records queued notifications and can pretend to be a drain loop.
 type fakeNotifier struct {
 	mu        sync.Mutex
@@ -142,8 +171,8 @@ type harness struct {
 	clock       *clock.Fake
 	signals     chan os.Signal
 
-	stdout bytes.Buffer
-	stderr bytes.Buffer
+	stdout syncBuffer
+	stderr syncBuffer
 
 	buildErr  error
 	loadErr   error
