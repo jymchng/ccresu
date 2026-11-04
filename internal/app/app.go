@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -272,9 +273,10 @@ func (a *App) execute(args []string) error {
 // parseGlobal consumes the flags that apply to every command and returns the
 // remaining arguments.
 //
-// Global flags must precede the command name; a flag after the command belongs to
-// that command. That is the conventional split (git and kubectl behave the same
-// way) and it keeps each command's FlagSet unambiguous.
+// Only the flags written *before* the command name are consumed here. The same
+// flags are also registered on every command's own FlagSet (see
+// registerGlobalFlags), so `ccresu --json status` and `ccresu status --json` are
+// both accepted and neither is a special case the caller has to remember.
 func (a *App) parseGlobal(args []string) ([]string, error) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -503,6 +505,13 @@ func (a *App) printHelp(w io.Writer) {
 }
 
 // flags builds a FlagSet for one command, wired to stderr.
+//
+// The global flags are registered on every command's set as well as being
+// consumed before the command name. Registering them here is what makes a global
+// flag work in either position, and going through the command's own set is what
+// keeps the split honest: only the set knows which token is a value, so
+// `ccresu recover <id> --message --json` still sends the literal text "--json"
+// instead of swallowing it.
 func (a *App) flags(name, usage string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(a.stderr)
@@ -510,16 +519,89 @@ func (a *App) flags(name, usage string) *flag.FlagSet {
 		fmt.Fprintf(a.stderr, "Usage: ccresu %s\n", usage)
 		fs.PrintDefaults()
 	}
+	a.registerGlobalFlags(fs)
 	return fs
+}
+
+// registerGlobalFlags adds the documented global flags to one command's set.
+//
+// The defaults are the values already parsed before the command name, so writing
+// the flag twice (before and after the command) is the same as writing it once
+// with the later value, and omitting it keeps what the earlier position set.
+func (a *App) registerGlobalFlags(fs *flag.FlagSet) {
+	fs.StringVar(&a.configPath, "config", a.configPath,
+		"configuration file (default: ~/.config/ccresu/config.yaml)")
+	fs.StringVar(&a.configPath, "c", a.configPath, "shorthand for --config")
+	fs.BoolVar(&a.json, "json", a.json, "emit machine-readable JSON where the command supports it")
+	fs.StringVar(&a.logLevel, "log-level", a.logLevel, "debug, info, warn or error")
+	fs.StringVar(&a.logFormat, "log-format", a.logFormat, "json or text")
+	fs.Var(&logLevelShorthand{target: &a.logLevel, level: "debug"}, "verbose",
+		"shorthand for --log-level debug")
+	fs.Var(&logLevelShorthand{target: &a.logLevel, level: "debug"}, "v",
+		"shorthand for --log-level debug")
+	fs.Var(&logLevelShorthand{target: &a.logLevel, level: "error"}, "quiet",
+		"shorthand for --log-level error")
+	fs.Var(&logLevelShorthand{target: &a.logLevel, level: "error"}, "q",
+		"shorthand for --log-level error")
+}
+
+// logLevelShorthand is a flag.Value that assigns a log level when it is parsed.
+//
+// It assigns immediately rather than after the fact so that `-v -q` and `-q -v`
+// resolve in the order they were written, exactly as they do when they appear
+// before the command name.
+type logLevelShorthand struct {
+	target *string
+	level  string
+}
+
+// String implements flag.Value: an empty default is what hides it from
+// PrintDefaults, keeping the command pages readable.
+func (v *logLevelShorthand) String() string { return "" }
+
+// IsBoolFlag implements flag.boolFlag, so the shorthand needs no value.
+func (v *logLevelShorthand) IsBoolFlag() bool { return true }
+
+// Set implements flag.Value.
+func (v *logLevelShorthand) Set(value string) error {
+	on, err := strconv.ParseBool(value)
+	if err != nil {
+		return err
+	}
+	if on {
+		*v.target = v.level
+	}
+	return nil
 }
 
 // parseFlags parses args for one command and turns a parse failure into a usage
 // error, so a typo exits 2 instead of 1.
+//
+// Flags and positionals may be interleaved: `ccresu recover <id> --json` has to
+// work as well as `ccresu recover --json <id>`. The standard library stops at the
+// first positional, so the parse is resumed after each one and the positionals
+// are handed back to the FlagSet at the end, behind a " -- " terminator, so a
+// value that begins with '-' keeps its meaning instead of being read as a flag.
 func (a *App) parseFlags(fs *flag.FlagSet, args []string) error {
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return err
+	positional := make([]string, 0, len(args))
+	for {
+		if err := fs.Parse(args); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return err
+			}
+			return withCode(ExitUsage, err)
 		}
+		rest := fs.Args()
+		if len(rest) == 0 {
+			break
+		}
+		positional = append(positional, rest[0])
+		args = rest[1:]
+	}
+	if len(positional) == 0 {
+		return nil
+	}
+	if err := fs.Parse(append([]string{"--"}, positional...)); err != nil {
 		return withCode(ExitUsage, err)
 	}
 	return nil

@@ -33,7 +33,7 @@ export const troubleshootingDoc: DocPage = {
         ["`state: PERMANENTLY_FAILED`", "The attempt budget is spent or the error was classified as non-retryable. `ccresu history` shows the classified error; `ccresu retry <session-id>` resets the budget once the cause is fixed."],
         ["`state: UNRECOVERABLE`", "The session type or the observed error cannot be resumed through `claude -p --resume`. This is reported instead of inventing an undocumented command."],
         ["Recovery ran but the transcript did not grow", "The resume process started and exited without producing work. The verifier refuses to record RESUMED; check the recorded error and the resumes' output in the logs."],
-        ["Exit code 2", "Usage error: an unknown flag, or a global flag placed after the command. Global flags go before the command name."],
+        ["Exit code 2", "Usage error: an unknown flag, or a flag that command does not define. Global flags work before or after the command name; `ccresu <command> --help` lists the command's flags."],
         ["Exit code 3", "No such session id. `ccresu sessions --all` lists every id ccresu knows."],
         ["Exit code 4", "The session exists but is not eligible: it is disabled, already resumed, or its reset time has not arrived."],
         ["The API returns 401", "The request changes state and needs `Authorization: Bearer <token>`. Read the token from `~/.config/ccresu/api-token`; it is not the Telegram token."],

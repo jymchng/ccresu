@@ -52,7 +52,7 @@ Run at `HEAD` on a clean tree:
 | Vet | `go vet ./...` | clean |
 | Tests | `go test ./...` | all 13 Go packages with tests pass |
 | Race | `go test -race ./...` | pass |
-| Coverage | `make cover-check` | **86.7%** (gate 80%) |
+| Coverage | `make cover-check` | **87.0%** (gate 80%) |
 | Website lint | `npm run lint` | clean |
 | Website types | `npx tsc --noEmit` | clean |
 | Website tests | `npm run test` | 7 files, 36 tests pass |
@@ -75,13 +75,13 @@ Per-package statement coverage:
 | `internal/claude` | 90.0% | ≥80% |
 | `internal/server` | 87.9% | ≥80% |
 | `internal/storage` | 87.5% | ≥85% |
-| `internal/app` | 81.0% | ≥80% |
+| `internal/app` | 82.8% | ≥80% |
 | `tests/e2e` | no statements (behavioural) | — |
 
-The 86.2% total is measured over everything `go test ./...` reports, which
+The 87.0% total is measured over everything `go test ./...` reports, which
 includes `cmd/ccresu` (0.0%, no test files), `tests/support` (a fixture package)
 and a vendored Go file inside `web/node_modules`. Over the `internal/` packages
-only it is ~91%.
+only it is 90.8%.
 
 ## The end-to-end scenario
 
@@ -110,8 +110,6 @@ Tracked as open goals, not hidden:
 
 - `internal/recovery` edge paths (`verify.go`, `manager.go`) are now at 98.3%;
   the statements left are unreachable defensive branches tracked as an open goal.
-- Global flags are accepted before the subcommand only (`ccresu --json status`
-  works, `ccresu status --json` exits 2).
 - `tests/integration` is empty; `cmd/ccresu` has no tests of its own.
 - The installer's guarantees are verified by hand, not by an automated test.
 

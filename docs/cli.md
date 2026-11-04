@@ -6,7 +6,13 @@ ccresu --help | --version
 ```
 
 Global flags: `-c/--config PATH`, `--json`, `--log-level`, `--log-format`,
-`-v/--verbose` (shorthand for debug), `-q/--quiet` (shorthand for error).
+`-v/--verbose` (shorthand for debug), `-q/--quiet` (shorthand for error). They
+are accepted **before or after** the command name: `ccresu --json status` and
+`ccresu status --json` are the same invocation. Flags and positionals may be
+interleaved (`ccresu recover <id> --json`), and a flag value is never mistaken
+for a global flag (`ccresu recover <id> --message --json` sends the text
+`--json`), because the command's own flag set does the parsing. `--` ends flag
+parsing, so a value that begins with `-` can still be passed.
 
 Exit codes: `0` ok, `1` failure, `2` usage, `3` not found, `4` not eligible,
 `130` interrupted.

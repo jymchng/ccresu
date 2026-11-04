@@ -79,8 +79,8 @@ export const cliDoc: DocPage = {
     {
       kind: "note",
       tone: "info",
-      title: "Global flags come first",
-      text: "Global flags are parsed before the command name: `ccresu --json status` works, while `ccresu status --json` is a usage error (exit code 2). Per-command flags go after the command, as shown by `ccresu <command> --help`.",
+      title: "Global flags go anywhere",
+      text: "Global flags are accepted before or after the command name: `ccresu --json status` and `ccresu status --json` are the same invocation, and flags may be interleaved with positionals (`ccresu recover <id> --json`). A flag value is never mistaken for a global flag, so `ccresu recover <id> --message --json` sends the text `--json`. `ccresu <command> --help` lists every flag that command accepts, global ones included.",
     },
   ],
 };

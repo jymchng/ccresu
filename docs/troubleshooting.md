@@ -21,7 +21,7 @@ journalctl --user -u ccresu.service -n 100 --no-pager
 | Symptom | Cause and fix |
 | --- | --- |
 | `ccresu: unknown command "bogus"` (exit 2) | The command table is exact; check for a typo. `ccresu --help` lists every command. |
-| `flag provided but not defined: -json` (exit 2) | Global flags are currently accepted **before** the subcommand only: `ccresu --json status`, not `ccresu status --json`. Per-command flags (`--limit`, `--all`, `--force`, …) work after the command. |
+| `flag provided but not defined: -json` (exit 2) | A flag was misspelled or does not belong to that command. Global flags work in either position (`ccresu --json status` and `ccresu status --json`); `ccresu <command> --help` lists the per-command flags, which include the global ones. |
 | `ccresu: configuration ... is not readable` | No file at the resolved path. `ccresu config validate` prints the path it tried; run the installer or copy `configs/config.example.yaml`. |
 | `invalid configuration: <field>: <reason>` | Validation is strict and never silent. The message names the field — an unknown key, wrong type, negative duration, unparsable timezone, relative path where an absolute one is required, or out-of-range value. |
 | Exit `3` from `inspect`/`history` | Unknown session id (`recovery: session not found`). `ccresu sessions --all` lists what exists. |
@@ -133,8 +133,9 @@ waits:
 - **The reset time is only as good as the banner.** When the message carries no
   reset time, ccresu re-polls with exponential backoff (5m → 30m) instead of
   guessing, so the resume can lag the real reset.
-- **Global flags are position-sensitive.** `ccresu --json status` works;
-  `ccresu status --json` exits 2 with `flag provided but not defined: -json`.
+- **Flags and positionals may be interleaved.** `ccresu status --json` and
+  `ccresu recover <id> --json` behave exactly like their flag-first forms; use
+  `--` when a value itself begins with `-`.
 - **`telegram.parse_mode` must be `HTML`.** It is the only mode the templates
   can render; `MarkdownV2` and `Markdown` are rejected by `config validate` and
   by the client rather than sent as markup Telegram cannot read.
