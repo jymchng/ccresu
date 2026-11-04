@@ -47,6 +47,7 @@ recovery:
   jitter: 0.15
   startup_timeout: 60s
   verification_timeout: 120s
+  health_check_interval: 10s
   max_concurrent_recoveries: 3
 
 telegram:
