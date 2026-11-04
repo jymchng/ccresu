@@ -14,7 +14,7 @@ export const tutorialDoc: DocPage = {
       kind: "note",
       tone: "info",
       title: "Global flags go before the command",
-      text: "`--config PATH` selects a configuration file other than `~/.config/ccresu/config.yaml`, and `--json` switches a command to machine-readable output. Both are global flags: `ccresu --config ./test.yaml sessions`, not `ccresu sessions --config ./test.yaml`.",
+      text: "`--config PATH` selects a configuration file other than `~/.config/ccresu/config.yaml` (so does `CCRESU_CONFIG` in the environment), and `--json` switches a command to machine-readable output. Both are global flags: `ccresu --config ./test.yaml sessions`, not `ccresu sessions --config ./test.yaml`.",
     },
     { kind: "h2", text: "Step 1 — Create the configuration" },
     {
@@ -34,7 +34,7 @@ Next steps:
     },
     {
       kind: "p",
-      text: "The default path is `~/.config/ccresu/config.yaml`; `XDG_CONFIG_HOME` moves it, and the global `--config PATH` flag or a positional argument names the file explicitly. Parent directories are created and the file is 0600. An existing file is never replaced silently — that is exit code 1 with the file untouched:",
+      text: "The default path is `~/.config/ccresu/config.yaml`; `XDG_CONFIG_HOME` moves it, and the global `--config PATH` flag, the `CCRESU_CONFIG` environment variable or a positional argument names the file explicitly. Parent directories are created and the file is 0600. An existing file is never replaced silently — that is exit code 1 with the file untouched:",
     },
     {
       kind: "code",

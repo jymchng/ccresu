@@ -19,13 +19,17 @@ export const cliDoc: DocPage = {
       kind: "table",
       head: ["Flag", "Meaning"],
       rows: [
-        ["-c, --config PATH", "Configuration file. Default: ~/.config/ccresu/config.yaml."],
+        ["-c, --config PATH", "Configuration file. Default: ~/.config/ccresu/config.yaml; `CCRESU_CONFIG` overrides the default, `--config` overrides both."],
         ["--json", "Machine-readable output where the command supports it."],
         ["--log-level LEVEL", "debug, info, warn or error."],
         ["--log-format FMT", "json or text."],
         ["-v, --verbose", "Shorthand for --log-level debug."],
         ["-q, --quiet", "Shorthand for --log-level error."],
       ],
+    },
+    {
+      kind: "p",
+      text: "The configuration file is chosen in this order, first match wins: `-c/--config PATH`, then `CCRESU_CONFIG` in the environment, then `$XDG_CONFIG_HOME/ccresu/config.yaml` (else `~/.config/ccresu/config.yaml`). A leading `~` is expanded, and paths derived from the file — such as the API token beside it — follow the file actually in use.",
     },
     {
       kind: "h2",

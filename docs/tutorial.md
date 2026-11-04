@@ -12,10 +12,10 @@ build from a checkout) and that `claude` is on `PATH` with at least one session
 under `~/.claude/projects`.
 
 > `--config PATH` selects a configuration file other than
-> `~/.config/ccresu/config.yaml`, and `--json` switches a command to
-> machine-readable output. Both are global flags, so they go before the
-> subcommand: `ccresu --config ./test.yaml sessions`, not
-> `ccresu sessions --config ./test.yaml`.
+> `~/.config/ccresu/config.yaml` (so does `CCRESU_CONFIG` in the environment),
+> and `--json` switches a command to machine-readable output. Both are global
+> flags, so they go before the subcommand: `ccresu --config ./test.yaml
+> sessions`, not `ccresu sessions --config ./test.yaml`.
 
 ## Step 1 — Create the configuration
 
@@ -33,8 +33,8 @@ Next steps:
 ```
 
 The default path is `~/.config/ccresu/config.yaml`; `XDG_CONFIG_HOME` moves it,
-and the global `--config PATH` flag or a positional argument names the file
-explicitly:
+and the global `--config PATH` flag, the `CCRESU_CONFIG` environment variable or
+a positional argument names the file explicitly:
 
 ```bash
 ccresu --config /tmp/ccresu/config.yaml config init

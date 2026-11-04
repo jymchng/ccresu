@@ -55,7 +55,7 @@ Next steps:
 bytes the release archive and the installer ship — to
 `~/.config/ccresu/config.yaml` (or `$XDG_CONFIG_HOME/ccresu/config.yaml`) with
 mode `0600`, creating the parent directory `0700` if needed. `config init PATH`,
-and the global `--config PATH`, choose a different file.
+the global `--config PATH` and `CCRESU_CONFIG` choose a different file.
 
 It refuses to replace an existing file, and says how to proceed:
 

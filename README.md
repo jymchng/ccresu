@@ -211,8 +211,8 @@ Next steps:
 ```
 
 The default path is `~/.config/ccresu/config.yaml`; `XDG_CONFIG_HOME` moves it,
-and the global `--config PATH` flag or a positional argument names the file
-explicitly:
+and the global `--config PATH` flag, the `CCRESU_CONFIG` environment variable or
+a positional argument names the file explicitly:
 
 ```bash
 # a throwaway configuration for a scratch environment
