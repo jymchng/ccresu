@@ -1,0 +1,139 @@
+name: CI
+
+# Every push to the production branch and every pull request must prove that
+# the tree builds, is formatted, is vetted, passes its tests under the race
+# detector, keeps coverage above the gate, and that the website still lints,
+# type-checks, tests and exports.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Read-only by default: CI never needs to write to the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOFLAGS: -trimpath
+  GOTOOLCHAIN: local
+
+jobs:
+  go:
+    name: Go quality gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: gofmt (non-mutating check)
+        run: make fmt-check
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test ./...
+
+      - name: go test -race
+        run: go test -race ./...
+
+      # Fails the job when total statement coverage drops below the gate
+      # (COVERAGE_MIN in the Makefile, currently 80%).
+      - name: coverage gate
+        run: make cover-check
+
+      - name: coverage report (html)
+        if: always()
+        run: |
+          if [ -f coverage.out ]; then
+            go tool cover -html=coverage.out -o coverage.html
+            go tool cover -func=coverage.out | tail -n 5
+          fi
+
+      - name: upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage
+          path: |
+            coverage.out
+            coverage.html
+          if-no-files-found: warn
+          retention-days: 14
+
+  web:
+    name: Website quality gate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install (from the lockfile)
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Test
+        run: npm run test
+
+      - name: Build static export
+        run: npm run build
+
+      - name: upload static export
+        uses: actions/upload-artifact@v4
+        with:
+          name: website-export
+          path: web/out
+          if-no-files-found: error
+          retention-days: 14
+
+  scripts:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: ShellCheck the installers
+        run: |
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq shellcheck
+          fi
+          shellcheck --version
+          shellcheck -x scripts/*.sh
