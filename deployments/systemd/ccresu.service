@@ -1,0 +1,57 @@
+# User-level systemd unit for ccresu.
+#
+# Install with the installer:
+#   ./scripts/install.sh --systemd
+#
+# or by hand:
+#   mkdir -p ~/.config/systemd/user
+#   cp deployments/systemd/ccresu.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now ccresu.service
+#
+# This is a *user* unit on purpose: ccresu resumes Claude Code sessions that
+# belong to you, reading ~/.claude and writing into your project
+# directories, so it must run as you and never as root.
+#
+# A user manager stops when your last session ends unless lingering is on.
+# For a watchdog that keeps working after you log out:
+#   sudo loginctl enable-linger "$USER"
+
+[Unit]
+Description=ccresu - resume Claude Code sessions after usage limits reset
+Documentation=https://github.com/jymchng/ccresu
+# The daemon does not need the network to start (it discovers locally and only
+# calls out to Telegram when configured), but it benefits from DNS being up.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# `daemon` is the long-running watchdog loop. Configuration is read from
+# ~/.config/ccresu/config.yaml and state is kept in
+# ~/.local/share/ccresu/ccresu.db; both are recreated on restart, so the
+# process holds no state the database does not already have.
+ExecStart=%h/.local/bin/ccresu daemon
+# A watchdog that silently dies is worse than no watchdog: restart it, and do
+# not spin when the configuration is broken (systemd's default start limit
+# stops the unit after repeated failures).
+Restart=on-failure
+RestartSec=10s
+# Give an in-flight `claude -p --resume` child a chance to finish or be killed
+# cleanly before systemd escalates to SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=60s
+
+# The daemon spawns `claude`, which writes to ~/.claude and to your project
+# directories, so the home directory must stay writable and no filesystem-wide
+# sandbox is applied here. Only the cheap, non-breaking hardening is used.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+# Journald already timestamps and rotates; let the CLI pick its own format too.
+Environment=CCRESU_APP__LOG_FORMAT=json
+
+[Install]
+WantedBy=default.target
