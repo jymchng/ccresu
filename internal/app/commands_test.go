@@ -148,7 +148,7 @@ func TestStatusReportsPersistedState(t *testing.T) {
 		t.Fatalf("exit = %d (stderr %q)", code, stderr)
 	}
 	for _, want := range []string{
-		"sessions:", "2 (1 enabled)", "telegram:", "recovery:", "RUNNING", "DISABLED",
+		"sessions:", "2 total, 1 enabled", "ccresu sessions --all shows all 2", "telegram:", "recovery:", "RUNNING", "DISABLED",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("status output missing %q:\n%s", want, stdout)

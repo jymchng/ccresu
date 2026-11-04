@@ -36,8 +36,8 @@ export const cliDoc: DocPage = {
       head: ["Command", "What it does"],
       rows: [
         ["daemon", "Run the watchdog loop until interrupted. `--once` runs a single reconcile pass; `--interval` overrides the reconcile interval."],
-        ["status", "Summarise configuration path, database, session counts, pending recoveries, schedules and Telegram state."],
-        ["sessions", "List discovered sessions. `--all` includes disabled and settled ones, `--state` filters (repeatable), `--limit` caps the output."],
+        ["status", "Summarise configuration path, database, session counts, pending recoveries, schedules and Telegram state. Its `sessions` line is the total row count; its `listing` line says how many a bare `sessions` shows."],
+        ["sessions", "List discovered sessions. A bare listing is enabled only and says so in the footer; `--all` includes disabled and settled ones, `--state` filters (repeatable), `--limit` caps the output and says when it truncated."],
         ["inspect <session-id>", "Show everything known about one session: identity, state, schedule, attempts and recent transitions."],
         ["recover <session-id>", "Resume one session now. `--force` ignores a spent attempt budget; `--message` overrides the continuation message."],
         ["retry <session-id>", "Reset the attempt budget of a permanently failed session and let the daemon try again."],
@@ -76,6 +76,12 @@ export const cliDoc: DocPage = {
       kind: "code",
       label: "A typical session",
       code: `ccresu status\nccresu sessions --state WAITING_FOR_RESET\nccresu inspect 4d1f9c2a-... \nccresu history 4d1f9c2a-... --limit 20\nccresu recover 4d1f9c2a-... --force\nccresu --json sessions | jq '.[].id'`,
+    },
+    {
+      kind: "note",
+      tone: "info",
+      title: "Session counts: total vs listed",
+      text: "`ccresu status` counts every stored session row; a bare `ccresu sessions` lists only the enabled ones. Both say so: `status` prints `sessions: 27 total, 1 enabled` followed by `listing: ccresu sessions shows the 1 enabled; ccresu sessions --all shows all 27`, and the listing footer reads `1 session(s) shown: enabled only (of 27 matching; --all includes disabled and settled)`. A `--limit` that truncates adds `limit N reached; use --limit 0 to list every match`. `status --json` exposes `sessions` (total), `enabled_sessions` and `sessions_listed_by_default`, the last matching what a bare `sessions --json` returns.",
     },
     {
       kind: "note",

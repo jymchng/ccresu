@@ -318,7 +318,7 @@ SESSION   STATE       NEXT ATTEMPT                    ENABLED  RECOVERABLE  PROJ
 e1732e3d  DISCOVERED  none (session is not enabled)   no       yes                                                       2026-11-05 03:24:03 +08
 e60a3100  DISCOVERED  none (no usage limit detect...  yes      yes          /root/python_projects/python-password...  2026-11-05 03:24:03 +08
 
-5 session(s)
+5 session(s) shown (--all: disabled and settled sessions included)
 ```
 
 - `SESSION` is the first eight characters of the session ID; commands need the
@@ -334,15 +334,26 @@ e60a3100  DISCOVERED  none (no usage limit detect...  yes      yes          /roo
 - `RECOVERABLE` and `NOTE` explain *why* a session is or is not actionable.
 
 Without `--all`, the table shows only the sessions ccresu is currently working
-on, which is why it can print `no sessions match` on a machine that still has
-sessions in the store:
+on — the enabled ones. That is a different number from the total `ccresu status`
+counts, so the footer says which filter is in force and what it is hiding:
 
 ```console
 $ ccresu sessions
-no sessions match
+no enabled sessions match; 5 match with --all
 ```
 
-Flags: `--all`, `--state STATE` (repeatable), `--limit N` (0 means all).
+The same rule applies when there is something to show:
+
+```console
+$ ccresu sessions
+SESSION   STATE              NEXT ATTEMPT  ENABLED  RECOVERABLE  PROJECT  LAST SEEN                NOTE
+3f9d1c07  WAITING_FOR_RESET  in 1m20s      yes      yes                   2026-11-05 03:43:40 +08
+1 session(s) shown: enabled only (of 5 matching; --all includes disabled and settled)
+```
+
+Flags: `--all`, `--state STATE` (repeatable), `--limit N` (0 means all). A
+`--limit` that actually truncates the list says so, so a full page never looks
+like the whole table.
 
 ### Step 6 — Allow recovery of a session
 
@@ -432,14 +443,15 @@ $ ccresu sessions
 SESSION   STATE              NEXT ATTEMPT  ENABLED  RECOVERABLE  PROJECT  LAST SEEN                NOTE
 3f9d1c07  WAITING_FOR_RESET  in 1m20s      yes      yes                   2026-11-05 03:43:40 +08
 
-1 session(s)
+1 session(s) shown: enabled only (--all includes disabled and settled)
 ```
 
 ```console
 $ ccresu status
 config:        /home/you/.config/ccresu/config.yaml
 database:      /home/you/.local/share/ccresu/ccresu.db
-sessions:      1 (1 enabled)
+sessions:      1 total, 1 enabled
+listing:       ccresu sessions shows the 1 enabled; ccresu sessions --all shows all 1
 pending:       1
 schedules:     1
 next wake:     2026-11-04T19:29:00Z
@@ -485,7 +497,8 @@ WHEN                     TRANSITION                                 REASON
 kept). `status` then reads:
 
 ```console
-sessions:      1 (1 enabled)
+sessions:      1 total, 1 enabled
+listing:       ccresu sessions shows the 1 enabled; ccresu sessions --all shows all 1
 pending:       0
 schedules:     0
 ```

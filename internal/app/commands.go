@@ -41,21 +41,27 @@ func (a *App) cmdVersion(_ context.Context, args []string) error {
 
 // statusReport is the machine-readable form of `ccresu status`.
 type statusReport struct {
-	ConfigPath           string         `json:"config_path"`
-	DatabasePath         string         `json:"database_path"`
-	Sessions             int            `json:"sessions"`
-	EnabledSessions      int            `json:"enabled_sessions"`
-	States               map[string]int `json:"states"`
-	PendingRecoveries    int            `json:"pending_recoveries"`
-	Schedules            int            `json:"schedules"`
-	NextScheduleAt       string         `json:"next_schedule_at,omitempty"`
-	PendingNotifications int            `json:"pending_notifications"`
-	TelegramEnabled      bool           `json:"telegram_enabled"`
-	RecoveryEnabled      bool           `json:"recovery_enabled"`
-	MaxAttempts          int            `json:"max_attempts"`
-	Monitoring           bool           `json:"monitoring"`
-	Now                  time.Time      `json:"now"`
-	SessionIDs           []string       `json:"pending_session_ids,omitempty"`
+	ConfigPath      string `json:"config_path"`
+	DatabasePath    string `json:"database_path"`
+	Sessions        int    `json:"sessions"`
+	EnabledSessions int    `json:"enabled_sessions"`
+	// SessionsListedByDefault is what a bare `ccresu sessions` prints: the
+	// enabled rows only. It exists so a script can reconcile this report with
+	// `ccresu sessions --json` without having to know the default filter, which
+	// is the mismatch that made "sessions: 27 (1 enabled)" and a one-row
+	// listing look like two different answers.
+	SessionsListedByDefault int            `json:"sessions_listed_by_default"`
+	States                  map[string]int `json:"states"`
+	PendingRecoveries       int            `json:"pending_recoveries"`
+	Schedules               int            `json:"schedules"`
+	NextScheduleAt          string         `json:"next_schedule_at,omitempty"`
+	PendingNotifications    int            `json:"pending_notifications"`
+	TelegramEnabled         bool           `json:"telegram_enabled"`
+	RecoveryEnabled         bool           `json:"recovery_enabled"`
+	MaxAttempts             int            `json:"max_attempts"`
+	Monitoring              bool           `json:"monitoring"`
+	Now                     time.Time      `json:"now"`
+	SessionIDs              []string       `json:"pending_session_ids,omitempty"`
 }
 
 // cmdStatus summarises the persisted state: how many sessions ccresu knows about,
@@ -100,6 +106,7 @@ func (a *App) cmdStatus(ctx context.Context, args []string) error {
 		return fmt.Errorf("count enabled sessions: %w", err)
 	}
 	report.EnabledSessions = enabledCount
+	report.SessionsListedByDefault = enabledCount
 
 	for _, state := range reportedStates {
 		count, err := rt.Store.CountSessions(ctx, storage.SessionFilter{States: []storage.State{state}})
@@ -148,7 +155,12 @@ func (a *App) cmdStatus(ctx context.Context, args []string) error {
 	loc := a.displayLocation(rt)
 	a.field(a.stdout, "config", report.ConfigPath)
 	a.field(a.stdout, "database", report.DatabasePath)
-	a.field(a.stdout, "sessions", fmt.Sprintf("%d (%d enabled)", report.Sessions, report.EnabledSessions))
+	a.field(a.stdout, "sessions", fmt.Sprintf("%d total, %d enabled", report.Sessions, report.EnabledSessions))
+	// Name the filter out loud. "sessions: 27 (1 enabled)" next to a one-row
+	// `ccresu sessions` reads like a bug unless the listing rule is stated, and
+	// the rule is that a bare listing is enabled-only.
+	a.field(a.stdout, "listing", fmt.Sprintf("ccresu sessions shows the %d enabled; ccresu sessions --all shows all %d",
+		report.SessionsListedByDefault, report.Sessions))
 	a.field(a.stdout, "pending", report.PendingRecoveries)
 	a.field(a.stdout, "schedules", report.Schedules)
 	if report.NextScheduleAt != "" {
@@ -228,6 +240,13 @@ func (a *App) cmdSessions(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("list sessions: %w", err)
 	}
+	// How many rows match the same state filter if the enabled filter is dropped.
+	// The footer uses it to say what the default listing is hiding, so "one row"
+	// is never presented as "one session exists".
+	matching, err := rt.Store.CountSessions(ctx, storage.SessionFilter{States: filter.States})
+	if err != nil {
+		return fmt.Errorf("count sessions: %w", err)
+	}
 
 	schedules, err := rt.Store.LoadSchedules(ctx)
 	if err != nil {
@@ -243,6 +262,11 @@ func (a *App) cmdSessions(ctx context.Context, args []string) error {
 		return a.writeJSON(a.stdout, sessionReports(sessions, scheduleBySession, now))
 	}
 	if len(sessions) == 0 {
+		if !*all && matching > 0 {
+			// The exact case that looked like a bug: rows exist, none are enabled.
+			fmt.Fprintf(a.stdout, "no enabled sessions match; %d match with --all\n", matching)
+			return nil
+		}
 		fmt.Fprintln(a.stdout, "no sessions match")
 		return nil
 	}
@@ -266,8 +290,34 @@ func (a *App) cmdSessions(ctx context.Context, args []string) error {
 		})
 	}
 	a.table(a.stdout, []string{"SESSION", "STATE", "NEXT ATTEMPT", "ENABLED", "RECOVERABLE", "PROJECT", "LAST SEEN", "NOTE"}, rows)
-	fmt.Fprintf(a.stdout, "\n%d session(s)\n", len(sessions))
+	fmt.Fprintln(a.stdout)
+	fmt.Fprint(a.stdout, sessionsFootnote(len(sessions), matching, *all, *limit))
 	return nil
+}
+
+// sessionsFootnote states what the table is showing and what the default filter
+// leaves out.
+//
+// `status` counts every row it knows about while a bare `sessions` lists only the
+// enabled ones; without this line the two outputs read as contradictory. It also
+// names a truncating --limit, because a full page looks the same as a short one.
+func sessionsFootnote(shown, matching int, all bool, limit int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d session(s) shown", shown)
+	if all {
+		b.WriteString(" (--all: disabled and settled sessions included)\n")
+	} else {
+		b.WriteString(": enabled only")
+		if matching != shown {
+			fmt.Fprintf(&b, " (of %d matching; --all includes disabled and settled)\n", matching)
+		} else {
+			b.WriteString(" (--all includes disabled and settled)\n")
+		}
+	}
+	if limit > 0 && shown == limit {
+		fmt.Fprintf(&b, "limit %d reached; use --limit 0 to list every match\n", limit)
+	}
+	return b.String()
 }
 
 // schedulePtr returns the stored schedule for a session, or nil when it has none.

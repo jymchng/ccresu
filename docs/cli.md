@@ -22,8 +22,8 @@ Exit codes: `0` ok, `1` failure, `2` usage, `3` not found, `4` not eligible,
 | Command | Usage | What it does |
 | --- | --- | --- |
 | `daemon` | `daemon [--once] [--interval DURATION]` | Runs the watchdog loop until interrupted. `--once` performs a single reconcile pass and exits; `--interval` overrides `claude.discovery_interval`. |
-| `status` | `status` | Summarises session, schedule and notification state. |
-| `sessions` | `sessions [--all] [--state STATE]... [--limit N]` | Lists discovered sessions. `--all` includes disabled and settled ones; `--state` is repeatable; `--limit 0` means all. |
+| `status` | `status` | Summarises session, schedule and notification state. Its `sessions` line is the **total** row count, and its `listing` line says how many of those a bare `sessions` shows. |
+| `sessions` | `sessions [--all] [--state STATE]... [--limit N]` | Lists discovered sessions. A bare listing is **enabled only** and says so in the footer; `--all` includes disabled and settled ones; `--state` is repeatable; `--limit 0` means all. |
 | `inspect` | `inspect <session-id>` | Everything known about one session. |
 | `recover` | `recover <session-id> [--message TEXT] [--force]` | Resumes one session now, optionally with a different continuation message. `--force` tries even when the attempt budget is spent. |
 | `retry` | `retry <session-id>` | Retries a session whose attempt budget is spent. |
