@@ -96,8 +96,8 @@ type Deps struct {
 	LoadConfig func(path string, lookup func(string) (string, bool)) (*config.Config, error)
 	// BuildRuntime assembles the long-lived components. Nil means BuildRuntime.
 	BuildRuntime func(ctx context.Context, cfg *config.Config, clk clock.Clock, log *slog.Logger) (*Runtime, error)
-	// NewServer builds the HTTP API for `serve`. Nil means the API is not
-	// available in this build.
+	// NewServer builds the HTTP API for `serve`. Nil means internal/server's
+	// implementation is used.
 	NewServer func(*App, *Runtime) (Server, error)
 	// DefaultConfigPath overrides where the configuration is looked for. Nil
 	// means config.DefaultPath.
@@ -113,10 +113,13 @@ type App struct {
 	clock  clock.Clock
 
 	configPath string
-	helpShown  bool
-	json       bool
-	logLevel   string
-	logFormat  string
+	// serveAddr is the --addr override for `serve`; empty means the configured
+	// server.host:server.port.
+	serveAddr string
+	helpShown bool
+	json      bool
+	logLevel  string
+	logFormat string
 }
 
 // Run executes the CLI with the given arguments and returns a process exit code.
@@ -157,6 +160,9 @@ func newApp(deps Deps, build BuildInfo, stdout, stderr io.Writer) *App {
 	}
 	if deps.BuildRuntime == nil {
 		deps.BuildRuntime = BuildRuntime
+	}
+	if deps.NewServer == nil {
+		deps.NewServer = newAPIServer
 	}
 	if deps.DefaultConfigPath == nil {
 		deps.DefaultConfigPath = config.DefaultPath

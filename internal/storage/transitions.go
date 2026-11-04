@@ -97,6 +97,55 @@ func (s *Store) ListTransitions(ctx context.Context, sessionID string, limit int
 	return transitions, nil
 }
 
+// ListTransitionsSince returns the transitions appended after sinceID, oldest
+// first, across every session.
+//
+// It exists so a streaming consumer can follow the state machine without
+// polling each session in turn: the transition id is monotonic, so a caller
+// remembers the highest id it has seen and asks for everything above it. A limit
+// of zero returns everything, exactly like the per-session query.
+func (s *Store) ListTransitionsSince(ctx context.Context, sinceID int64, limit int) ([]Transition, error) {
+	if s == nil || s.db == nil {
+		return nil, ErrClosed
+	}
+	query := `SELECT id, session_id, attempt_id, from_state, to_state, reason, occurred_at
+		FROM state_transitions WHERE id > ? ORDER BY id ASC`
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+	rows, err := s.db.QueryContext(ctx, query, sinceID)
+	if err != nil {
+		return nil, fmt.Errorf("list transitions since %d: %w", sinceID, err)
+	}
+	defer rows.Close()
+
+	var transitions []Transition
+	for rows.Next() {
+		var (
+			transition Transition
+			attemptID  sql.NullInt64
+			fromState  string
+			toState    string
+			occurredAt any
+		)
+		if err := rows.Scan(&transition.ID, &transition.SessionID, &attemptID,
+			&fromState, &toState, &transition.Reason, &occurredAt); err != nil {
+			return nil, fmt.Errorf("scan transition: %w", err)
+		}
+		transition.AttemptID = attemptID.Int64
+		transition.FromState = State(fromState)
+		transition.ToState = State(toState)
+		if transition.OccurredAt, err = timeFromDB(occurredAt); err != nil {
+			return nil, err
+		}
+		transitions = append(transitions, transition)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate transitions: %w", err)
+	}
+	return transitions, nil
+}
+
 // ListTransitionsForAttempt returns the history of one recovery attempt.
 func (s *Store) ListTransitionsForAttempt(ctx context.Context, attemptID int64) ([]Transition, error) {
 	if s == nil || s.db == nil {

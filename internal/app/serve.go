@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // cmdServe runs the local REST/SSE API until interrupted.
@@ -35,6 +36,9 @@ func (a *App) cmdServe(ctx context.Context, args []string) error {
 		return withCode(ExitFailure, errors.New("the server is disabled in the configuration (server.enabled)"))
 	}
 
+	// The override has to be visible to NewServer, which owns the listener.
+	a.serveAddr = strings.TrimSpace(*addr)
+
 	server, err := a.deps.NewServer(a, rt)
 	if err != nil {
 		return fmt.Errorf("start the API server: %w", err)
@@ -43,7 +47,7 @@ func (a *App) cmdServe(ctx context.Context, args []string) error {
 		return withCode(ExitFailure, ErrNoServer)
 	}
 
-	bind := *addr
+	bind := a.serveAddr
 	if bind == "" && rt.Config != nil {
 		bind = rt.Config.Server.Addr()
 	}
