@@ -15,6 +15,15 @@
 #   ./scripts/install.sh --dry-run       # show what would happen, change nothing
 #   ./scripts/install.sh --systemd       # also install the user systemd unit
 #
+# It runs the same whether it is executed from a checkout or piped from the
+# repository, which is the documented one-liner:
+#
+#   curl -fsSL https://raw.githubusercontent.com/jymchng/ccresu/main/scripts/install.sh | bash
+#
+# Everything the script needs comes from the release it resolves, so there is no
+# checkout to rely on: the example configuration ships inside the release
+# archive and the systemd unit is fetched from the same tag.
+#
 # Re-running the script is the supported upgrade path; see docs/upgrade.md.
 set -euo pipefail
 
@@ -160,6 +169,24 @@ fetch_file() {
 	fi
 	if [ "$status" -ne 0 ]; then
 		die "download failed for $url (tool status $status); the release or asset may not exist"
+	fi
+}
+
+# try_fetch_repo_file PATH DEST - fetch PATH from the repository at the resolved
+# release tag, reporting failure instead of exiting.
+#
+# A piped installer has no checkout next to it, so a file that lives in the
+# repository but not in the release archive can only be read at the tag. The tag
+# is the right coordinate because it is the release the user is installing, not
+# whatever main happens to hold later.
+try_fetch_repo_file() {
+	local path="$1" dest="$2"
+	if command -v curl >/dev/null 2>&1; then
+		curl -fsSL --proto '=https,=http' -o "$dest" "$base_url/$REPO/raw/v$version/$path" 2>/dev/null
+	elif command -v wget >/dev/null 2>&1; then
+		wget -q -O "$dest" "$base_url/$REPO/raw/v$version/$path" 2>/dev/null
+	else
+		return 1
 	fi
 }
 
@@ -418,6 +445,13 @@ unit_template="$script_dir/../deployments/systemd/$PROGRAM.service"
 if [ "$with_systemd" -eq 1 ]; then
 	log ""
 	log "Systemd (user unit)"
+	if [ ! -f "$unit_template" ] && [ "$dry_run" -eq 0 ]; then
+		# Piped from the repository: the unit lives in the repo but not in the
+		# release archive, so read it at the tag being installed.
+		if try_fetch_repo_file "deployments/systemd/$PROGRAM.service" "$workdir/$PROGRAM.service"; then
+			unit_template="$workdir/$PROGRAM.service"
+		fi
+	fi
 	if [ ! -f "$unit_template" ]; then
 		warn "unit template not found at $unit_template; skipping systemd setup"
 	elif ! command -v systemctl >/dev/null 2>&1; then

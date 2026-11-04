@@ -13,8 +13,7 @@ contributors and unusual platforms).
 ## Install from a release
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/jymchng/ccresu/main/scripts/install.sh -o install.sh
-bash install.sh
+curl -fsSL https://raw.githubusercontent.com/jymchng/ccresu/main/scripts/install.sh | bash
 ```
 
 Or from a checkout:

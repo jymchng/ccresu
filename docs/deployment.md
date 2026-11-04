@@ -24,15 +24,15 @@ together with their sources.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/jymchng/ccresu/main/scripts/install.sh -o install.sh
-bash install.sh --systemd
+curl -fsSL https://raw.githubusercontent.com/jymchng/ccresu/main/scripts/install.sh | bash -s -- --systemd
 ```
 
 Without `--systemd` the script stops after verifying the binary and the
 configuration; you then start the loop yourself.
 
 ```bash
-./scripts/install.sh --dry-run --version 0.1.0   # see every action first
+./scripts/install.sh --dry-run --version 0.1.0   # see every action first (or pipe
+                                                # the same script with -s -- --dry-run)
 ```
 
 Upgrading, pinning, mirrors and uninstalling are covered in

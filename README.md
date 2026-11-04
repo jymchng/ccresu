@@ -20,26 +20,25 @@ Goal paused · usage limit reached · send a message after it resets
 
 ## Install
 
-Pick whichever fits the machine you are on. All three install the same binary.
-
-### 1. The install script (downloads a release)
-
-From a checkout of the repository:
+One line, on Linux or macOS (`amd64`/`arm64`):
 
 ```bash
-git clone https://github.com/jymchng/ccresu.git
-cd ccresu
-./scripts/install.sh --dry-run    # show every action, change nothing
-./scripts/install.sh
+# preview every action; nothing is downloaded or changed
+curl -fsSL https://raw.githubusercontent.com/jymchng/ccresu/main/scripts/install.sh | bash -s -- --dry-run
+
+# install
+curl -fsSL https://raw.githubusercontent.com/jymchng/ccresu/main/scripts/install.sh | bash
 ```
 
 The script downloads the release matching your OS/architecture, verifies it
 against the published checksums **before** anything is extracted or executed,
 installs the binary into `~/.local/bin`, creates `~/.config/ccresu/config.yaml`
 with mode `0600`, and validates that configuration with the binary it just
-installed. Re-running the script is the supported upgrade path.
+installed. Re-running it is the supported upgrade path. It needs nothing from a
+checkout: everything it reads comes from the release it resolves.
 
-`bash install.sh --help` lists the options:
+Flags go after `-s --`, for example
+`| bash -s -- --version 0.1.0 --systemd`. `bash -s -- --help` lists them:
 
 | Option | Meaning |
 | --- | --- |
@@ -53,6 +52,9 @@ installed. Re-running the script is the supported upgrade path.
 It also reads `CCRESU_VERSION`, `CCRESU_PREFIX`, `CCRESU_BASE_URL` (a mirror or
 an air-gapped test) and `CCRESU_ALLOW_ROOT`.
 
+Read the script before running it, if you prefer: it is
+[`scripts/install.sh`](scripts/install.sh) in this repository.
+
 The last thing it prints is what to do next:
 
 ```console
@@ -62,7 +64,7 @@ Done. Next steps:
   3. ccresu daemon   # or rerun with --systemd for a user service
 ```
 
-### 2. `go install` (builds from the module)
+### Or: `go install` (builds from the module)
 
 ```bash
 # Install ccresu
@@ -79,10 +81,13 @@ ccresu --help
 by default — that is the only reason for the second line. Append it to
 `~/.profile` if you want it to survive a new shell.
 
-### 3. From a source checkout
+### Or: build from a source checkout
 
 ```bash
+git clone https://github.com/jymchng/ccresu.git
+cd ccresu
 go build -o ~/.local/bin/ccresu ./cmd/ccresu
+./scripts/install.sh                # the same install, from the checkout
 ```
 
 Then create the configuration once:
@@ -201,7 +206,7 @@ STATUS  CHECK           DETAIL
 ok      config          /home/you/.config/ccresu/config.yaml
 ok      timezone        Asia/Singapore
 ok      data directory  /home/you/.local/share/ccresu
-ok      database        /home/you/.local/share/ccresu/ccresu.db (schema version 3)
+ok      database        /home/you/.local/share/ccresu/ccresu.db (schema version 4)
 ok      claude          2.1.223 (claude --version)
 ok      transcripts     session transcripts are readable
 ok      telegram        disabled
@@ -246,11 +251,14 @@ the configuration. Step 12 uses it.
 
 ```console
 $ ccresu sessions --all
-SESSION   STATE       ENABLED  RECOVERABLE  PROJECT                                   LAST SEEN                NOTE
-1dd41fc3  DISCOVERED  no       yes                                                       2026-11-05 03:24:03 +08
-e60a3100  DISCOVERED  no       yes          /root/python_projects/python-password...  2026-11-05 03:24:03 +08
+SESSION   STATE       NEXT ATTEMPT                    ENABLED  RECOVERABLE  PROJECT                                   LAST SEEN                NOTE
+1dd41fc3  DISCOVERED  none (session is not enabled)   no       yes                                                       2026-11-05 03:24:03 +08
+4a52c0c7  DISCOVERED  none (session is not enabled)   no       yes                                                       2026-11-05 03:24:03 +08
+88dfd995  DISCOVERED  none (session is not enabled)   no       yes                                                       2026-11-05 03:24:03 +08
+e1732e3d  DISCOVERED  none (session is not enabled)   no       yes                                                       2026-11-05 03:24:03 +08
+e60a3100  DISCOVERED  none (no usage limit detect...  yes      yes          /root/python_projects/python-password...  2026-11-05 03:24:03 +08
 
-2 session(s)
+5 session(s)
 ```
 
 - `SESSION` is the first eight characters of the session ID; commands need the
@@ -258,6 +266,11 @@ e60a3100  DISCOVERED  no       yes          /root/python_projects/python-passwor
 - `STATE` is the state-machine position — `DISCOVERED`, `DISABLED`,
   `WAITING_FOR_RESET`, `RESUMING`, `RESUMED`, `RETRY_WAIT`, `PERMANENTLY_FAILED`
   and so on. [docs/recovery.md](docs/recovery.md) has the full diagram.
+- `NEXT ATTEMPT` is the answer to "when will ccresu touch this one, and why":
+  `in 2h14m` while a wait is pending, `none (<reason>)` when nothing is
+  scheduled and the reason is the whole story. It comes from the stored schedule
+  or the stored retry instant, never from a re-derivation, so it matches what
+  the daemon will actually do.
 - `RECOVERABLE` and `NOTE` explain *why* a session is or is not actionable.
 
 Without `--all`, the table shows only the sessions ccresu is currently working
@@ -292,8 +305,11 @@ it.
 
 ### Step 6 — Inspect one session
 
-`inspect` is the verbose view: identity, paths, the latest detected limit, the
-stored schedule and the recent transitions.
+`inspect` is the verbose view: identity, paths, when the next attempt is due and
+why, the latest detected limit, the stored schedule and the recent transitions.
+The `Next attempt` block is first because it is the question you opened `inspect`
+to answer; `--json` carries the same answer as `next_attempt.at` (RFC 3339),
+`next_attempt.reason` and a ready-made `next_attempt.human` countdown.
 
 ```console
 $ ccresu inspect 3f9d1c07-1111-4222-8333-444455556666
@@ -305,6 +321,10 @@ project:       -
 transcript:    /home/you/.claude/projects/-home-you-projects-demo/3f9d1c07-1111-4222-8333-444455556666.jsonl
 type:          unknown
 last seen:     2026-11-05 03:28:16 +08
+
+Next attempt
+at:            2026-11-04 19:29:00 UTC (in 45s)
+why:           waiting for the usage limit to reset
 
 Latest usage limit
 type:          five_hour
@@ -349,8 +369,8 @@ The table and the summary pick it up straight away:
 
 ```console
 $ ccresu sessions
-SESSION   STATE              ENABLED  RECOVERABLE  PROJECT  LAST SEEN                NOTE
-3f9d1c07  WAITING_FOR_RESET  yes      yes                   2026-11-05 03:28:16 +08
+SESSION   STATE              NEXT ATTEMPT  ENABLED  RECOVERABLE  PROJECT  LAST SEEN                NOTE
+3f9d1c07  WAITING_FOR_RESET  in 1m20s      yes      yes                   2026-11-05 03:43:40 +08
 
 1 session(s)
 ```
@@ -459,15 +479,30 @@ against `recovery.max_attempts`. The transitions show the budget being spent:
 
 The delays come from `recovery.initial_delay` (30s), `recovery.multiplier` (2.0),
 `recovery.max_delay` (15m) and `recovery.jitter` (0.15), which is why the values
-are not exactly 30s, 60s, 2m.
+are not exactly 30s, 60s, 2m. Between attempts the session sits in `RETRY_WAIT`
+and the wait is a stored instant, not just prose:
+
+```console
+$ ccresu sessions
+SESSION   STATE       NEXT ATTEMPT  ENABLED  RECOVERABLE  PROJECT  LAST SEEN                NOTE
+3f9d1c07  RETRY_WAIT  in 58s        yes      yes                   2026-11-05 03:45:04 +08  resume session 3f9d1c07-1111-4222-833...
+```
+
+```console
+$ ccresu inspect 3f9d1c07-1111-4222-8333-444455556666 | head -13
+...
+Next attempt
+at:            2026-11-04 19:46:02 UTC (in 58s)
+why:           retrying after a failed attempt
+```
 
 When the budget is exhausted the session lands in `PERMANENTLY_FAILED`, with the
 last error kept on the row:
 
 ```console
 $ ccresu sessions --all
-SESSION   STATE               ENABLED  RECOVERABLE  PROJECT    LAST SEEN                NOTE
-7c1b2a44  PERMANENTLY_FAILED  yes      yes                     2026-11-05 03:28:24 +08  resume session 7c1b2a44-0000-4000-800...
+SESSION   STATE               NEXT ATTEMPT                    ENABLED  RECOVERABLE  PROJECT    LAST SEEN                NOTE
+7c1b2a44  PERMANENTLY_FAILED  none (attempt budget spent;...  yes      yes                     2026-11-05 03:28:24 +08  resume session 7c1b2a44-0000-4000-800...
 ```
 
 That is the point at which `ccresu retry <id>` (fresh budget) or

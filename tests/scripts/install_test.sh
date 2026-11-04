@@ -23,7 +23,10 @@
 #   7. --dry-run writes nothing and downloads nothing;
 #   8. argument errors are usage errors, not partial installs;
 #   9. an explicitly exported XDG_CONFIG_HOME/XDG_DATA_HOME is honoured instead
-#      of the ~/.config and ~/.local/share defaults.
+#      of the ~/.config and ~/.local/share defaults;
+#  10. piped into bash from outside a checkout — the documented one-liner — it
+#      still installs, and --systemd fetches the unit from the release tag
+#      instead of failing because there is no repository beside it.
 #
 # The installer resolves its directories from XDG_* when they are set, so every
 # invocation below runs with those variables scrubbed: the suite asserts paths
@@ -183,6 +186,17 @@ publish_with_checksums() {
 	printf '%s' "$dir"
 }
 
+# publish_tag_files VERSION - serve the files a piped installer has to read from
+# the release tag rather than from a checkout. The release archive holds only the
+# binary and configs/ (see release.yml), so the systemd unit has to come from
+# here.
+publish_tag_files() {
+	local version="$1" dir
+	dir="$MIRROR/jymchng/ccresu/raw/v$version/deployments/systemd"
+	mkdir -p "$dir"
+	cp "$ROOT/deployments/systemd/ccresu.service" "$dir/ccresu.service"
+}
+
 # start_mirror - serves $MIRROR on a loopback port and records every request path.
 start_mirror() {
 	local script="$WORK/mirror.py"
@@ -261,6 +275,34 @@ run_install_with_xdg() {
 		HOME="$home" XDG_CONFIG_HOME="$config_home" XDG_DATA_HOME="$data_home" \
 		CCRESU_ALLOW_ROOT=1 CCRESU_BASE_URL="$BASE_URL" \
 		bash "$INSTALL_SCRIPT" "$@" 2>&1)"; then
+		INSTALL_STATUS=0
+	else
+		INSTALL_STATUS=$?
+	fi
+}
+
+# run_install_piped HOME_DIR ARGS... - runs the installer the way the README
+# tells users to: the script arrives on stdin (`bash -s -- ...`) from a working
+# directory that is not a checkout, so `$0` is "bash" and nothing in the
+# repository is reachable by a relative path.
+#
+# A fake systemctl is prepended to PATH: the suite must not touch the runner's
+# user services, and the assertion is that the installer *tried* to install and
+# enable the unit.
+run_install_piped() {
+	local home="$1"
+	shift
+	mkdir -p "$home" "$WORK/fakebin" "$WORK/nocheckout"
+	cat >"$WORK/fakebin/systemctl" <<'SH'
+#!/bin/sh
+printf '%s\n' "$*" >>"$SYSTEMCTL_LOG"
+SH
+	chmod +x "$WORK/fakebin/systemctl"
+	: >"$WORK/systemctl.log"
+	if INSTALL_OUTPUT="$(cd "$WORK/nocheckout" && env -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME \
+		-u CCRESU_PREFIX -u CCRESU_VERSION HOME="$home" CCRESU_ALLOW_ROOT=1 CCRESU_BASE_URL="$BASE_URL" \
+		SYSTEMCTL_LOG="$WORK/systemctl.log" PATH="$WORK/fakebin:$PATH" \
+		bash -s -- "$@" <"$INSTALL_SCRIPT" 2>&1)"; then
 		INSTALL_STATUS=0
 	else
 		INSTALL_STATUS=$?
@@ -431,6 +473,32 @@ main() {
 	assert_equal "$(version_of "$prefix/ccresu")" "ccresu 0.1.0" \
 		"the prefix must still come from HOME, not from XDG_DATA_HOME"
 	pass "XDG_CONFIG_HOME and XDG_DATA_HOME are honoured over the HOME defaults"
+
+	# --- 10. piped install with --systemd ----------------------------------
+	# The README's one-liner pipes the script into bash. Run it from a directory
+	# that is not a checkout: the archive still provides the binary and the
+	# example config, and the systemd unit is fetched from the tag being
+	# installed.
+	publish_tag_files "0.1.0"
+	home="$WORK/home-piped"
+	prefix="$home/.local/bin"
+	local tag_unit_requests
+	tag_unit_requests="$(request_count "/jymchng/ccresu/raw/v0.1.0/deployments/systemd/ccresu.service")"
+	run_install_piped "$home" --version 0.1.0 --systemd
+	assert_equal "$INSTALL_STATUS" 0 "a piped install must succeed"$'\n'"$INSTALL_OUTPUT"
+	assert_exists "$prefix/ccresu" "a piped install did not install the binary"
+	assert_equal "$(version_of "$prefix/ccresu")" "ccresu 0.1.0" \
+		"a piped install installed the wrong version"
+	assert_exists "$home/.config/ccresu/config.yaml" "a piped install created no configuration"
+	assert_contains "$INSTALL_OUTPUT" "config:    valid" \
+		"a piped install must validate the configuration it wrote"
+	assert_exists "$home/.config/systemd/user/ccresu.service" \
+		"a piped install with --systemd did not install the unit"
+	[ "$(request_count "/jymchng/ccresu/raw/v0.1.0/deployments/systemd/ccresu.service")" -gt "$tag_unit_requests" ] \
+		|| fail "the systemd unit was not fetched from the release tag"
+	assert_contains "$(cat "$WORK/systemctl.log")" "--user enable --now ccresu.service" \
+		"the installer must enable the unit it installed"
+	pass "a piped install works without a checkout, and --systemd reads the unit from the tag"
 
 	printf '\n%d installer scenario checks passed\n' "$TESTS"
 }
