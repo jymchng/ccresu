@@ -185,10 +185,23 @@ func (r *Redactor) replaceAttr(_ []string, attr slog.Attr) slog.Attr {
 		return slog.String(attr.Key, r.Redact(attr.Value.String()))
 	case slog.KindAny:
 		switch v := attr.Value.Any().(type) {
+		case nil:
+			return attr
 		case error:
 			return slog.String(attr.Key, r.Redact(v.Error()))
 		case fmt.Stringer:
 			return slog.String(attr.Key, r.Redact(v.String()))
+		}
+		// Anything else (maps, slices, structs, numbers) would be rendered by
+		// the handler without further redaction, so a secret nested inside a
+		// payload would leak verbatim. If the rendered form contains a
+		// registered secret, replace the attribute with its redacted rendering.
+		// Type fidelity is only sacrificed in the case that would otherwise
+		// leak.
+		if rendered := fmt.Sprintf("%v", attr.Value.Any()); rendered != "" {
+			if redacted := r.Redact(rendered); redacted != rendered {
+				return slog.String(attr.Key, redacted)
+			}
 		}
 	}
 	return attr
