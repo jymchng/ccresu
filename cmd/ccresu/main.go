@@ -5,6 +5,7 @@
 package main
 
 import (
+	"io"
 	"os"
 
 	"github.com/jymchng/ccresu/internal/app"
@@ -19,10 +20,22 @@ var (
 	buildDate = "unknown"
 )
 
+// osExit is os.Exit. It is a variable so the test below can exercise main
+// itself: the process-exiting call is the one thing a test cannot survive, and
+// everything else about the wiring is worth covering.
+var osExit = os.Exit
+
+// main runs the CLI and exits with the code app.Run computed.
 func main() {
-	os.Exit(app.Run(os.Args[1:], app.BuildInfo{
+	osExit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// run is the whole program minus the exit: it maps the argument vector and the
+// process streams onto app.Run and returns the documented exit code.
+func run(args []string, stdout, stderr io.Writer) int {
+	return app.Run(args, app.BuildInfo{
 		Version:   version,
 		Commit:    commit,
 		BuildDate: buildDate,
-	}, os.Stdout, os.Stderr))
+	}, stdout, stderr)
 }
