@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jymchng/ccresu/internal/clock"
+	"github.com/jymchng/ccresu/internal/storage"
 )
 
 // testToken looks like a real bot token and is long enough for MaskSecret to
@@ -523,5 +524,49 @@ func TestAPIErrorMessage(t *testing.T) {
 	}
 	if got := (&transportError{Method: "sendMessage", Cause: "connection refused"}).Error(); !strings.Contains(got, "connection refused") {
 		t.Errorf("Error = %q, want the cause", got)
+	}
+}
+
+// TestRenderThenSendEscapesAHostileValueOnTheWire is the escaping path end to
+// end: a hostile session id and CLI error go through the real template and the
+// real HTTP client, and the bytes that reach the Bot API have already been
+// escaped. Asserting this only against Render would miss a client that re-encodes
+// the body or drops parse_mode.
+func TestRenderThenSendEscapesAHostileValueOnTheWire(t *testing.T) {
+	seen := &capture{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen.record(r)
+		_, _ = io.WriteString(w, `{"ok":true,"result":{"message_id":1,"date":1767225600,"chat":{"id":42}}}`)
+	}))
+	defer server.Close()
+
+	hostile := `<script>alert("x")</script> & co`
+	body, err := Render(storage.EventRecoveryFailure, EventData{
+		SessionID:   hostile,
+		Reason:      hostile,
+		Attempt:     2,
+		MaxAttempts: 5,
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	client := newTestClient(t, server.URL, nil)
+	if _, err := client.SendMessage(context.Background(), body); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	text, ok := seen.payload["text"].(string)
+	if !ok {
+		t.Fatalf("payload text = %v, want a string", seen.payload["text"])
+	}
+	if strings.Contains(text, "<script>") || strings.Contains(text, "& co") {
+		t.Errorf("the wire body leaked unescaped input: %q", text)
+	}
+	if !strings.Contains(text, "&lt;script&gt;") || !strings.Contains(text, "&amp; co") {
+		t.Errorf("the wire body is not escaped: %q", text)
+	}
+	if seen.payload["parse_mode"] != ParseModeHTML {
+		t.Errorf("parse_mode = %v, want %s, or escaping means nothing", seen.payload["parse_mode"], ParseModeHTML)
 	}
 }
