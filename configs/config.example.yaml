@@ -1,0 +1,79 @@
+# ccresu example configuration.
+#
+# Copy to ~/.config/ccresu/config.yaml and edit.
+# Every field below is validated at startup (`ccresu config validate`).
+# Any field can be overridden with an environment variable using the
+# CCRESU_ prefix and underscores for nesting, e.g.:
+#
+#   CCRESU_APP__LOG_LEVEL=debug
+#   CCRESU_TELEGRAM__BOT_TOKEN=123:abc
+#   CCRESU_RECOVERY__MAX_ATTEMPTS=5
+#
+# Environment variables always take precedence over this file.
+
+app:
+  name: ccresu
+  log_level: info            # debug | info | warn | error
+  log_format: json           # json | text
+  timezone: Asia/Singapore   # IANA name used for display; reset times keep their own timezone
+
+claude:
+  executable: claude
+  discovery_interval: 30s
+  monitored_sessions: []     # explicit session IDs to monitor in addition to discovery
+  discover_all_sessions: true
+  resume_enabled: true
+  default_model: ""          # empty = inherit from the original session
+  default_effort: ""         # empty = inherit from the original session
+  continuation_message: "Continue working on the existing active goal from where execution was interrupted by the usage limit. Review the current state, avoid repeating completed work, and continue until the goal is completed."
+
+monitoring:
+  enabled: true
+  detect_usage_limits: true
+  detect_session_completion: true
+
+scheduler:
+  poll_interval: 30s
+  unknown_reset_initial_interval: 5m
+  unknown_reset_max_interval: 30m
+  recheck_before_resume: true
+
+recovery:
+  enabled: true
+  max_attempts: 10
+  initial_delay: 30s
+  max_delay: 15m
+  multiplier: 2.0
+  jitter: 0.15
+  startup_timeout: 60s
+  verification_timeout: 120s
+  max_concurrent_recoveries: 3
+
+telegram:
+  enabled: false
+  bot_token: ""              # prefer the CCRESU_TELEGRAM__BOT_TOKEN environment variable
+  chat_id: ""
+  parse_mode: HTML
+  notify_limit_detected: true
+  notify_waiting: false
+  notify_recovery_started: true
+  notify_recovery_success: true
+  notify_recovery_failure: true
+  notify_permanent_failure: true
+  notify_session_completed: true
+
+server:
+  enabled: true
+  host: 127.0.0.1
+  port: 8787
+  # Origins allowed to make read-only requests from a browser. State-changing
+  # requests always require the bearer token written to the config directory.
+  allowed_origins:
+    - http://127.0.0.1:8787
+    - http://localhost:8787
+    - https://jymchng.github.io
+
+storage:
+  driver: sqlite
+  path: ~/.local/share/ccresu/ccresu.db
+  busy_timeout: 5s

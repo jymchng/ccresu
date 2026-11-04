@@ -1,0 +1,63 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - copyloopvar
+    - errcheck
+    - errorlint
+    - gocritic
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - nilerr
+    - noctx
+    - prealloc
+    - revive
+    - rowserrcheck
+    - sqlclosecheck
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+    - wastedassign
+  settings:
+    govet:
+      enable-all: true
+      disable:
+        # Struct layout is chosen for readability, not memory density.
+        - fieldalignment
+        # Shadowing is idiomatic in table tests and short scopes.
+        - shadow
+    revive:
+      rules:
+        # Exported symbols are documented, but not every internal symbol needs it.
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: false
+    gosec:
+      excludes:
+        # Reading Claude Code session transcripts requires variable paths.
+        - G304
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - noctx
+          - unparam
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/jymchng/ccresu

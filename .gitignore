@@ -1,0 +1,34 @@
+# Build output
+/ccresu
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+coverage.out
+coverage.html
+coverage.txt
+
+# Node / Next.js
+node_modules/
+web/node_modules/
+web/.next/
+web/out/
+web/next-env.d.ts
+
+# Local runtime state
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.local
+
+# Agent tooling
+.agenthicc/
+tests/.cassette/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
