@@ -19,10 +19,17 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/v1/status
 ```
 
 The token is generated on first start, written `0600` (any looser mode is
-tightened), and found at `<config dir>/api-token` unless `server.token_path`
-says otherwise. It is read **only** from the `Authorization` header — never from
-a query parameter or a cookie — so a cross-site request cannot supply it. To
-rotate it, delete the file and restart; the next start creates a new one.
+tightened), and lives in the **same directory as the configuration file in use**:
+`~/.config/ccresu/api-token` for the default configuration, and
+`/elsewhere/api-token` for `ccresu --config /elsewhere/config.yaml`. Set
+`server.token_path` to name the file explicitly. It is read **only** from the
+`Authorization` header — never from a query parameter or a cookie — so a
+cross-site request cannot supply it. To rotate it, delete the file and restart;
+the next start creates a new one.
+
+The containing directory is created `0700` on first start (or left alone if it
+already exists), so `--config /elsewhere/config.yaml` produces
+`/elsewhere/api-token` even when `/elsewhere` was empty.
 
 Read-only routes need no token; a browser caller is still subject to the Origin
 allowlist (`server.allowed_origins`).

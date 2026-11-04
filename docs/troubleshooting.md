@@ -81,7 +81,7 @@ Details and the event table are in [telegram.md](telegram.md).
 | Symptom | Cause and fix |
 | --- | --- |
 | `connection refused` on `127.0.0.1:8787` | `server.enabled: false`, a different `server.port`, or a process that is not the daemon (the API runs inside `daemon`, and standalone with `serve`). |
-| `401 unauthorized` | Missing or wrong `Authorization: Bearer` header. The token is at `<config dir>/api-token`, mode `0600`; it is never accepted as a query parameter or cookie. |
+| `401 unauthorized` | Missing or wrong `Authorization: Bearer` header. The token is at `<configuration directory>/api-token` — beside the configuration file in use, so `/elsewhere/api-token` after `--config /elsewhere/config.yaml` — with mode `0600`; it is never accepted as a query parameter or cookie. |
 | `403 origin_not_allowed` | A browser caller whose Origin is not in `server.allowed_origins`. `curl` is unaffected. |
 | `409 not_eligible` | Same rule as exit code 4: the session is settled, disabled or unrecoverable. |
 | `413 payload_too_large` | Body above 1 MiB. |

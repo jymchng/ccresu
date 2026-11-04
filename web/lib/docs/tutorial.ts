@@ -362,7 +362,7 @@ ok      telegram        chat -1001234567890, token ********abcd`,
     { kind: "h2", text: "Step 13 — Script it: the REST and SSE API" },
     {
       kind: "p",
-      text: "`ccresu serve` exposes the same state over HTTP on 127.0.0.1:8787 under `/api/v1`. Read-only routes need no credentials; state-changing routes want a bearer token, generated on first start at `~/.config/ccresu/api-token` with mode 0600 (or wherever `server.token_path` points).",
+      text: "`ccresu serve` exposes the same state over HTTP on 127.0.0.1:8787 under `/api/v1`. Read-only routes need no credentials; state-changing routes want a bearer token, generated on first start beside the configuration file in use — `~/.config/ccresu/api-token` by default, `/elsewhere/api-token` after `--config /elsewhere/config.yaml` — with mode 0600 (or wherever `server.token_path` points).",
     },
     {
       kind: "code",

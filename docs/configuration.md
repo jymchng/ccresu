@@ -191,7 +191,7 @@ default).
 | `host` | `127.0.0.1` | Bind address. Loopback by design. |
 | `port` | `8787` | Port. |
 | `allowed_origins` | `http://127.0.0.1:8787`, `http://localhost:8787` | Browser origins permitted to read the API. |
-| `token_path` | empty → `<config dir>/api-token` | Where the bearer token lives. |
+| `token_path` | empty → `<configuration directory>/api-token` | Where the bearer token lives. Empty means beside the configuration file in use, so `--config /elsewhere/config.yaml` gives `/elsewhere/api-token`. |
 
 ### `storage`
 

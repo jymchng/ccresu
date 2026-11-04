@@ -36,7 +36,7 @@ export const deploymentDoc: DocPage = {
     },
     {
       kind: "p",
-      text: "`ccresu serve` starts the REST + SSE API. It binds `127.0.0.1` unless the configuration says otherwise (`:8787` is promoted to `127.0.0.1:8787`, so a bare port cannot expose it by accident), and it writes a bearer token to `~/.config/ccresu/api-token` with mode 0600 on first start. Expose it beyond loopback only through a reverse proxy you control, and keep the token out of browser-visible code.",
+      text: "`ccresu serve` starts the REST + SSE API. It binds `127.0.0.1` unless the configuration says otherwise (`:8787` is promoted to `127.0.0.1:8787`, so a bare port cannot expose it by accident), and it writes a bearer token with mode 0600 on first start, beside the configuration file in use (`~/.config/ccresu/api-token` by default, `/elsewhere/api-token` with `--config /elsewhere/config.yaml`). Expose it beyond loopback only through a reverse proxy you control, and keep the token out of browser-visible code.",
     },
     {
       kind: "h2",

@@ -34,7 +34,7 @@ one of those as data, never as code.
 | --- | --- | --- |
 | `~/.config/ccresu/config.yaml` | `0600` | May contain the bot token. |
 | `~/.config/ccresu/` | `0700` | Keeps the config and token private. |
-| `~/.config/ccresu/api-token` | `0600` | Bearer credential. |
+| `~/.config/ccresu/api-token` | `0600` | Bearer credential, kept beside the configuration file in use. |
 | `~/.local/share/ccresu/ccresu.db` | `0600` | Holds transcript excerpts. |
 | `~/.local/share/ccresu/` | `0700` | Owner-only. |
 | `~/.local/bin/ccresu` | `0755` | Executable. |

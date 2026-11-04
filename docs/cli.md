@@ -151,7 +151,11 @@ fields instead of parsing tables.
 $ ccresu serve --addr 127.0.0.1:8787
 ```
 
-The token is created on first start at `<config dir>/api-token` with mode `0600`:
+The token is created on first start at `<configuration directory>/api-token` with
+mode `0600` — the directory of the configuration file in use, so
+`ccresu --config /elsewhere/config.yaml serve` writes `/elsewhere/api-token`, and
+the default configuration puts it in `~/.config/ccresu`. Set `server.token_path`
+to name the file explicitly.
 
 ```bash
 TOKEN=$(cat ~/.config/ccresu/api-token)

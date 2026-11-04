@@ -13,7 +13,7 @@ never as root, never as a shared service account.
 | --- | --- |
 | `~/.local/bin/ccresu` | The binary (`0755`). |
 | `~/.config/ccresu/config.yaml` | Configuration (`0600`). |
-| `~/.config/ccresu/api-token` | API bearer token, created on first `serve`/`daemon` (`0600`). |
+| `~/.config/ccresu/api-token` | API bearer token, created on first `serve`/`daemon` (`0600`). It sits beside the configuration file in use, so `--config /elsewhere/config.yaml` puts it at `/elsewhere/api-token`. |
 | `~/.local/share/ccresu/ccresu.db` | SQLite state: sessions, schedules, attempts, notifications (`0600`). |
 | `~/.local/state/ccresu/` | Reserved for local state (`0700`). |
 | `~/.config/systemd/user/ccresu.service` | The user unit, if installed. |

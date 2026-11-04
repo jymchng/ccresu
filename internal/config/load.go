@@ -40,7 +40,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("%w: read %s: %v", ErrInvalid, resolved, err)
 	}
 
-	cfg, err := Parse(data)
+	cfg, err := parseWithin(data, envLookup, resolved)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", resolved, err)
 	}
@@ -58,7 +58,7 @@ func LoadWithEnv(path string, lookup func(string) (string, bool)) (*Config, erro
 	if err != nil {
 		return nil, fmt.Errorf("%w: read %s: %v", ErrInvalid, resolved, err)
 	}
-	cfg, err := parse(data, lookup)
+	cfg, err := parseWithin(data, lookup, resolved)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", resolved, err)
 	}
@@ -68,6 +68,10 @@ func LoadWithEnv(path string, lookup func(string) (string, bool)) (*Config, erro
 
 // Parse decodes YAML into defaults, applies environment overrides, expands
 // paths and validates the result. The environment is read from the process.
+//
+// Parse has no source file, so an unset server.token_path falls back to the user
+// config directory. Load derives it from the directory of the configuration file
+// in use instead.
 func Parse(data []byte) (*Config, error) {
 	return parse(data, envLookup)
 }
@@ -82,6 +86,12 @@ func ParseReader(r io.Reader) (*Config, error) {
 }
 
 func parse(data []byte, lookup func(string) (string, bool)) (*Config, error) {
+	return parseWithin(data, lookup, "")
+}
+
+// parseWithin is parse with the configuration file the bytes came from, so a
+// default server.token_path can be placed beside that file.
+func parseWithin(data []byte, lookup func(string) (string, bool), sourcePath string) (*Config, error) {
 	cfg := Defaults()
 
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
@@ -96,7 +106,7 @@ func parse(data []byte, lookup func(string) (string, bool)) (*Config, error) {
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 
-	if err := ExpandPaths(&cfg); err != nil {
+	if err := expandPaths(&cfg, sourcePath); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 
@@ -165,7 +175,25 @@ func ExpandPath(path string) (string, error) {
 }
 
 // ExpandPaths expands the user-facing paths in cfg to absolute paths.
+//
+// It has no source file, so an unset server.token_path falls back to the user
+// config directory. Load uses ExpandPathsWithin to keep the token next to the
+// configuration it belongs to.
 func ExpandPaths(cfg *Config) error {
+	return expandPaths(cfg, "")
+}
+
+// ExpandPathsWithin expands the user-facing paths in cfg to absolute paths and
+// derives a default server.token_path from sourcePath's directory.
+//
+// sourcePath is the configuration file actually in use. An empty sourcePath
+// means there is no file (a bare stream), so the token falls back to the user
+// config directory.
+func ExpandPathsWithin(cfg *Config, sourcePath string) error {
+	return expandPaths(cfg, sourcePath)
+}
+
+func expandPaths(cfg *Config, sourcePath string) error {
 	if cfg == nil {
 		return fmt.Errorf("%w: nil config", ErrInvalid)
 	}
@@ -180,11 +208,10 @@ func ExpandPaths(cfg *Config) error {
 		return err
 	}
 	if expanded == "" {
-		dir, dirErr := os.UserConfigDir()
-		if dirErr != nil {
-			return fmt.Errorf("resolve user config dir: %v", dirErr)
+		expanded, err = DefaultTokenPath(sourcePath)
+		if err != nil {
+			return err
 		}
-		expanded = filepath.Join(dir, DefaultDirName, "api-token")
 	}
 	cfg.Server.TokenPath = expanded
 
@@ -194,4 +221,22 @@ func ExpandPaths(cfg *Config) error {
 	}
 	cfg.Claude.Executable = expanded
 	return nil
+}
+
+// DefaultTokenPath returns where the bearer token lives when server.token_path
+// is unset: next to the configuration file in use, so `--config
+// /elsewhere/config.yaml` keeps the secret with the configuration that governs
+// it instead of silently reading ~/.config/ccresu/api-token.
+//
+// With no sourcePath there is no configuration file to sit next to, so it falls
+// back to $XDG_CONFIG_HOME/ccresu/api-token (or the platform equivalent).
+func DefaultTokenPath(sourcePath string) (string, error) {
+	if trimmed := strings.TrimSpace(sourcePath); trimmed != "" {
+		return filepath.Join(filepath.Dir(filepath.Clean(trimmed)), "api-token"), nil
+	}
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve user config dir: %v", err)
+	}
+	return filepath.Join(dir, DefaultDirName, "api-token"), nil
 }

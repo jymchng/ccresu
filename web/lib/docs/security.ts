@@ -52,7 +52,7 @@ export const securityDoc: DocPage = {
       kind: "ul",
       items: [
         "`~/.config/ccresu/config.yaml` may hold the Telegram bot token: keep it 0600, or use the environment instead.",
-        "`~/.config/ccresu/api-token` is created 0600 and tightened back to 0600 if it was copied around with looser permissions.",
+        "`~/.config/ccresu/api-token` (beside the configuration file in use) is created 0600 and tightened back to 0600 if it was copied around with looser permissions.",
         "`~/.local/share/ccresu/ccresu.db` holds session ids, project paths, schedules and attempt history: it references your work but never stores conversation content.",
         "Logs are structured JSON (or text) with secrets redacted before they are written.",
       ],

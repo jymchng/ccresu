@@ -82,7 +82,7 @@ export const installationDoc: DocPage = {
     },
     {
       kind: "p",
-      text: "ccresu creates its SQLite database at `~/.local/share/ccresu/ccresu.db` and, if the API is enabled, a bearer token at `~/.config/ccresu/api-token` with mode 0600. Neither is created until it is needed.",
+      text: "ccresu creates its SQLite database at `~/.local/share/ccresu/ccresu.db` and, if the API is enabled, a bearer token with mode 0600 beside the configuration file in use (`~/.config/ccresu/api-token` for the default configuration). Neither is created until it is needed.",
     },
     {
       kind: "h2",
