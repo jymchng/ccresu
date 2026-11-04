@@ -209,7 +209,7 @@ detect_os() {
 	Linux) printf 'linux' ;;
 	Darwin) printf 'darwin' ;;
 	*)
-		die "unsupported operating system: $(uname -s). Releases cover linux and darwin (windows: download the .zip from https://github.com/$REPO/releases)"
+		die "unsupported operating system: $(uname -s). Releases cover linux and darwin; on Windows use the PowerShell installer instead: irm https://raw.githubusercontent.com/$REPO/main/scripts/install.ps1 | iex (or download the .zip from https://github.com/$REPO/releases)"
 		;;
 	esac
 }

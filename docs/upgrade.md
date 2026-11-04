@@ -12,14 +12,26 @@ contributors and unusual platforms).
 
 ## Install from a release
 
+Linux and macOS:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jymchng/ccresu/main/scripts/install.sh | bash
+```
+
+Windows, in a normal PowerShell window:
+
+```powershell
+irm https://raw.githubusercontent.com/jymchng/ccresu/main/scripts/install.ps1 | iex
 ```
 
 Or from a checkout:
 
 ```bash
 ./scripts/install.sh
+```
+
+```powershell
+pwsh -File scripts/install.ps1
 ```
 
 The installer:
@@ -37,6 +49,15 @@ The installer:
 Nothing is extracted or executed before the checksum matches: a corrupted or
 substituted archive is rejected outright, and a `checksums.txt` that does not
 list your asset is treated as a failure rather than a warning.
+
+On Windows the same sequence applies with the Windows names: `install.ps1`
+downloads `ccresu_<version>_windows_<arch>.zip` plus `checksums.txt`, verifies the
+sha256 before extracting, installs `ccresu.exe` into the prefix, adds the prefix
+to the user `PATH`, and writes `%APPDATA%\ccresu\config.yaml` mode-inherited from
+your profile (the directory is yours alone). It takes `-Version`, `-Prefix`,
+`-BaseUrl`, `-Force`, `-DryRun` and `-NoPathUpdate`, and the piped one-liner takes
+no arguments, so set `CCRESU_VERSION`, `CCRESU_PREFIX` or `CCRESU_BASE_URL` in the
+environment first.
 
 ### Useful flags
 

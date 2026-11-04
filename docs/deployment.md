@@ -27,6 +27,13 @@ together with their sources.
 curl -fsSL https://raw.githubusercontent.com/jymchng/ccresu/main/scripts/install.sh | bash -s -- --systemd
 ```
 
+On Windows, where there is no systemd unit, use the PowerShell installer and run
+`ccresu daemon` from a scheduled task or the service wrapper of your choice:
+
+```powershell
+irm https://raw.githubusercontent.com/jymchng/ccresu/main/scripts/install.ps1 | iex
+```
+
 Without `--systemd` the script stops after verifying the binary and the
 configuration; you then start the loop yourself.
 

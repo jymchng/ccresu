@@ -151,3 +151,34 @@ jobs:
       # manifest without the asset, and --dry-run writing nothing.
       - name: Installer behaviour tests
         run: bash tests/scripts/install_test.sh
+
+  # The Windows installer is a second implementation of the same contract, so it
+  # is proved on the platform it targets: a fake release mirror serves real
+  # windows archives and the installer is driven exactly as a user would drive it
+  # (pinned and latest resolution, checksum verified before extraction, tampered
+  # checksum refused, re-run a no-op, -DryRun writing nothing).
+  windows-installer:
+    name: Windows installer
+    runs-on: windows-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Show the PowerShell version
+        run: pwsh -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
+
+      - name: Installer behaviour tests
+        run: pwsh -NoProfile -File tests/scripts/install_test.ps1

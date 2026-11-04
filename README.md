@@ -30,6 +30,27 @@ curl -fsSL https://raw.githubusercontent.com/jymchng/ccresu/main/scripts/install
 curl -fsSL https://raw.githubusercontent.com/jymchng/ccresu/main/scripts/install.sh | bash
 ```
 
+On Windows (`amd64`/`arm64`) the equivalent is a PowerShell one-liner, run in a
+normal (non-elevated) PowerShell window:
+
+```powershell
+# install
+irm https://raw.githubusercontent.com/jymchng/ccresu/main/scripts/install.ps1 | iex
+```
+
+The Windows installer does the same work: it resolves the release, downloads
+`ccresu_<version>_windows_<arch>.zip` plus `checksums.txt`, verifies the sha256
+**before** extracting, installs `ccresu.exe` into `%LOCALAPPDATA%\Programs\ccresu\bin`,
+adds that directory to your user `PATH`, and writes `%APPDATA%\ccresu\config.yaml`
+from the example shipped in the archive. A piped script has no arguments, so
+`CCRESU_VERSION` (pin a release), `CCRESU_PREFIX` and `CCRESU_BASE_URL` (a mirror)
+are read from the environment. From a checkout the script takes flags:
+
+```powershell
+pwsh -File scripts/install.ps1 -Version 0.1.0 -DryRun   # preview, change nothing
+pwsh -File scripts/install.ps1 -Force                   # reinstall the same version
+```
+
 The script downloads the release matching your OS/architecture, verifies it
 against the published checksums **before** anything is extracted or executed,
 installs the binary into `~/.local/bin`, creates `~/.config/ccresu/config.yaml`
@@ -50,10 +71,14 @@ Flags go after `-s --`, for example
 | `-h`, `--help` | Show the help. |
 
 It also reads `CCRESU_VERSION`, `CCRESU_PREFIX`, `CCRESU_BASE_URL` (a mirror or
-an air-gapped test) and `CCRESU_ALLOW_ROOT`.
+an air-gapped test) and `CCRESU_ALLOW_ROOT`. The Windows script reads
+`CCRESU_VERSION`, `CCRESU_PREFIX` and `CCRESU_BASE_URL` for the same reasons, and
+`-Version`, `-Prefix`, `-BaseUrl`, `-Force`, `-DryRun`, `-NoPathUpdate` from a
+checkout.
 
-Read the script before running it, if you prefer: it is
-[`scripts/install.sh`](scripts/install.sh) in this repository.
+Read the scripts before running them, if you prefer: they are
+[`scripts/install.sh`](scripts/install.sh) and
+[`scripts/install.ps1`](scripts/install.ps1) in this repository.
 
 The last thing it prints is what to do next:
 
