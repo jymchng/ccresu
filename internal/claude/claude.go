@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -220,15 +221,29 @@ func (f DiscoverFilter) matches(s Session) bool {
 }
 
 // underPath reports whether p is root or inside root.
+//
+// Comparison goes through filepath.Rel so it behaves the same on every
+// platform: on Windows a naive prefix test would never match because the
+// separator is '\\', silently hiding every session.
 func underPath(p, root string) bool {
-	if strings.TrimSpace(p) == "" {
+	if strings.TrimSpace(p) == "" || strings.TrimSpace(root) == "" {
 		return false
 	}
-	cleanRoot := strings.TrimSuffix(root, "/")
-	if p == cleanRoot {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(p))
+	if err != nil {
+		return false
+	}
+	if rel == "." {
 		return true
 	}
-	return strings.HasPrefix(p, cleanRoot+"/")
+	if filepath.IsAbs(rel) {
+		return false
+	}
+	// ".." or a path starting with ".." + separator escapes the root.
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
 }
 
 // SessionStatus is a point-in-time view of a session.

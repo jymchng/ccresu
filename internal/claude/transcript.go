@@ -29,6 +29,9 @@ const (
 	transcriptExt = ".jsonl"
 	// tailWindow is how many trailing transcript lines are decoded for status.
 	tailWindow = 24
+	// tailBytesLimit caps the bytes retained for the trailing window, so one
+	// enormous tool-result line cannot exhaust memory.
+	tailBytesLimit = 4 << 20
 	// headWindow is how many leading transcript lines are decoded for metadata.
 	headWindow = 24
 )
@@ -354,24 +357,33 @@ func (s *Store) ScanTranscript(path string) (TranscriptInfo, error) {
 
 	reader := bufio.NewReaderSize(file, 256<<10)
 	head := make([]Entry, 0, headWindow)
-	tail := make([]Entry, 0, tailWindow)
-	var lines, parsed int64
+	// Only the raw bytes of the trailing lines are retained; they are decoded
+	// after the pass, so a long transcript costs one pass of byte scanning
+	// rather than one JSON decode per line.
+	tailRaw := make([][]byte, 0, tailWindow)
+	tailBytes := 0
+	var lines, decoded int64
 
 	for {
 		line, readErr := reader.ReadBytes('\n')
 		if len(line) > 0 {
-			lines++
+			if line[len(line)-1] == '\n' {
+				lines++
+			}
 			trimmed := bytes.TrimSpace(line)
 			if len(trimmed) > 0 {
-				entry, parseErr := parseEntry(trimmed)
-				if parseErr == nil {
-					parsed++
-					if len(head) < headWindow {
+				decoded++
+				if len(head) < headWindow {
+					if entry, parseErr := parseEntry(trimmed); parseErr == nil {
 						head = append(head, entry)
 					}
-					tail = append(tail, entry)
-					if len(tail) > tailWindow {
-						tail = tail[1:]
+				}
+				if len(trimmed) <= tailBytesLimit {
+					tailRaw = append(tailRaw, append([]byte(nil), trimmed...))
+					tailBytes += len(trimmed)
+					for len(tailRaw) > tailWindow || (tailBytes > tailBytesLimit && len(tailRaw) > 1) {
+						tailBytes -= len(tailRaw[0])
+						tailRaw = tailRaw[1:]
 					}
 				}
 			}
@@ -384,8 +396,23 @@ func (s *Store) ScanTranscript(path string) (TranscriptInfo, error) {
 		}
 	}
 
+	tail := make([]Entry, 0, len(tailRaw))
+	for _, raw := range tailRaw {
+		if entry, parseErr := parseEntry(raw); parseErr == nil {
+			tail = append(tail, entry)
+		}
+	}
+
 	info.Lines = lines
-	info.EntryCount = int(parsed)
+	// EntryCount reports how many entries were actually decoded, which is
+	// bounded by the two windows no matter how long the transcript is. When the
+	// whole file fits in the head window, the tail is the same set of lines and
+	// must not be counted twice.
+	if decoded <= headWindow {
+		info.EntryCount = len(head)
+	} else {
+		info.EntryCount = len(head) + len(tail)
+	}
 
 	for _, entry := range head {
 		if entry.SessionID != "" {
@@ -586,9 +613,12 @@ func (s *Store) ReadEntriesSince(path string, offset int64) ([]Entry, int64, err
 	consumed := offset
 	for {
 		line, readErr := reader.ReadBytes('\n')
-		if len(line) > 0 {
-			trimmed := bytes.TrimSpace(line)
-			if len(trimmed) > 0 {
+		// Only newline-terminated lines are consumed. Claude Code appends to a
+		// transcript while a turn runs, so the last chunk is often half a line;
+		// counting it would advance the offset past a record that is not yet
+		// complete and lose it forever.
+		if len(line) > 0 && line[len(line)-1] == '\n' {
+			if trimmed := bytes.TrimSpace(line); len(trimmed) > 0 {
 				if entry, parseErr := parseEntry(trimmed); parseErr == nil {
 					entries = append(entries, entry)
 				}

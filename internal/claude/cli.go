@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // Default command timeouts.
@@ -315,13 +316,20 @@ func describeRunError(what string, out Output, err error) error {
 }
 
 // tail returns the last n bytes of s on a single line.
+//
+// The cut is moved forward to a rune boundary so a multi-byte character is
+// never split into invalid UTF-8 inside an error message.
 func tail(s string, n int) string {
 	s = strings.TrimSpace(s)
-	if s == "" {
+	if s == "" || n <= 0 {
 		return ""
 	}
 	if len(s) > n {
-		s = "…" + s[len(s)-n:]
+		cut := len(s) - n
+		for cut < len(s) && !utf8.RuneStart(s[cut]) {
+			cut++
+		}
+		s = "…" + s[cut:]
 	}
 	return strings.Join(strings.Fields(s), " ")
 }
