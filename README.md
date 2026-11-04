@@ -1,5 +1,11 @@
 # ccresu
 
+[![Website](https://img.shields.io/badge/website-jymchng.github.io%2Fccresu-2ea44f)](https://jymchng.github.io/ccresu/)
+[![Docs](https://img.shields.io/badge/docs-read%20the%20manual-blue)](https://jymchng.github.io/ccresu/docs/)
+[![CI](https://github.com/jymchng/ccresu/actions/workflows/ci.yml/badge.svg)](https://github.com/jymchng/ccresu/actions/workflows/ci.yml)
+
+**Website and documentation: <https://jymchng.github.io/ccresu/>**
+
 Automatically resume your original Claude Code session after a usage limit resets.
 
 `ccresu` watches Claude Code sessions, detects usage-limit interruptions, extracts
@@ -14,7 +20,22 @@ Goal paused · usage limit reached · send a message after it resets
 
 ## Documentation
 
-The user-facing documentation lives in [`docs/`](docs/README.md):
+The documentation is published at **<https://jymchng.github.io/ccresu/docs/>**,
+together with the landing page at <https://jymchng.github.io/ccresu/>. The same
+material is kept in this repository under [`docs/`](docs/README.md), so it is
+readable offline and reviewable in pull requests.
+
+Hosted pages: [installation](https://jymchng.github.io/ccresu/docs/installation/)
+· [configuration](https://jymchng.github.io/ccresu/docs/configuration/)
+· [CLI](https://jymchng.github.io/ccresu/docs/cli/)
+· [recovery](https://jymchng.github.io/ccresu/docs/recovery/)
+· [Telegram](https://jymchng.github.io/ccresu/docs/telegram/)
+· [deployment](https://jymchng.github.io/ccresu/docs/deployment/)
+· [security](https://jymchng.github.io/ccresu/docs/security/)
+· [troubleshooting](https://jymchng.github.io/ccresu/docs/troubleshooting/)
+· [known limitations](https://jymchng.github.io/ccresu/docs/limitations/)
+
+The in-repository sources:
 
 | Document | Read it for |
 | --- | --- |
@@ -53,7 +74,8 @@ mechanism and its limitations.
 
 - `ccresu` — CLI and watchdog daemon.
 - Local REST + SSE API on `127.0.0.1:8787` for scripting and automation.
-- A static landing page and documentation site, deployed to GitHub Pages.
+- A static landing page and documentation site at
+  <https://jymchng.github.io/ccresu/>, deployed to GitHub Pages.
 
 `ccresu` ships **no web UI**: the binary is the CLI, the daemon and the API.
 
