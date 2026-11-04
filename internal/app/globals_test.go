@@ -217,7 +217,7 @@ func TestParseFlagsInterleavesFlagsAndPositionals(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			h := newHarness(t)
 			app := newApp(h.deps(), BuildInfo{Version: "test"}, &h.stdout, &h.stderr)
-			fs := app.flags("recover", "recover <session-id> [--message TEXT]")
+			fs := app.flags("recover", "recover <session-id> [--message TEXT] [--force]")
 			message := fs.String("message", "", "continuation message")
 
 			err := app.parseFlags(fs, test.args)

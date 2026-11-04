@@ -490,7 +490,7 @@ func (a *App) cmdHistory(ctx context.Context, args []string) error {
 
 // cmdRecover resumes one session now.
 func (a *App) cmdRecover(ctx context.Context, args []string) error {
-	fs := a.flags("recover", "recover <session-id> [--message TEXT]")
+	fs := a.flags("recover", "recover <session-id> [--message TEXT] [--force]")
 	message := fs.String("message", "", "continuation message to send instead of the configured one")
 	force := fs.Bool("force", false, "try even though the attempt budget is spent")
 	if err := a.parseFlags(fs, args); err != nil {

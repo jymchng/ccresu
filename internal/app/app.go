@@ -416,7 +416,7 @@ func (a *App) commands() []commandSpec {
 		{
 			name:    "recover",
 			summary: "resume one session now",
-			usage:   "recover <session-id> [--message TEXT]",
+			usage:   "recover <session-id> [--message TEXT] [--force]",
 			run:     (*App).cmdRecover,
 		},
 		{
