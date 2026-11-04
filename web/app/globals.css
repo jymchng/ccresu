@@ -1,0 +1,80 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Dark-first theming.
+ *
+ * The `dark` class on <html> is the default (set in the layout and re-applied by
+ * the inline bootstrap script before first paint). Every colour is a CSS
+ * variable so the light palette is a single class swap.
+ */
+
+:root {
+  --background: #fbfbfd;
+  --foreground: #1b1c22;
+  --card: #ffffff;
+  --card-foreground: #1b1c22;
+  --muted: #f3f3f7;
+  --muted-foreground: #5c6170;
+  --primary: #6d4ade;
+  --primary-foreground: #fdfcff;
+  --secondary: #ecebf5;
+  --secondary-foreground: #2c2745;
+  --accent: #f0eefb;
+  --accent-foreground: #302a52;
+  --border: #e2e2ea;
+  --ring: #6d4ade;
+}
+
+.dark {
+  --background: #16171d;
+  --foreground: #f6f6f9;
+  --card: #1d1f27;
+  --card-foreground: #f6f6f9;
+  --muted: #262832;
+  --muted-foreground: #a7acbc;
+  --primary: #b39cff;
+  --primary-foreground: #1a1330;
+  --secondary: #2b2d38;
+  --secondary-foreground: #f4f4f8;
+  --accent: #2c2a3c;
+  --accent-foreground: #f7f5ff;
+  --border: #343743;
+  --ring: #b39cff;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    -webkit-font-smoothing: antialiased;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+      "Helvetica Neue", Arial, sans-serif;
+  }
+
+  code,
+  pre {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+      "Liberation Mono", monospace;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+/* Keep long command lines readable without breaking the layout. */
+pre {
+  tab-size: 2;
+}

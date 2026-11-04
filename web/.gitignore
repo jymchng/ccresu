@@ -1,0 +1,17 @@
+# dependencies
+node_modules/
+
+# next.js build output
+.next/
+out/
+next-env.d.ts
+
+# test and type-check artifacts
+coverage/
+*.tsbuildinfo
+
+# local env
+.env*.local
+
+# os noise
+.DS_Store
