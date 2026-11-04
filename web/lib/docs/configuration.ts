@@ -13,6 +13,10 @@ export const configurationDoc: DocPage = {
       text: `ccresu reads \`${defaultPaths.config}\` by default, or the path given with \`--config\`. The full annotated example lives in \`configs/config.example.yaml\`; every field in it is validated, and an invalid value is a startup error rather than a silent fallback.`,
     },
     {
+      kind: "p",
+      text: "Resolution order, first match wins: `--config PATH` (or `-c PATH`), then the `CCRESU_CONFIG` environment variable, then the default path. A leading `~` is expanded in all three, and everything derived from the file — such as the API token beside it — follows the file actually in use.",
+    },
+    {
       kind: "h2",
       text: "Environment overrides",
     },

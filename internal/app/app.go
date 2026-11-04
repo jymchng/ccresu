@@ -639,12 +639,27 @@ func (a *App) loadConfig() (*config.Config, error) {
 	return cfg, nil
 }
 
-// resolveConfigPath expands the explicit path or falls back to the default one.
+// resolveConfigPath picks the configuration file in the documented order:
+// the explicit path (--config, or the positional PATH of config validate),
+// then $CCRESU_CONFIG, then the platform default.
+//
+// The environment is read through deps.LookupEnv rather than os.Getenv so the
+// whole lookup stays injectable and a test can prove the precedence without
+// mutating the process environment.
 func (a *App) resolveConfigPath(explicit string) (string, error) {
-	if strings.TrimSpace(explicit) != "" {
-		path, err := config.ResolvePath(explicit)
+	candidate, fromEnv := explicit, false
+	if strings.TrimSpace(candidate) == "" && a.deps.LookupEnv != nil {
+		if env, ok := a.deps.LookupEnv(config.EnvConfigPath); ok && strings.TrimSpace(env) != "" {
+			candidate, fromEnv = env, true
+		}
+	}
+	if strings.TrimSpace(candidate) != "" {
+		path, err := config.ResolvePath(candidate)
 		if err != nil {
-			return "", withCode(ExitUsage, fmt.Errorf("configuration path %q: %w", explicit, err))
+			if fromEnv {
+				return "", withCode(ExitUsage, fmt.Errorf("%s=%q: %w", config.EnvConfigPath, candidate, err))
+			}
+			return "", withCode(ExitUsage, fmt.Errorf("configuration path %q: %w", candidate, err))
 		}
 		return path, nil
 	}
