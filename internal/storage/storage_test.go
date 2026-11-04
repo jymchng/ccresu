@@ -271,13 +271,15 @@ func TestMigrateFromEmptyAndRollback(t *testing.T) {
 		return found
 	}
 
-	for _, want := range []string{"sessions", "usage_limits", "recovery_attempts", "state_transitions", "notifications", "settings", "schema_migrations"} {
+	for _, want := range []string{"sessions", "usage_limits", "recovery_attempts", "state_transitions", "notifications", "settings", "schedules", "schema_migrations"} {
 		if !tables()[want] {
 			t.Fatalf("table %q missing after migrate: %v", want, tables())
 		}
 	}
 
-	// Roll back one version: the transcript-metrics columns disappear.
+	// Roll back the newest version: it is undone and its table goes with it.
+	// Asserting on the version the runner reports keeps this test honest as
+	// migrations are added.
 	reverted, err := store.Rollback(ctx, latest-1)
 	if err != nil {
 		t.Fatalf("rollback to %d: %v", latest-1, err)
@@ -288,21 +290,33 @@ func TestMigrateFromEmptyAndRollback(t *testing.T) {
 	if version, err := store.Version(ctx); err != nil || version != latest-1 {
 		t.Fatalf("Version after rollback = %d, %v", version, err)
 	}
+	if tables()["schedules"] {
+		t.Fatalf("schedules survived rollback: %v", tables())
+	}
+
+	// Roll back the transcript-metrics migration too: its columns disappear.
+	if _, err := store.Rollback(ctx, 1); err != nil {
+		t.Fatalf("rollback to 1: %v", err)
+	}
 	columns := sessionColumns(ctx, t, store)
 	if columns["transcript_size"] {
 		t.Fatalf("transcript_size survived rollback: %v", columns)
 	}
 
 	// Roll back to zero: every table except the bookkeeping table is gone.
+	remainingVersion, err := store.Version(ctx)
+	if err != nil {
+		t.Fatalf("Version: %v", err)
+	}
 	reverted, err = store.Rollback(ctx, 0)
 	if err != nil {
 		t.Fatalf("rollback to 0: %v", err)
 	}
-	if len(reverted) != latest-1 {
-		t.Fatalf("rollback to 0 reverted %v, want %d versions", reverted, latest-1)
+	if len(reverted) != remainingVersion {
+		t.Fatalf("rollback to 0 reverted %v, want %d versions", reverted, remainingVersion)
 	}
 	remaining := tables()
-	for _, gone := range []string{"sessions", "usage_limits", "recovery_attempts", "state_transitions", "notifications", "settings"} {
+	for _, gone := range []string{"sessions", "usage_limits", "recovery_attempts", "state_transitions", "notifications", "settings", "schedules"} {
 		if remaining[gone] {
 			t.Fatalf("table %q survived full rollback: %v", gone, remaining)
 		}

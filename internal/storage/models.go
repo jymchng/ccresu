@@ -266,3 +266,42 @@ type Setting struct {
 	Value     string
 	UpdatedAt time.Time
 }
+
+// Schedule is one persisted wait for a usage limit to reset.
+//
+// It is stored rather than held in memory so that a daemon restart — or a
+// reboot — resumes waiting instead of losing the session. The row survives
+// across restarts and carries the original phrase, so the reason for the wait
+// can still be explained later without the transcript.
+type Schedule struct {
+	// SessionID is the session being waited for; it is also the primary key.
+	SessionID    string
+	UsageLimitID int64
+	// ResetAt is the resolved reset instant in UTC. It is zero when the message
+	// carried no usable reset time, in which case Unknown is true.
+	ResetAt time.Time
+	// ResetTimezone preserves the zone the reset time was written in.
+	ResetTimezone string
+	// ResetRaw preserves the original phrase, e.g. "12pm (Europe/Berlin)".
+	ResetRaw string
+	// Unknown reports that the reset time is not known and the session must be
+	// polled instead of woken at a fixed instant.
+	Unknown bool
+	// Attempts counts the polls already spent on an unknown reset. It persists
+	// so the backoff survives a restart.
+	Attempts int
+	// NextPollAt is when an unknown reset should next be polled.
+	NextPollAt time.Time
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// DueAt is the instant the schedule is interested in: the reset time when it is
+// known, otherwise the next poll time. It returns the zero time when the row is
+// not schedulable at all.
+func (s Schedule) DueAt() time.Time {
+	if s.Unknown {
+		return s.NextPollAt
+	}
+	return s.ResetAt
+}

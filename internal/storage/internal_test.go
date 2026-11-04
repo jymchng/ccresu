@@ -247,7 +247,14 @@ func TestClosedStoreUniformErrors(t *testing.T) {
 		"SetSetting":               store.SetSetting(ctx, "x", "y"),
 		"DeleteSetting":            store.DeleteSetting(ctx, "x"),
 		"ListSettings":             func() error { _, err := store.ListSettings(ctx); return err }(),
-		"InTx":                     store.InTx(ctx, func(*sql.Tx) error { return nil }),
+		"SaveSchedule": func() error {
+			_, err := store.SaveSchedule(ctx, Schedule{SessionID: "x", ResetAt: time.Now()})
+			return err
+		}(),
+		"GetSchedule":    func() error { _, err := store.GetSchedule(ctx, "x"); return err }(),
+		"LoadSchedules":  func() error { _, err := store.LoadSchedules(ctx); return err }(),
+		"DeleteSchedule": store.DeleteSchedule(ctx, "x"),
+		"InTx":           store.InTx(ctx, func(*sql.Tx) error { return nil }),
 	}
 	for name, err := range checks {
 		if !errors.Is(err, ErrClosed) {
@@ -311,6 +318,23 @@ func TestCorruptRowsSurfaceErrors(t *testing.T) {
 	}
 	if _, err := store.ListAttempts(ctx, "corrupt-limit", 0); err == nil {
 		t.Fatal("corrupt started_at was accepted")
+	}
+
+	// And for a schedule's reset_at, through both the single-row and list reads.
+	if _, err := store.SaveSchedule(ctx, Schedule{
+		SessionID: "corrupt", ResetAt: time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(ctx,
+		`UPDATE schedules SET reset_at = 'garbage' WHERE session_id = 'corrupt'`); err != nil {
+		t.Fatalf("corrupt schedule: %v", err)
+	}
+	if _, err := store.GetSchedule(ctx, "corrupt"); err == nil {
+		t.Fatal("corrupt reset_at was accepted")
+	}
+	if _, err := store.LoadSchedules(ctx); err == nil {
+		t.Fatal("corrupt reset_at was accepted by the list read")
 	}
 }
 

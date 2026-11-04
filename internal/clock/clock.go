@@ -119,6 +119,17 @@ func (f *Fake) Set(t time.Time) {
 	f.now = t
 }
 
+// HasWaiters reports whether any timer is currently registered.
+//
+// Tests that start a goroutine which sleeps on the clock need to know it has
+// registered its timer before advancing; otherwise the result depends on
+// scheduling luck.
+func (f *Fake) HasWaiters() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.waiter) > 0
+}
+
 type fakeTimer struct {
 	clock    *Fake
 	ch       chan time.Time
