@@ -47,7 +47,8 @@ internal/telegram/     Bot API client, templates, persistent queue
 internal/server/       REST + SSE API, auth, limits
 tests/support/         shared fixtures: fake clock, real SQLite, fake provider
 tests/e2e/             the full interruption scenario, replayed end to end
-tests/integration/     cross-package flows (currently only .gitkeep)
+tests/integration/     the shipped binary over real processes and a live API socket
+tests/scripts/         behavioural tests for scripts/install.sh
 web/                   landing + documentation site (static export)
 scripts/               install.sh, uninstall.sh
 deployments/systemd/   the user unit

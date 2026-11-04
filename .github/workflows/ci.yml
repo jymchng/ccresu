@@ -129,11 +129,25 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: ShellCheck the installers
+      # The installer test builds real release archives, so this job needs Go as
+      # well as a shell.
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: ShellCheck the installers and their tests
         run: |
           if ! command -v shellcheck >/dev/null 2>&1; then
             sudo apt-get update -qq
             sudo apt-get install -y -qq shellcheck
           fi
           shellcheck --version
-          shellcheck -x scripts/*.sh
+          shellcheck -x scripts/*.sh tests/scripts/*.sh
+
+      # Proves install.sh keeps its promises against a fake release mirror: a
+      # pinned install, an idempotent re-run, an upgrade, a tampered checksum, a
+      # manifest without the asset, and --dry-run writing nothing.
+      - name: Installer behaviour tests
+        run: bash tests/scripts/install_test.sh
