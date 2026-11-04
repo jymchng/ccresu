@@ -229,29 +229,35 @@ func (d *Detector) Analyze(raw string) UsageLimitEvent {
 }
 
 // bestMatch evaluates every rule and returns the highest scoring hit.
+//
+// Every occurrence of a rule is scored, not just the leftmost one: a transcript
+// blob can quote the banner in an example and then contain the real thing a few
+// lines later, and stopping at the quotation would lose the event. The number of
+// occurrences examined per rule is capped so a pathological input cannot turn
+// detection into a quadratic scan.
 func (d *Detector) bestMatch(folded string, hasReset bool) *limitMatch {
+	const maxOccurrences = 32
+
 	var best *limitMatch
 	for _, p := range d.patterns {
 		if p.RequiresReset && !hasReset {
 			continue
 		}
-		loc := p.re.FindStringIndex(folded)
-		if loc == nil {
-			continue
-		}
-		penalty, notes := applyGuards(folded, loc[0], loc[1])
-		score := clampConfidence(p.Confidence - penalty)
-		if best != nil && score <= best.score {
-			continue
-		}
-		best = &limitMatch{
-			pattern:  p,
-			start:    loc[0],
-			end:      loc[1],
-			matched:  folded[loc[0]:loc[1]],
-			score:    score,
-			penalty:  penalty,
-			guardLog: notes,
+		for _, loc := range p.re.FindAllStringIndex(folded, maxOccurrences) {
+			penalty, notes := applyGuards(folded, loc[0], loc[1])
+			score := clampConfidence(p.Confidence - penalty)
+			if best != nil && score <= best.score {
+				continue
+			}
+			best = &limitMatch{
+				pattern:  p,
+				start:    loc[0],
+				end:      loc[1],
+				matched:  folded[loc[0]:loc[1]],
+				score:    score,
+				penalty:  penalty,
+				guardLog: notes,
+			}
 		}
 	}
 	return best

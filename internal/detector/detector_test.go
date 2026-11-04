@@ -151,6 +151,16 @@ func TestAnalyze(t *testing.T) {
 			detected: true, class: ClassificationUsageLimit, kind: LimitFiveHour,
 			resetExpr: "12pm", timezone: "Europe/Berlin",
 		},
+		{
+			name: "a quoted example earlier does not mask the real banner", in: "```\nYou've hit your 5-hour limit\n```\nYou've hit your 5-hour limit · resets 12pm (Europe/Berlin)",
+			detected: true, class: ClassificationUsageLimit, kind: LimitFiveHour,
+			resetExpr: "12pm", timezone: "Europe/Berlin", patternID: "canonical-hit-five-hour",
+		},
+		{
+			name: "a described example earlier does not mask the real banner", in: "ccresu detects the phrase \"You've hit your 5-hour limit\". Later: You've hit your 5-hour limit · resets 12pm (Europe/Berlin)",
+			detected: true, class: ClassificationUsageLimit, kind: LimitFiveHour,
+			resetExpr: "12pm", timezone: "Europe/Berlin",
+		},
 
 		// Negative classifications: recognised, but explicitly not a limit.
 		{

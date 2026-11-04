@@ -51,7 +51,6 @@ func applyGuards(text string, start, end int) (float64, []string) {
 	if start < 0 || end > len(text) || start >= end {
 		return 0, nil
 	}
-	before := windowBefore(text, start, 80)
 	clause := clauseBefore(text, start, 80)
 	after := windowAfter(text, end, 80)
 
@@ -75,16 +74,16 @@ func applyGuards(text string, start, end int) (float64, []string) {
 	if negationBefore.MatchString(clause) {
 		fire("negation", 1)
 	}
-	if strongKnowledgeBefore.MatchString(before) || detectVerbBefore.MatchString(before) {
+	if strongKnowledgeBefore.MatchString(clause) || detectVerbBefore.MatchString(clause) {
 		fire("described", 0.6)
 	}
-	if weakKnowledgeBefore.MatchString(before) {
-		fire("named", 0.25)
+	if weakKnowledgeBefore.MatchString(clause) {
+		fire("named", 0.5)
 	}
 	if thirdPersonBefore.MatchString(clause) {
 		fire("third-person", 0.4)
 	}
-	if exampleBefore.MatchString(before) {
+	if exampleBefore.MatchString(clause) {
 		fire("example", 0.5)
 	}
 	if transientBefore.MatchString(text) {

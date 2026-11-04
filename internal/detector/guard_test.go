@@ -37,7 +37,7 @@ func TestGuardFires(t *testing.T) {
 		{"negation", "there is no usage limit", "usage limit", "negation"},
 		{"described by a phrase", "the phrase says you've hit your limit", "you've hit your limit", "described"},
 		{"described by a verb", "ccresu detects you've hit your limit", "you've hit your limit", "described"},
-		{"named as a message", "error message: you've hit your limit", "you've hit your limit", "named"},
+		{"named as a message", "a banner message reading you've hit your limit", "you've hit your limit", "named"},
 		{"third person", "users who hit their limit", "hit their limit", "third-person"},
 		{"example", "for example you've hit your limit", "you've hit your limit", "example"},
 		{"transient retry", "limit reached, retrying in 5 seconds", "limit reached", "transient-retry"},
