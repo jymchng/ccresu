@@ -105,6 +105,15 @@ non-retryable failures and an exhausted budget go to `PERMANENTLY_FAILED`.
 `ccresu retry <session-id>` resets the budget, and `ccresu recover <session-id>
 --force` tries once more anyway.
 
+A failure **before** the resume is issued — the status check in
+`CHECKING_SESSION` or the limit check in `CHECKING_LIMIT` — is different: no
+attempt row exists, so no budget was spent, and the session rests in
+`RETRY_WAIT` whatever the error is classified as (an `UNRECOVERABLE` verdict
+still wins). Calling such a session `PERMANENTLY_FAILED` would claim a budget it
+never used, and the state machine has no edge for it. Its transition reason says
+so explicitly, e.g. `the pre-resume check failed (permanent); no attempt was
+spent, next check in 1m0s: …`, so `ccresu history` explains the wait.
+
 ## Verification: proof, not optimism
 
 A resume that returns exit code 0 has not necessarily continued the

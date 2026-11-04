@@ -71,7 +71,7 @@ Per-package statement coverage:
 | `internal/scheduler` | 96.0% | ≥95% |
 | `internal/telegram` | 96.3% | ≥90% |
 | `internal/clock` | 93.3% | — |
-| `internal/recovery` | 98.5% | ≥90% |
+| `internal/recovery` | 98.3% | ≥90% |
 | `internal/claude` | 90.0% | ≥80% |
 | `internal/server` | 87.9% | ≥80% |
 | `internal/storage` | 87.5% | ≥85% |
@@ -108,11 +108,8 @@ still in force, so the session goes back to waiting instead of resuming
 
 Tracked as open goals, not hidden:
 
-- `internal/recovery` edge paths (`verify.go`, `manager.go`) are now at 98.5%
-  (was 92.3%); the eight statements left are unreachable defensive branches
-  tracked as an open goal.
-- A failed pre-resume status check can attempt an illegal
-  `CHECKING_SESSION → PERMANENTLY_FAILED` transition instead of `RETRY_WAIT`.
+- `internal/recovery` edge paths (`verify.go`, `manager.go`) are now at 98.3%;
+  the statements left are unreachable defensive branches tracked as an open goal.
 - Global flags are accepted before the subcommand only (`ccresu --json status`
   works, `ccresu status --json` exits 2).
 - `tests/integration` is empty; `cmd/ccresu` has no tests of its own.

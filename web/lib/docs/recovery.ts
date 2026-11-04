@@ -23,8 +23,8 @@ export const recoveryDoc: DocPage = {
       kind: "table",
       head: ["State", "When it is recorded"],
       rows: [
-        ["RETRY_WAIT", "An attempt failed and the budget still has room; the loop returns to CHECKING_SESSION after a backoff."],
-        ["PERMANENTLY_FAILED", "The attempt budget is spent, or the error is classified as non-retryable."],
+        ["RETRY_WAIT", "An attempt failed and the budget still has room, or the pre-resume check failed and no attempt was spent; the loop returns to CHECKING_SESSION after a backoff."],
+        ["PERMANENTLY_FAILED", "The attempt budget is spent, or a resume attempt failed with an error classified as non-retryable."],
         ["COMPLETED", "The session finished normally before the limit, so there is nothing to resume."],
         ["USER_TERMINATED", "The user cancelled the session."],
         ["DISABLED", "Recovery was switched off with `ccresu disable`."],

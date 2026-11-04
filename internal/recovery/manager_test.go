@@ -492,6 +492,144 @@ func TestRecoverRetriesWhenTheLimitCheckFails(t *testing.T) {
 	}
 }
 
+func TestRecoverRecordsAPermanentPreResumeFailureAsARetryWait(t *testing.T) {
+	store := newTestStore(t)
+	session := recoverableSession(sessionA)
+	session.State = StateRetryWait
+	seedSession(t, store, session)
+	ctx := context.Background()
+
+	// A permanently classified *status check* failure: no resume was issued, so
+	// no attempt was spent and PERMANENTLY_FAILED would be a lie the state
+	// machine rightly refuses.
+	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
+		return claude.SessionStatus{}, errors.New("authentication_error: invalid api key")
+	}}
+	manager := testManager(t, store, provider, nil)
+
+	outcome, err := manager.Recover(ctx, sessionA)
+	var retry *RetryError
+	if !errors.As(err, &retry) {
+		t.Fatalf("Recover error = %v, want a RetryError: the session is retryable and must say so", err)
+	}
+	var terminal *terminalError
+	if errors.As(err, &terminal) {
+		t.Errorf("error = %v, want no terminalError: the session is not permanently failed", err)
+	}
+	if outcome.State != StateRetryWait || outcome.Delay != retry.Delay {
+		t.Errorf("outcome = %+v, want RETRY_WAIT with the same delay %s", outcome, retry.Delay)
+	}
+	if retry.Attempt != 0 || retry.Max != DefaultMaxAttempts {
+		t.Errorf("retry = %+v, want no attempt spent out of %d", retry, DefaultMaxAttempts)
+	}
+	if provider.resumeCount() != 0 {
+		t.Error("a failed status check must never reach a resume")
+	}
+
+	// The failure has to be on disk, or nobody can explain what happened.
+	transitions, err := store.ListTransitions(ctx, sessionA, 0)
+	if err != nil {
+		t.Fatalf("list transitions: %v", err)
+	}
+	last := transitions[len(transitions)-1]
+	if last.FromState != StateCheckingSession || last.ToState != StateRetryWait {
+		t.Errorf("last transition = %s -> %s, want CHECKING_SESSION -> RETRY_WAIT",
+			last.FromState, last.ToState)
+	}
+	for _, want := range []string{"pre-resume check failed", "permanent", "no attempt was spent"} {
+		if !strings.Contains(last.Reason, want) {
+			t.Errorf("transition reason = %q, want it to mention %q", last.Reason, want)
+		}
+	}
+	stored, err := store.GetSession(ctx, sessionA)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if stored.State != StateRetryWait {
+		t.Errorf("stored state = %s, want RETRY_WAIT", stored.State)
+	}
+	if !strings.Contains(stored.LastError, "invalid api key") {
+		t.Errorf("stored LastError = %q, want the cause recorded", stored.LastError)
+	}
+	attempts, err := store.ListAttempts(ctx, sessionA, 0)
+	if err != nil {
+		t.Fatalf("list attempts: %v", err)
+	}
+	if len(attempts) != 0 {
+		t.Errorf("attempts = %d, want 0: a status check failure is not a resume attempt", len(attempts))
+	}
+}
+
+func TestRecoverRecordsAFailedPreResumeCheckWithTheBudgetSpent(t *testing.T) {
+	store := newTestStore(t)
+	session := recoverableSession(sessionA)
+	session.State = StateRetryWait
+	seedSession(t, store, session)
+
+	ctx := context.Background()
+	for i := 0; i < DefaultMaxAttempts; i++ {
+		if _, err := store.StartAttempt(ctx, sessionA, 0, "claude -p --resume"); err != nil {
+			t.Fatalf("start attempt %d: %v", i+1, err)
+		}
+	}
+
+	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
+		return claude.SessionStatus{}, errors.New("claude timed out")
+	}}
+	manager := testManager(t, store, provider, nil)
+
+	// The budget is spent, so the run has to be forced to reach the check at all.
+	outcome, err := manager.RecoverRequest(ctx, Request{SessionID: sessionA, Force: true})
+	var retry *RetryError
+	if !errors.As(err, &retry) {
+		t.Fatalf("Recover error = %v, want a RetryError, not a rejected transition", err)
+	}
+	if outcome.State != StateRetryWait {
+		t.Errorf("outcome state = %s, want RETRY_WAIT", outcome.State)
+	}
+	transitions, err := store.ListTransitions(ctx, sessionA, 0)
+	if err != nil {
+		t.Fatalf("list transitions: %v", err)
+	}
+	last := transitions[len(transitions)-1]
+	if last.FromState != StateCheckingSession || last.ToState != StateRetryWait {
+		t.Errorf("last transition = %s -> %s, want CHECKING_SESSION -> RETRY_WAIT",
+			last.FromState, last.ToState)
+	}
+}
+
+func TestRecoverRecordsAFailedLimitCheckAsARetryWait(t *testing.T) {
+	store := newTestStore(t)
+	session := recoverableSession(sessionA)
+	session.State = StateRetryWait
+	seedSession(t, store, session)
+	ctx := context.Background()
+
+	manager := testManager(t, store, growthProvider(10, 12), func(cfg *Config) {
+		cfg.LimitRecheck = func(context.Context, string) (bool, error) {
+			return false, errors.New("invalid api key")
+		}
+	})
+
+	outcome, err := manager.Recover(ctx, sessionA)
+	var retry *RetryError
+	if !errors.As(err, &retry) {
+		t.Fatalf("Recover error = %v, want a RetryError, not a rejected transition", err)
+	}
+	if outcome.State != StateRetryWait {
+		t.Errorf("outcome state = %s, want RETRY_WAIT", outcome.State)
+	}
+	transitions, err := store.ListTransitions(ctx, sessionA, 0)
+	if err != nil {
+		t.Fatalf("list transitions: %v", err)
+	}
+	last := transitions[len(transitions)-1]
+	if last.FromState != StateCheckingLimit || last.ToState != StateRetryWait {
+		t.Errorf("last transition = %s -> %s, want CHECKING_LIMIT -> RETRY_WAIT",
+			last.FromState, last.ToState)
+	}
+}
+
 func TestRecoverSchedulesARetryAfterATransientFailure(t *testing.T) {
 	store := newTestStore(t)
 	seedSession(t, store, recoverableSession(sessionA))

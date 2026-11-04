@@ -492,16 +492,37 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 // A retryable failure below the attempt budget goes to RETRY_WAIT with the
 // computed delay; anything else ends in PERMANENTLY_FAILED or UNRECOVERABLE, so
 // a session can never be retried for ever.
+//
+// A failure reported before the resume was issued — the pre-resume status check
+// or the limit check — has no attempt row behind it, so it spends no budget and
+// always rests in RETRY_WAIT (unless ccresu has proved the session
+// unrecoverable). Asking for PERMANENTLY_FAILED from CHECKING_SESSION or
+// CHECKING_LIMIT would be rejected by the state machine and the failure would
+// vanish: no attempt recorded, no transition, nothing on disk to explain it.
 func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome, baseline Baseline,
 	attempt storage.RecoveryAttempt, verification Verification, cause error) (Outcome, error) {
 	class := Classify(cause)
 	outcome.Verification = verification
 
-	var attemptNumber int
-	if attempt.ID != 0 {
-		attemptNumber = attempt.AttemptNumber
+	// A zero attempt id means no resume was issued: the failure came from a
+	// pre-resume check, and the budget it did not spend is read back from the
+	// store instead of copied from a row that does not exist.
+	preResume := attempt.ID == 0
+	attemptNumber := attempt.AttemptNumber
+	if preResume {
+		if count, err := m.store.CountAttempts(ctx, outcome.SessionID); err == nil {
+			attemptNumber = count
+		}
+	}
+
+	target := targetFor(class, attemptNumber, m.maxAttempts)
+	if preResume {
+		target = reachableTarget(state.current, target)
+	}
+
+	if !preResume {
 		if _, err := m.store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
-			State:             targetFor(class, attemptNumber, m.maxAttempts),
+			State:             target,
 			Success:           false,
 			Error:             truncate(cause.Error()),
 			SessionIDVerified: boolPtr(verification.SessionIDPreserved),
@@ -510,17 +531,21 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 		}); err != nil {
 			m.log.Warn("record failed attempt", "session", outcome.SessionID, "error", err)
 		}
-	} else {
-		count, err := m.store.CountAttempts(ctx, outcome.SessionID)
-		if err == nil {
-			attemptNumber = count
-		}
 	}
 
-	if class.Retryable() && attemptNumber < m.maxAttempts {
+	// RETRY_WAIT is the one destination with a schedule to hand back, so the
+	// persisted state and the wait the caller performs can never disagree. It is
+	// also the only answer the machine gives for a failed pre-resume check, so a
+	// clamped failure and a cancellation report the delay they will observe.
+	retry := class.Retryable() && attemptNumber < m.maxAttempts
+	if retry || target == StateRetryWait {
 		delay := m.backoff.Delay(attemptNumber)
 		reason := fmt.Sprintf("attempt %d/%d failed (%s); next attempt in %s: %v",
 			attemptNumber, m.maxAttempts, class, delay, cause)
+		if preResume {
+			reason = fmt.Sprintf("the pre-resume check failed (%s); no attempt was spent, next check in %s: %v",
+				class, delay, cause)
+		}
 		if err := state.move(StateRetryWait, truncate(reason), attempt.ID); err != nil {
 			return Outcome{SessionID: outcome.SessionID, State: state.current}, err
 		}
@@ -533,13 +558,35 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 		}
 	}
 
-	target := targetFor(class, attemptNumber, m.maxAttempts)
 	if err := state.move(target, truncate(cause.Error()), attempt.ID); err != nil {
 		return Outcome{SessionID: outcome.SessionID, State: state.current}, err
 	}
 	_ = m.store.SetSessionError(ctx, outcome.SessionID, truncate(cause.Error()))
 	outcome.State = state.current
 	return outcome, &terminalError{SessionID: outcome.SessionID, State: target, Cause: cause}
+}
+
+// reachableTarget narrows a failure's destination to an edge the machine allows
+// from where the session currently stands.
+//
+// The pre-resume checks have no attempt row behind them, so a permanently
+// classified failure there has not spent the budget that PERMANENTLY_FAILED
+// reports as spent, and the machine has no CHECKING_SESSION or CHECKING_LIMIT
+// edge to it. Rather than lose the failure to a rejected transition, the session
+// rests in RETRY_WAIT, which every pre-resume state reaches and which the
+// daemon already backs off from; an unrecoverable verdict is left alone, because
+// it is legal from both states and no retry can answer it.
+func reachableTarget(from, target State) State {
+	if CanTransition(from, target) {
+		return target
+	}
+	if CanTransition(from, StateRetryWait) {
+		return StateRetryWait
+	}
+	// Unreachable today: every state that can reach a pre-resume check also
+	// reaches RETRY_WAIT. The fallback is kept so an illegal edge is reported by
+	// move() rather than silently swallowed if that ever stops being true.
+	return target
 }
 
 // targetFor decides the state a failed attempt leaves the session in.
