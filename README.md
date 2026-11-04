@@ -12,10 +12,22 @@ You've hit your 5-hour limit · resets 12pm (Europe/Berlin)
 Goal paused · usage limit reached · send a message after it resets
 ```
 
-## Status
+## Documentation
 
-This repository is under active construction. The sections below are filled in
-as each component lands; see `docs/` for the authoritative documentation.
+The user-facing documentation lives in [`docs/`](docs/README.md):
+
+| Document | Read it for |
+| --- | --- |
+| [docs/README.md](docs/README.md) | Overview and quick start |
+| [docs/cli.md](docs/cli.md) | Every command, flag and exit code |
+| [docs/configuration.md](docs/configuration.md) | Every setting, its default and its environment override |
+| [docs/recovery.md](docs/recovery.md) | Detection, scheduling, resumption and the state machine |
+| [docs/architecture.md](docs/architecture.md) | How the pieces fit together |
+| [docs/api.md](docs/api.md) | The local REST and SSE API |
+| [docs/telegram.md](docs/telegram.md) | Notification setup, delivery guarantees and troubleshooting |
+| [docs/deployment.md](docs/deployment.md) | Running it as a service, logs, monitoring |
+| [docs/upgrade.md](docs/upgrade.md) | Installing, upgrading and uninstalling |
+| [docs/security.md](docs/security.md) | What it can touch, and what it keeps secret |
 
 ## Verified Claude Code interfaces
 
