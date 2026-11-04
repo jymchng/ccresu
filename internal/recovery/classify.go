@@ -3,8 +3,6 @@ package recovery
 import (
 	"context"
 	"errors"
-	"io/fs"
-	"net"
 	"strings"
 
 	"github.com/jymchng/ccresu/internal/claude"
@@ -161,20 +159,13 @@ func Classify(err error) Class {
 		}
 	}
 
-	// Recognised transient shapes that do not spell their name in the message.
-	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return ClassRetryable
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return ClassRetryable
-	}
-	var pathErr *fs.PathError
-	if errors.As(err, &pathErr) {
-		// The executable was there a moment ago; a transient EAGAIN/EBUSY on a
-		// running process is worth one more try.
-		return ClassRetryable
-	}
+	// Everything left is retryable, including a net.Error, a
+	// context.DeadlineExceeded or an *fs.PathError whose text carries none of the
+	// markers above: the attempt budget bounds the cost of one more try, and
+	// abandoning a session that might still resume is the worse mistake. There
+	// used to be explicit branches for those three shapes here; each of them
+	// returned ClassRetryable, exactly like this fallthrough, so they were
+	// deleted instead of being left as unreachable code.
 	return ClassRetryable
 }
 

@@ -179,6 +179,44 @@ func testManager(t *testing.T, store Store, provider claude.SessionProvider, mut
 	return manager
 }
 
+func TestNewRejectsAnInvalidBackoffPolicy(t *testing.T) {
+	// The policy is validated as supplied, not after defaulting, so New is the
+	// place a misconfigured retry policy is reported instead of repaired.
+	bad := Config{
+		Store:    newTestStore(t),
+		Provider: &providerStub{},
+		Backoff:  Backoff{Initial: 10 * time.Minute, Max: time.Minute, Multiplier: 0.5, Jitter: -1},
+	}
+	manager, err := New(bad)
+	if manager != nil {
+		t.Fatal("New returned a manager for an invalid policy")
+	}
+	if !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("New error = %v, want it to wrap ErrInvalidConfig", err)
+	}
+	if !strings.Contains(err.Error(), "multiplier 0.5") {
+		t.Errorf("New error = %q, want it to name the offending field", err)
+	}
+
+	// Each rejection reaches the caller through New, not just Validate.
+	for _, policy := range []Backoff{
+		{Initial: 10 * time.Minute, Max: time.Minute, Multiplier: 2},
+		{Initial: -time.Second},
+		{Jitter: 1},
+	} {
+		cfg := Config{Store: newTestStore(t), Provider: &providerStub{}, Backoff: policy}
+		if _, err := New(cfg); !errors.Is(err, ErrInvalidConfig) {
+			t.Errorf("New with Backoff%+v = %v, want it to wrap ErrInvalidConfig", policy, err)
+		}
+	}
+
+	// A policy the caller set is honoured as given, and a valid one passes.
+	manager = testManager(t, newTestStore(t), &providerStub{}, nil)
+	if manager.backoff.Initial != time.Second || manager.backoff.Max != time.Minute {
+		t.Errorf("backoff = %+v, want the policy the test supplied", manager.backoff)
+	}
+}
+
 func TestNewRequiresDependencies(t *testing.T) {
 	if _, err := New(Config{Provider: &providerStub{}}); !errors.Is(err, ErrNoStore) {
 		t.Errorf("New without a store = %v, want ErrNoStore", err)

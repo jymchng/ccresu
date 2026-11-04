@@ -77,6 +77,9 @@ func TestClassify(t *testing.T) {
 		{"deadline", context.DeadlineExceeded, ClassRetryable},
 		{"net error", &net.DNSError{Err: "failure", Name: "example.com"}, ClassRetryable},
 		{"path error", &fs.PathError{Op: "run", Path: "/usr/bin/claude", Err: errors.New("busy")}, ClassRetryable},
+		// The three cases above are the transient shapes that used to have
+		// their own branches in Classify. The retryable fallthrough now
+		// classifies them, so they must keep landing there.
 		{"generic", errors.New("something odd happened"), ClassRetryable},
 	}
 	for _, tc := range cases {

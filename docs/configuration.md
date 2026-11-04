@@ -148,6 +148,13 @@ detector:
 | `health_check_interval` | `10s` | Liveness polling of a running attempt. |
 | `max_concurrent_recoveries` | `3` | Parallel resumes. |
 
+These five retry-policy values are validated, never silently clamped: a
+`multiplier` below 1, a `jitter` outside `[0,1)`, a negative delay, or a
+`max_delay` shorter than `initial_delay` makes `config validate` fail and the
+daemon refuse to start. The same rules apply to the policy struct the recovery
+manager is constructed with, so a caller that builds a `Backoff` in code gets the
+error rather than a quietly repaired schedule.
+
 ### `telegram`
 
 See [telegram.md](telegram.md). Keys: `enabled` (`false`), `bot_token`, `chat_id`,

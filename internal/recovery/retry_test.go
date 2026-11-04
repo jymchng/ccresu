@@ -1,6 +1,8 @@
 package recovery
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -63,7 +65,10 @@ func TestBackoffZeroValueUsesDefaults(t *testing.T) {
 	}
 }
 
-func TestBackoffWithDefaultsRepairsWildValues(t *testing.T) {
+func TestBackoffWithDefaultsIsAUseTimeFloor(t *testing.T) {
+	// withDefaults still produces something usable from nonsense, so Base and
+	// Delay stay total for a caller that never went through New. That is a
+	// fallback, not validation: Validate rejects these policies first.
 	b := Backoff{Initial: 10 * time.Minute, Max: time.Minute, Multiplier: 0.2, Jitter: -3}
 	fixed := b.withDefaults()
 	if fixed.Max != fixed.Initial {
@@ -78,7 +83,14 @@ func TestBackoffWithDefaultsRepairsWildValues(t *testing.T) {
 
 	high := Backoff{Jitter: 4}.withDefaults()
 	if high.Jitter != 1 {
-		t.Errorf("Jitter = %g, want it clamped to 1", high.Jitter)
+		t.Errorf("Jitter = %g, want it pinned to 1", high.Jitter)
+	}
+
+	// The floor never invents a value for a field the caller set.
+	explicit := Backoff{Initial: 5 * time.Second, Max: 2 * time.Minute, Multiplier: 3, Jitter: 0.4}.withDefaults()
+	if explicit.Initial != 5*time.Second || explicit.Max != 2*time.Minute ||
+		explicit.Multiplier != 3 || explicit.Jitter != 0.4 {
+		t.Errorf("withDefaults(%+v) = %+v, want the supplied values untouched", explicit, explicit)
 	}
 }
 
@@ -95,18 +107,20 @@ func TestBackoffDelayJitterStaysWithinBounds(t *testing.T) {
 		t.Errorf("Delay(1) at the top of the jitter = %s, want it above the base and below the jittered cap", got)
 	}
 
-	// A huge jitter at the floor is clamped to half the initial delay.
-	crooked := Backoff{Initial: 30 * time.Second, Max: 15 * time.Minute, Multiplier: 2, Jitter: 1,
-		Rand: func() float64 { return 0 }}
-	if got := crooked.Delay(1); got != 15*time.Second {
-		t.Errorf("Delay(1) at the clamp = %s, want 15s", got)
-	}
-
-	// The cap applies after jitter.
+	// The cap applies after jitter, and needs no clamp: base never exceeds Max,
+	// so the jittered wait never exceeds Max*(1+Jitter).
 	top := Backoff{Initial: 30 * time.Second, Max: 15 * time.Minute, Multiplier: 2, Jitter: 1,
 		Rand: func() float64 { return 1 }}
 	if got, limit := top.Delay(9), 30*time.Minute; got != limit {
 		t.Errorf("Delay(9) = %s, want the jittered cap %s", got, limit)
+	}
+
+	// At the bottom of the jitter the wait is base*(1-Jitter) exactly; the old
+	// half-the-initial-delay clamp is gone, so no hidden floor distorts it.
+	bottom := Backoff{Initial: 30 * time.Second, Max: 15 * time.Minute, Multiplier: 2, Jitter: 0.9,
+		Rand: func() float64 { return 0 }}
+	if got, want := bottom.Delay(1), time.Duration(float64(30*time.Second)*0.1); got != want {
+		t.Errorf("Delay(1) at the bottom of a wide jitter = %s, want %s", got, want)
 	}
 }
 
@@ -163,15 +177,112 @@ func TestBackoffValidateAcceptsUsablePolicies(t *testing.T) {
 		{},
 		DefaultBackoff(),
 		{Initial: time.Second, Max: time.Second, Multiplier: 1, Jitter: 0},
+		// Only the fields the caller set are checked; an unset Max takes the
+		// documented 15m cap, which comfortably covers a 30s floor.
+		{Initial: 30 * time.Second},
+		{Jitter: 0.5},
 	}
 	for _, policy := range policies {
 		if err := policy.Validate(); err != nil {
 			t.Errorf("Validate(%+v) = %v, want nil", policy, err)
 		}
 	}
-	// withDefaults repairs every field, so Validate can only accept.
-	if err := (Backoff{Initial: -1, Jitter: 9}).Validate(); err != nil {
-		t.Errorf("Validate must repair wild values, got %v", err)
+}
+
+func TestBackoffValidateRejectsMisconfiguration(t *testing.T) {
+	cases := []struct {
+		name   string
+		policy Backoff
+		want   string
+	}{
+		{
+			name:   "negative initial delay",
+			policy: Backoff{Initial: -time.Second},
+			want:   "initial delay must not be negative",
+		},
+		{
+			name:   "negative max delay",
+			policy: Backoff{Max: -time.Second},
+			want:   "max delay must not be negative",
+		},
+		{
+			name:   "max shorter than initial",
+			policy: Backoff{Initial: 10 * time.Minute, Max: time.Minute},
+			want:   "max delay 1m0s is shorter than the initial delay 10m0s",
+		},
+		{
+			name:   "max unset but smaller than an explicit initial",
+			policy: Backoff{Initial: DefaultMaxDelay + time.Minute},
+			want:   "shorter than the initial delay",
+		},
+		{
+			name:   "multiplier below one",
+			policy: Backoff{Multiplier: 0.5},
+			want:   "multiplier 0.5 must be at least 1",
+		},
+		{
+			name:   "negative multiplier",
+			policy: Backoff{Multiplier: -2},
+			want:   "multiplier -2 must be at least 1",
+		},
+		{
+			name:   "negative jitter",
+			policy: Backoff{Jitter: -0.1},
+			want:   "jitter -0.1 must be within [0,1)",
+		},
+		{
+			name:   "jitter of one",
+			policy: Backoff{Jitter: 1},
+			want:   "jitter 1 must be within [0,1)",
+		},
+		{
+			name:   "jitter above one",
+			policy: Backoff{Jitter: 4},
+			want:   "jitter 4 must be within [0,1)",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.policy.Validate()
+			if err == nil {
+				t.Fatalf("Validate(%+v) = nil, want a rejection", tc.policy)
+			}
+			if !errors.Is(err, ErrInvalidConfig) {
+				t.Errorf("Validate error = %v, want it to wrap ErrInvalidConfig", err)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("Validate error = %q, want it to mention %q", err, tc.want)
+			}
+		})
+	}
+
+	// A misconfigured policy is never repaired into acceptance: the same object
+	// that withDefaults would fix is still rejected on the way in.
+	wild := Backoff{Initial: 10 * time.Minute, Max: time.Minute, Multiplier: 0.2, Jitter: -3}
+	if err := wild.Validate(); err == nil {
+		t.Error("Validate must reject a policy that defaulting would otherwise repair")
+	}
+}
+
+func TestBackoffDelayNeverNegativeForExtremeRand(t *testing.T) {
+	// withDefaults pins Jitter into [0,1], which is what keeps the wait from
+	// going negative; no branch in Delay has to paper over it.
+	for _, jitter := range []float64{-5, 0, 0.15, 1, 9} {
+		for _, r := range []float64{0, 0.5, 1} {
+			b := Backoff{Initial: time.Second, Max: time.Minute, Multiplier: 2, Jitter: jitter,
+				Rand: func() float64 { return r }}
+			for attempt := 1; attempt <= 4; attempt++ {
+				delay := b.Delay(attempt)
+				if delay < 0 {
+					t.Errorf("Delay(%d) with jitter %g, rand %g = %s, want a non-negative wait",
+						attempt, jitter, r, delay)
+				}
+				if limit := time.Duration(float64(time.Minute) * (1 + min(max(jitter, 0), 1))); delay > limit {
+					t.Errorf("Delay(%d) with jitter %g, rand %g = %s, want at most %s",
+						attempt, jitter, r, delay, limit)
+				}
+			}
+		}
 	}
 }
 
