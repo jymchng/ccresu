@@ -5,12 +5,20 @@ name: Deploy website
 # The site is a static export (web/next.config.ts sets output: "export" and
 # basePath "/ccresu"), so Pages only ever serves files produced by
 # `npm run build` — no server rendering, no secrets, nothing dynamic.
+#
+# There is deliberately NO `paths:` filter here. This workflow first shipped
+# with `paths: ["web/**", ".github/workflows/deploy-website.yml"]` and, in the
+# push that introduced it, GitHub created no run at all (`gh api
+# repos/.../actions/workflows/<id>/runs` returned total_count 0) even though
+# Pages was already enabled with build_type "workflow". A trigger that can
+# silently never fire is worse than a redundant two-minute build, so every push
+# to the production branch now publishes: the job runs the same lint, type
+# check, test and export gates as CI, so a broken site is still never
+# published, and a docs-only or README-only change refreshes the site too.
 on:
   push:
     branches: [main]
-    paths:
-      - "web/**"
-      - ".github/workflows/deploy-website.yml"
+  # Manual re-publish (e.g. after a transient Pages outage).
   workflow_dispatch:
 
 permissions:
@@ -23,9 +31,18 @@ concurrency:
 jobs:
   build:
     name: Build the static export
-    # Only the production branch may publish, including via manual dispatch.
+    # Only the production branch may publish, including via manual dispatch
+    # from another ref.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    # configure-pages reads the Pages site configuration through the API, which
+    # needs pages:write even in the build job; the token is short-lived and the
+    # job only uploads an artifact. deploy keeps its own identical grant so the
+    # two jobs do not share credentials.
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     defaults:
       run:
         working-directory: web
