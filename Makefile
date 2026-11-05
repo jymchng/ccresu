@@ -80,6 +80,14 @@ cover-check: cover ## Fail when total coverage is below $(COVERAGE_MIN)%
 	awk -v t="$$total" -v m="$(COVERAGE_MIN)" 'BEGIN { exit (t+0 >= m+0) ? 0 : 1 }' \
 		|| { echo "coverage gate failed"; exit 1; }
 
+.PHONY: shellcheck
+shellcheck: ## Lint the shell scripts exactly the way CI does
+	@command -v shellcheck >/dev/null 2>&1 || { \
+		echo "shellcheck is not installed; the CI 'Shell scripts' job runs it, so install it (apt install shellcheck) to check locally" >&2; \
+		exit 1; \
+	}
+	shellcheck -x scripts/*.sh tests/scripts/*.sh
+
 .PHONY: web-install
 web-install: ## Install website dependencies from the lockfile
 	cd web && npm ci
@@ -101,7 +109,7 @@ web-build: ## Production-build the website
 	cd web && npm run build
 
 .PHONY: ci
-ci: fmt-check vet test race cover-check ## Run the full Go quality gate
+ci: fmt-check vet test race cover-check shellcheck ## Run the full Go quality gate
 
 .PHONY: clean
 clean: ## Remove build and coverage artifacts

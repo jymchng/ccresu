@@ -182,7 +182,10 @@ JSON
 "$ccresu" config init >/dev/null
 
 # ---------------------------------------------------------------- pass one
-printf '\n== pass 1: discover, opt in, then `ccresu recover` each session\n'
+# Double quotes with escaped backticks: the backticks here are literal text in a
+# log banner, not command substitution, but a single-quoted format string reads
+# as one to ShellCheck (SC2016) and would fail the script-lint step in CI.
+printf "\n== pass 1: discover, opt in, then \`ccresu recover\` each session\n"
 # The first pass only discovers and detects: recovery is switched off for this
 # single invocation so the daemon records the usage limit and parks the sessions
 # instead of resuming them itself. `ccresu recover` is then the thing that runs
