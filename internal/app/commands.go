@@ -202,7 +202,19 @@ func (a *App) displayLocation(rt *Runtime) *time.Location {
 
 // cmdSessions lists discovered sessions.
 func (a *App) cmdSessions(ctx context.Context, args []string) error {
-	fs := a.flags("sessions", "sessions [--all] [--state STATE]... [--limit N]")
+	// The subcommands are dispatched before the listing because `sessions` is
+	// also the listing: `ccresu sessions status <id>` must not be read as a
+	// filter on a session named "status".
+	if name, rest, ok := sessionsSubcommand(args); ok {
+		switch name {
+		case subcommandStatus:
+			return a.inspectSession(ctx, "sessions status", rest)
+		case subcommandDelete:
+			return a.cmdSessionsDelete(ctx, rest)
+		}
+	}
+
+	fs := a.flags("sessions", sessionsUsage)
 	all := fs.Bool("all", false, "include disabled and settled sessions")
 	limit := fs.Int("limit", 0, "maximum sessions to list (0 means all)")
 	var states stringList
@@ -369,12 +381,24 @@ func sessionReports(sessions []storage.Session, bySession map[string]storage.Sch
 }
 
 // cmdInspect prints everything known about one session.
+//
+// It is the historical spelling of `ccresu sessions status <id>`; both call
+// inspectSession, so the two can never drift into showing different fields.
 func (a *App) cmdInspect(ctx context.Context, args []string) error {
-	fs := a.flags("inspect", "inspect <session-id>")
+	return a.inspectSession(ctx, "inspect", args)
+}
+
+// inspectSession prints everything ccresu knows about one session.
+//
+// command names the invocation in usage errors and refusals, so a typo in
+// `sessions status` is reported as a `sessions status` problem rather than as an
+// `inspect` one.
+func (a *App) inspectSession(ctx context.Context, command string, args []string) error {
+	fs := a.flags(command, command+" <session-id>")
 	if err := a.parseFlags(fs, args); err != nil {
 		return err
 	}
-	id, err := a.sessionArg(fs, "inspect")
+	id, err := a.sessionArg(fs, command)
 	if err != nil {
 		return err
 	}
@@ -507,6 +531,166 @@ func (a *App) cmdInspect(ctx context.Context, args []string) error {
 		}
 		a.table(a.stdout, []string{"WHEN", "TRANSITION", "REASON"}, rows)
 	}
+	return nil
+}
+
+// The subcommands of `ccresu sessions`.
+const (
+	subcommandStatus = "status"
+	subcommandDelete = "delete"
+)
+
+// sessionsUsage is the documented form of the sessions command.
+const sessionsUsage = "sessions [--all] [--state STATE]... [--limit N] | sessions status <session-id> | sessions delete <session-id>"
+
+// sessionsSubcommand finds the subcommand in a `ccresu sessions` argument list.
+//
+// The scan skips flags, and the values of the flags that take one, so all of
+//
+//	ccresu sessions delete <id>
+//	ccresu sessions --json delete <id>
+//	ccresu sessions --limit 5 status <id>
+//	ccresu --json sessions delete <id>
+//
+// reach the same handler. The first positional word is the only candidate: a
+// session id that happens to be spelled "status" is still accepted by
+// `sessions delete status`, because by then the subcommand has been found.
+func sessionsSubcommand(args []string) (string, []string, bool) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--":
+			// Everything after -- is positional, and the first of those is the
+			// only thing that can be a subcommand.
+			if i+1 < len(args) && isSessionsSubcommand(args[i+1]) {
+				return args[i+1], withoutWord(args, i+1), true
+			}
+			return "", nil, false
+		case strings.HasPrefix(arg, "-"):
+			if sessionsFlagTakesValue(arg) {
+				i++
+			}
+			continue
+		case isSessionsSubcommand(arg):
+			return arg, withoutWord(args, i), true
+		default:
+			return "", nil, false
+		}
+	}
+	return "", nil, false
+}
+
+// withoutWord returns args with the element at index removed.
+//
+// The flags written before the subcommand are kept, because they are still the
+// caller's instructions: `ccresu sessions --json status <id>` must produce JSON,
+// and dropping everything before the word is how that silently stops working.
+func withoutWord(args []string, index int) []string {
+	rest := make([]string, 0, len(args)-1)
+	rest = append(rest, args[:index]...)
+	return append(rest, args[index+1:]...)
+}
+
+// isSessionsSubcommand reports whether word names a `ccresu sessions` subcommand.
+func isSessionsSubcommand(word string) bool {
+	return word == subcommandStatus || word == subcommandDelete
+}
+
+// sessionsFlagTakesValue reports whether a flag argument consumes the next
+// argument. Flags written as --name=value carry their own value and must not be
+// counted here.
+func sessionsFlagTakesValue(arg string) bool {
+	if strings.Contains(arg, "=") {
+		return false
+	}
+	switch strings.TrimLeft(arg, "-") {
+	case "limit", "state", "config", "c":
+		return true
+	default:
+		return false
+	}
+}
+
+// cmdSessionsDelete removes one session from ccresu.
+//
+// It deletes ccresu's records, never the conversation: nothing under ~/.claude is
+// read, written or removed. A tombstone keeps the session gone when discovery
+// would otherwise upsert it straight back, and `ccresu enable <id>` removes the
+// tombstone when the operator changes their mind.
+func (a *App) cmdSessionsDelete(ctx context.Context, args []string) error {
+	const command = "sessions delete"
+	fs := a.flags(command, command+" <session-id>")
+	if err := a.parseFlags(fs, args); err != nil {
+		return err
+	}
+	id, err := a.sessionArg(fs, command)
+	if err != nil {
+		return err
+	}
+
+	rt, release, err := a.openRuntime(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	deleted, counts, err := rt.Store.ForgetSession(ctx, id)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			// Already forgotten is a success: the operator asked for the session
+			// to be gone, and it is. A missing session that was never deleted is
+			// still a not-found, so a typo cannot look like a clean delete.
+			if tombstone, tombErr := rt.Store.GetDeletedSession(ctx, id); tombErr == nil {
+				return a.reportAlreadyDeleted(id, tombstone)
+			}
+		}
+		return fmt.Errorf("%s %s: %w", command, id, err)
+	}
+
+	if a.json {
+		return a.writeJSON(a.stdout, map[string]any{
+			"session_id":      id,
+			"deleted":         true,
+			"state":           string(deleted.State),
+			"project":         deleted.ProjectPath,
+			"transcript":      deleted.TranscriptPath,
+			"deleted_at":      deleted.DeletedAt.UTC().Format(time.RFC3339Nano),
+			"removed":         counts,
+			"restore":         "ccresu enable " + id,
+			"transcript_kept": true,
+		})
+	}
+
+	a.field(a.stdout, "session", id)
+	a.field(a.stdout, "state at deletion", deleted.State)
+	a.field(a.stdout, "project", emptyDash(deleted.ProjectPath))
+	a.field(a.stdout, "transcript", emptyDash(deleted.TranscriptPath))
+	a.field(a.stdout, "attempts removed", counts.Attempts)
+	a.field(a.stdout, "transitions removed", counts.Transitions)
+	a.field(a.stdout, "usage limits removed", counts.UsageLimits)
+	a.field(a.stdout, "notifications removed", counts.Notifications)
+	a.field(a.stdout, "pending wait", yesNo(counts.Scheduled))
+	a.field(a.stdout, "conversation", "kept: nothing under ~/.claude is touched")
+	fmt.Fprintf(a.stdout, "session %s: deleted; discovery will skip it (undo with 'ccresu enable %s')\n", id, id)
+	return nil
+}
+
+// reportAlreadyDeleted is the idempotent success: the session is already gone,
+// so the operator gets the same answer as a fresh delete rather than an error
+// they cannot act on.
+func (a *App) reportAlreadyDeleted(id string, tombstone storage.DeletedSession) error {
+	if a.json {
+		return a.writeJSON(a.stdout, map[string]any{
+			"session_id": id,
+			"deleted":    true,
+			"already":    true,
+			"state":      string(tombstone.State),
+			"deleted_at": tombstone.DeletedAt.UTC().Format(time.RFC3339Nano),
+			"restore":    "ccresu enable " + id,
+		})
+	}
+	fmt.Fprintf(a.stdout, "session %s: already deleted at %s; nothing to do (undo with 'ccresu enable %s')\n",
+		id, formatTime(tombstone.DeletedAt, time.UTC), id)
 	return nil
 }
 
@@ -864,14 +1048,41 @@ func (a *App) setEnabled(ctx context.Context, args []string, enabled bool) error
 	}
 	defer release()
 
+	// `enable` is also the undo for `sessions delete`: a deleted session has no
+	// row left to enable, so the tombstone is removed and the row is rebuilt
+	// before enable runs. Without this, the only documented escape from a delete
+	// would be a command that answers "not found".
+	var restored bool
+	if enabled && !existsSession(ctx, rt, id) {
+		if _, restoreErr := rt.Store.RestoreSession(ctx, id); restoreErr == nil {
+			restored = true
+		} else if !errors.Is(restoreErr, storage.ErrNotFound) {
+			return fmt.Errorf("%s %s: %w", command, id, restoreErr)
+		}
+	}
+
 	if err := rt.Store.SetSessionEnabled(ctx, id, enabled); err != nil {
 		return fmt.Errorf("%s %s: %w", command, id, err)
 	}
 	if a.json {
-		return a.writeJSON(a.stdout, map[string]any{"session_id": id, "enabled": enabled})
+		return a.writeJSON(a.stdout, map[string]any{
+			"session_id": id,
+			"enabled":    enabled,
+			"restored":   restored,
+		})
 	}
 	fmt.Fprintf(a.stdout, "session %s: enabled=%s\n", id, yesNo(enabled))
+	if restored {
+		fmt.Fprintf(a.stdout, "session %s: restored after a delete; discovery will refresh it\n", id)
+	}
 	return nil
+}
+
+// existsSession reports whether the store still knows the session, without
+// turning "missing" into an error the caller has to interpret.
+func existsSession(ctx context.Context, rt *Runtime, id string) bool {
+	_, err := rt.Store.GetSession(ctx, id)
+	return err == nil
 }
 
 // stringList is a repeatable string flag.

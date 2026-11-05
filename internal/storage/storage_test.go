@@ -271,18 +271,18 @@ func TestMigrateFromEmptyAndRollback(t *testing.T) {
 		return found
 	}
 
-	for _, want := range []string{"sessions", "usage_limits", "recovery_attempts", "state_transitions", "notifications", "settings", "schedules", "schema_migrations"} {
+	for _, want := range []string{"sessions", "usage_limits", "recovery_attempts", "state_transitions", "notifications", "settings", "schedules", "schema_migrations", "deleted_sessions"} {
 		if !tables()[want] {
 			t.Fatalf("table %q missing after migrate: %v", want, tables())
 		}
 	}
 
-	// The newest migration adds the retry instant, so it is present now.
+	// Every migration's schema effect is present now.
 	if !sessionColumns(ctx, t, store)["retry_at"] {
 		t.Fatalf("next_attempt_at missing after migrate: %v", sessionColumns(ctx, t, store))
 	}
 
-	// Roll back the newest version: it is undone, one version at a time.
+	// Roll back the newest version: the delete tombstones go with it.
 	// Asserting on the version the runner reports keeps this test honest as
 	// migrations are added.
 	reverted, err := store.Rollback(ctx, latest-1)
@@ -294,6 +294,15 @@ func TestMigrateFromEmptyAndRollback(t *testing.T) {
 	}
 	if version, err := store.Version(ctx); err != nil || version != latest-1 {
 		t.Fatalf("Version after rollback = %d, %v", version, err)
+	}
+	if tables()["deleted_sessions"] {
+		t.Fatalf("deleted_sessions survived its rollback: %v", tables())
+	}
+
+	// Roll back the retry instant: its column disappears and the tombstones that
+	// the previous step already removed stay removed.
+	if _, err := store.Rollback(ctx, 3); err != nil {
+		t.Fatalf("rollback to 3: %v", err)
 	}
 	if sessionColumns(ctx, t, store)["retry_at"] {
 		t.Fatalf("next_attempt_at survived its rollback: %v", sessionColumns(ctx, t, store))
@@ -329,7 +338,7 @@ func TestMigrateFromEmptyAndRollback(t *testing.T) {
 		t.Fatalf("rollback to 0 reverted %v, want %d versions", reverted, remainingVersion)
 	}
 	remaining := tables()
-	for _, gone := range []string{"sessions", "usage_limits", "recovery_attempts", "state_transitions", "notifications", "settings", "schedules"} {
+	for _, gone := range []string{"sessions", "usage_limits", "recovery_attempts", "state_transitions", "notifications", "settings", "schedules", "deleted_sessions"} {
 		if remaining[gone] {
 			t.Fatalf("table %q survived full rollback: %v", gone, remaining)
 		}
@@ -383,7 +392,11 @@ func TestRollbackRejectsInvalidTargets(t *testing.T) {
 	if _, err := store.Rollback(ctx, 99); !errors.Is(err, storage.ErrInvalid) {
 		t.Fatalf("target beyond latest = %v", err)
 	}
-	if _, err := store.Rollback(ctx, 5); !errors.Is(err, storage.ErrInvalid) {
+	latest, err := store.Version(ctx)
+	if err != nil {
+		t.Fatalf("Version: %v", err)
+	}
+	if _, err := store.Rollback(ctx, latest+1); !errors.Is(err, storage.ErrInvalid) {
 		t.Fatalf("roll forward = %v", err)
 	}
 	var nilStore *storage.Store

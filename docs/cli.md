@@ -30,11 +30,13 @@ Exit codes: `0` ok, `1` failure, `2` usage, `3` not found, `4` not eligible,
 | `daemon` | `daemon [--once] [--interval DURATION]` | Runs the watchdog loop until interrupted. `--once` performs a single reconcile pass and exits; `--interval` overrides `claude.discovery_interval`. |
 | `status` | `status` | Summarises session, schedule and notification state. Its `sessions` line is the **total** row count, and its `listing` line says how many of those a bare `sessions` shows. |
 | `sessions` | `sessions [--all] [--state STATE]... [--limit N]` | Lists discovered sessions. A bare listing is **enabled only** and says so in the footer; `--all` includes disabled and settled ones; `--state` is repeatable; `--limit 0` means all. |
-| `inspect` | `inspect <session-id>` | Everything known about one session. |
+| `sessions status` | `sessions status <session-id>` | Everything known about one session: state, paths, the next attempt, the latest usage limit, the latest attempt, any pending wait and recent transitions. Identical to `inspect`, which is kept as an alias. |
+| `sessions delete` | `sessions delete <session-id>` | Removes the session from ccresu: the row, its attempts, transitions, usage limits, pending wait and notifications. Nothing under `~/.claude` is touched — the conversation stays where it is. A tombstone keeps discovery from re-creating the session; `ccresu enable <id>` undoes it. Deleting twice is a success, not an error. |
+| `inspect` | `inspect <session-id>` | Everything known about one session. The same code as `sessions status`. |
 | `recover` | `recover <session-id> [--message TEXT] [--force]` | Resumes one session now, optionally with a different continuation message. `--force` tries even when the attempt budget is spent. |
 | `retry` | `retry <session-id>` | Retries a session whose attempt budget is spent. |
 | `reset` | `reset <session-id>` | Clears a `PERMANENTLY_FAILED` session: the stored error goes away and the session becomes `DISABLED`. It never resumes anything and never refunds an attempt. |
-| `enable` | `enable <session-id>` | Allows ccresu to recover a session. |
+| `enable` | `enable <session-id>` | Allows ccresu to recover a session. It is also the undo for `sessions delete`: a deleted session is restored (tombstone removed, row re-created in `DISCOVERED`) before it is enabled. |
 | `disable` | `disable <session-id>` | Stops ccresu from recovering a session. |
 | `history` | `history <session-id> [--limit N]` | Attempts and state transitions (default `--limit 50`). |
 | `config` | `config init [PATH] [--force]` / `config validate [PATH]` / `config show` | Creates the configuration from the shipped example, validates a file, or prints the effective one. |
@@ -43,6 +45,52 @@ Exit codes: `0` ok, `1` failure, `2` usage, `3` not found, `4` not eligible,
 | `version` | `version` | Prints version and build metadata. |
 
 `ccresu --version` and `ccresu --help` work without a subcommand.
+
+### Removing a session
+
+`ccresu sessions delete <id>` forgets a session. It removes ccresu's own records
+— the row, its attempts, its state transitions, its usage limits, any pending
+reset wait and any queued notifications — and nothing else. The conversation is
+not touched: ccresu never deletes a file under `~/.claude`.
+
+Deleting a row alone would not last, because discovery reads the transcripts on
+disk and would simply upsert the session back on its next pass. The delete writes
+a tombstone, and discovery skips every id it names, so the session stays gone
+until you bring it back:
+
+```console
+$ ccresu sessions delete 3f9d1c07-1111-4222-8333-444455556666
+session:                3f9d1c07-1111-4222-8333-444455556666
+state at deletion:      PERMANENTLY_FAILED
+project:                /home/you/projects/demo
+transcript:             /home/you/.claude/projects/-home-you-projects-demo/3f9d1c07-...jsonl
+attempts removed:       3
+transitions removed:    7
+usage limits removed:   1
+notifications removed:  2
+pending wait:           yes
+conversation:           kept: nothing under ~/.claude is touched
+session 3f9d1c07-...: deleted; discovery will skip it (undo with 'ccresu enable 3f9d1c07-...')
+```
+
+Deleting the same session twice succeeds and says it was already deleted; a
+session ccresu has never seen is a not-found (exit 3), so a typo cannot look like
+a clean delete. The JSON form (`--json`) reports the same facts, including
+`"transcript_kept": true` and the `restore` command.
+
+If the session is running or waiting at the time, the process itself is not
+stopped: ccresu deletes its own bookkeeping, and a Claude Code process that is
+already running keeps running.
+
+To undo a delete, enable the session again. ccresu rebuilds the row from the
+tombstone in `DISCOVERED` state, enabled, and the next discovery pass refreshes
+it from the transcript:
+
+```console
+$ ccresu enable 3f9d1c07-1111-4222-8333-444455556666
+session 3f9d1c07-...: enabled=yes
+session 3f9d1c07-...: restored after a delete; discovery will refresh it
+```
 
 ## Common workflows
 
