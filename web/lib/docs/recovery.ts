@@ -77,6 +77,26 @@ export const recoveryDoc: DocPage = {
     },
     {
       kind: "h2",
+      text: "Proving it end to end",
+    },
+    {
+      kind: "p",
+      text: "This is not only asserted against fakes. `make e2e` runs `tests/scripts/background-resume-e2e.sh`, which builds the real binary and puts a stub `claude` on `PATH`. The stub keeps a background-agent marker, refuses the first `-p --resume` with the CLI's text above, clears the marker on `claude stop <id>`, and then returns a JSON result with the same `session_id` after growing the transcript. The run asserts that `ccresu recover <id>` exits 0 and ends `RESUMED` with the verification “proven: session id preserved and transcript grew”, that the stub saw exactly resume, stop, resume with byte-identical resume arguments, and that `ccresu history` still records the single resume command.",
+    },
+    {
+      kind: "table",
+      head: ["Binary", "`ccresu recover <id>`", "Stub saw", "Final state"],
+      rows: [
+        ["before the fix (`00692e3`)", "exits 1, reporting the refusal", "one resume, no stop", "`PERMANENTLY_FAILED`"],
+        ["with the fix", "exits 0, verification proven", "resume, stop, resume", "`RESUMED`"],
+      ],
+    },
+    {
+      kind: "p",
+      text: "The failing session in the same run is also the fixture for `ccresu reset`: `PERMANENTLY_FAILED` becomes `DISABLED`, the session's stored error is cleared, the attempt row and its reason are kept, a second `reset` is refused with exit 4, and `ccresu enable` leaves the session recoverable again.",
+    },
+    {
+      kind: "h2",
       text: "Verification",
     },
     {

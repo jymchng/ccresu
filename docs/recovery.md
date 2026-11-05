@@ -187,6 +187,31 @@ permanent resume failure: `ccresu retry <session-id>` for a fresh budget,
 Once a session has been stopped this way, the next resume is a normal resume
 again: the background agent no longer holds it, so there is no stop to issue.
 
+## Proving it end to end
+
+This is not only asserted against fakes. `make e2e` runs
+`tests/scripts/background-resume-e2e.sh`, which builds the real binary and puts a
+stub `claude` on `PATH`. The stub keeps a background-agent marker, refuses the
+first `-p --resume` with the CLI's text above, clears the marker on `claude stop
+<id>`, and then returns a JSON result with the same `session_id` after growing the
+transcript. The run asserts that `ccresu recover <id>` exits 0 and ends `RESUMED`
+with the verification "proven: session id preserved and transcript grew", that
+the stub saw exactly *resume, stop, resume* with byte-identical resume arguments,
+and that `ccresu history` still records the single resume command.
+
+The same script with `--pre-fix` is the contrast, and it is the reason the fix
+exists:
+
+| Binary | `ccresu recover <id>` | Stub saw | Final state |
+| --- | --- | --- | --- |
+| before the fix (`00692e3`) | exits 1, reporting the refusal | one resume, no stop | `PERMANENTLY_FAILED` |
+| with the fix | exits 0, verification proven | resume, stop, resume | `RESUMED` |
+
+The failing session in the same run is also the fixture for `ccresu reset`:
+`PERMANENTLY_FAILED` becomes `DISABLED`, the session's stored error is cleared,
+the attempt row and its reason are kept, a second `reset` is refused with exit 4,
+and `ccresu enable` leaves the session recoverable again.
+
 ## Verification: proof, not optimism
 
 A resume that returns exit code 0 has not necessarily continued the

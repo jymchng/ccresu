@@ -852,10 +852,20 @@ make e2e             # stop-then-resume and `reset` against a stub `claude` CLI
 
 `make e2e` runs `tests/scripts/background-resume-e2e.sh`: it builds the real
 binary, puts a stub `claude` on `PATH` that refuses the first resume because the
-session is still attached to a background agent, and then asserts that `ccresu`
-stops the session, repeats the identical resume, verifies that the conversation
-grew, and reports `RESUMED` — followed by `ccresu reset` on a session that ended
-in `PERMANENTLY_FAILED`.
+session is still attached to a background agent, and then asserts that `ccresu
+recover` stops the session, repeats the identical resume, verifies that the
+conversation grew, and reports `RESUMED` — followed by `ccresu reset` on a
+session that ended in `PERMANENTLY_FAILED`.
+
+The same script with `--pre-fix` runs the identical scenario against a pre-fix
+checkout and expects the old outcome: `PERMANENTLY_FAILED` after one refused
+resume and no `stop` call. That contrast is the regression test for the bug:
+
+```bash
+git worktree add /tmp/ccresu-prefix 00692e3
+(cd /tmp/ccresu-prefix && go build -o /tmp/ccresu-prefix/ccresu ./cmd/ccresu)
+tests/scripts/background-resume-e2e.sh --pre-fix /tmp/ccresu-prefix/ccresu
+```
 
 ## License
 

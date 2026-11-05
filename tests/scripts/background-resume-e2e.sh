@@ -17,9 +17,26 @@
 #                        so it must end PERMANENTLY_FAILED, which is then the
 #                        fixture for `ccresu reset`.
 #
-# Usage: tests/scripts/background-resume-e2e.sh [path-to-ccresu]
-# With no argument the binary is built into the scratch directory.
+# Usage: tests/scripts/background-resume-e2e.sh [--pre-fix] [path-to-ccresu]
+# With no path the binary is built into the scratch directory.
+#
+# `--pre-fix` runs the same scenario but expects the old outcome: the binary from
+# before the fix leaves A in PERMANENTLY_FAILED after one resume and no stop.
+# That is the reproduce-then-fix contrast. Point it at a pre-fix checkout, e.g.
+#
+#   git worktree add /tmp/ccresu-prefix 00692e3
+#   (cd /tmp/ccresu-prefix && go build -o /tmp/ccresu-prefix/ccresu ./cmd/ccresu)
+#   tests/scripts/background-resume-e2e.sh --pre-fix /tmp/ccresu-prefix/ccresu
 set -euo pipefail
+
+mode=fix
+ccresu=""
+for arg in "$@"; do
+	case "$arg" in
+	--pre-fix) mode=prefix ;;
+	*) ccresu=$arg ;;
+	esac
+done
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 work=$(mktemp -d)
@@ -32,9 +49,7 @@ state="$work/stub"
 mkdir -p "$stub_dir" "$state"
 export STUB_STATE="$state"
 
-if [ $# -ge 1 ]; then
-	ccresu=$1
-else
+if [ -z "$ccresu" ]; then
 	ccresu="$work/ccresu"
 	(cd "$repo_root" && go build -o "$ccresu" ./cmd/ccresu)
 fi
@@ -45,6 +60,14 @@ check() { # check <description> <actual> <expected>
 		printf 'ok    %s\n' "$1"
 	else
 		printf 'FAIL  %s\n      got:  %s\n      want: %s\n' "$1" "$2" "$3"
+		fail=1
+	fi
+}
+check_nonzero() { # check_nonzero <description> <exit-code>
+	if [ "$2" -ne 0 ]; then
+		printf 'ok    %s (exit %s)\n' "$1" "$2"
+	else
+		printf 'FAIL  %s\n      exit code was 0, expected a refusal\n' "$1"
 		fail=1
 	fi
 }
@@ -156,44 +179,64 @@ cat >"$state/agents.json" <<JSON
 ]
 JSON
 
-configure() {
-	"$ccresu" config init >/dev/null
-	# The verifier polls until the transcript grows; the stub grows it at once.
-	CCRESU_RECOVERY__VERIFICATION_TIMEOUT=20s "$ccresu" config validate >/dev/null
-}
+"$ccresu" config init >/dev/null
 
 # ---------------------------------------------------------------- pass one
-configure
-printf '\n== pass 1: discover, opt in, then one reconcile pass against the stub CLI\n'
-# Discovery alone only records the sessions; a session is recovered after the
-# operator has enabled it. Two passes, exactly as the tutorial describes.
-CCRESU_RECOVERY__VERIFICATION_TIMEOUT=20s "$ccresu" daemon --once || true
+printf '\n== pass 1: discover, opt in, then `ccresu recover` each session\n'
+# The first pass only discovers and detects: recovery is switched off for this
+# single invocation so the daemon records the usage limit and parks the sessions
+# instead of resuming them itself. `ccresu recover` is then the thing that runs
+# the stop-then-resume sequence.
+CCRESU_RECOVERY__ENABLED=false "$ccresu" daemon --once || true
 "$ccresu" enable "$session_a" >/dev/null
 "$ccresu" enable "$session_b" >/dev/null
-CCRESU_RECOVERY__VERIFICATION_TIMEOUT=20s "$ccresu" daemon --once || true
+CCRESU_RECOVERY__ENABLED=false "$ccresu" daemon --once || true
 
-state_a=$(CCRESU_RECOVERY__VERIFICATION_TIMEOUT=20s "$ccresu" inspect "$session_a" 2>&1)
-check "session A ends RESUMED" "$(printf '%s' "$state_a" | sed -n 's/^state:[[:space:]]*\(.*\)$/\1/p' | head -1)" "RESUMED"
-state_b=$(CCRESU_RECOVERY__VERIFICATION_TIMEOUT=20s "$ccresu" inspect "$session_b" 2>&1)
-check "session B ends PERMANENTLY_FAILED" "$(printf '%s' "$state_b" | sed -n 's/^state:[[:space:]]*\(.*\)$/\1/p' | head -1)" "PERMANENTLY_FAILED"
+set +e
+recover_a=$(CCRESU_RECOVERY__VERIFICATION_TIMEOUT=20s "$ccresu" recover "$session_a" 2>&1)
+recover_a_code=$?
+recover_b=$(CCRESU_RECOVERY__VERIFICATION_TIMEOUT=20s "$ccresu" recover "$session_b" 2>&1)
+recover_b_code=$?
+set -e
+printf -- '--- recover %s\n%s\n' "$session_a" "$recover_a"
+printf -- '--- recover %s\n%s\n' "$session_b" "$recover_b"
 
-history_a=$(CCRESU_RECOVERY__VERIFICATION_TIMEOUT=20s "$ccresu" history "$session_a" 2>&1)
-contains "history records the stop-then-resume success" "$history_a" "RESUMED"
-
-# The proof that the conversation continued, as ccresu itself recorded it: the
-# attempt row carries the resume command and both verification flags.
-attempt=$(CCRESU_RECOVERY__VERIFICATION_TIMEOUT=20s "$ccresu" --json history "$session_a" 2>&1)
-contains "the audit row keeps the one resume command" "$attempt" "claude -p --resume"
-contains "session id was preserved" "$attempt" '"SessionIDVerified": true'
-contains "the transcript grew" "$attempt" '"TranscriptGrew": true'
+inspect_a=$(CCRESU_RECOVERY__VERIFICATION_TIMEOUT=20s "$ccresu" inspect "$session_a" 2>&1)
+inspect_b=$(CCRESU_RECOVERY__VERIFICATION_TIMEOUT=20s "$ccresu" inspect "$session_b" 2>&1)
+state_field() { printf '%s' "$1" | sed -n 's/^state:[[:space:]]*\(.*\)$/\1/p' | head -1; }
 
 # ------------------------------------------------------------ the call log
 # Each line is CALL<US>arg<US>arg...; awk splits on that separator so a call can
 # be matched field by field instead of by a fragile regular expression.
 resume_calls=$(awk -F'\037' -v id="$session_a" '$2=="-p" && $3=="--resume" && $4==id' \
 	"$state/calls.log" | wc -l | tr -d ' ')
-check "the resume ran exactly twice for A" "$resume_calls" "2"
 stop_calls=$(awk -F'\037' -v id="$session_a" '$2=="stop" && $3==id' "$state/calls.log" | wc -l | tr -d ' ')
+
+if [ "$mode" = prefix ]; then
+	# The contrast: the pre-fix binary cannot get past the refusal.
+	check_nonzero "pre-fix: recover A is refused" "$recover_a_code"
+	check "pre-fix: A ends PERMANENTLY_FAILED" "$(state_field "$inspect_a")" "PERMANENTLY_FAILED"
+	check "pre-fix: the resume ran once" "$resume_calls" "1"
+	check "pre-fix: no stop was attempted" "$stop_calls" "0"
+	printf '\n== the stub claude call log (A only)\n'
+	awk -F'\037' -v id="$session_a" 'index($0, id)' "$state/calls.log" | sed 's/^CALL //'
+	printf '\n'
+	if [ "$fail" -ne 0 ]; then
+		printf 'FAILED: the pre-fix binary did not fail the way it was expected to\n'
+		exit 1
+	fi
+	printf 'PASSED: the pre-fix binary dies in PERMANENTLY_FAILED after one refused resume\n'
+	exit 0
+fi
+
+check "recover A exits 0" "$recover_a_code" "0"
+check "session A ends RESUMED" "$(state_field "$inspect_a")" "RESUMED"
+contains "recover A proves the conversation continued" "$recover_a" \
+	"proven: session id preserved and transcript grew"
+check_nonzero "recover B is refused" "$recover_b_code"
+check "session B ends PERMANENTLY_FAILED" "$(state_field "$inspect_b")" "PERMANENTLY_FAILED"
+
+check "the resume ran exactly twice for A" "$resume_calls" "2"
 check "one stop call cleared the background agent" "$stop_calls" "1"
 
 first_resume=$(awk -F'\037' -v id="$session_a" '$2=="-p" && $3=="--resume" && $4==id' "$state/calls.log" | sed -n '1p')
@@ -205,15 +248,25 @@ sequence=$(awk -F'\037' -v id="$session_a" 'index($0, id) { if ($2=="-p") print 
 	"$state/calls.log" | tr '\n' ' ')
 check "the calls run resume, stop, resume" "$(printf '%s' "$sequence" | sed 's/ *$//')" "-p stop -p"
 
+history_a=$(CCRESU_RECOVERY__VERIFICATION_TIMEOUT=20s "$ccresu" history "$session_a" 2>&1)
+contains "history records the stop-then-resume success" "$history_a" "RESUMED"
+
+# The proof that the conversation continued, as ccresu itself recorded it: the
+# attempt row carries the resume command and both verification flags.
+attempt=$(CCRESU_RECOVERY__VERIFICATION_TIMEOUT=20s "$ccresu" --json history "$session_a" 2>&1)
+contains "the audit row keeps the one resume command" "$attempt" "claude -p --resume"
+contains "session id was preserved" "$attempt" '"SessionIDVerified": true'
+contains "the transcript grew" "$attempt" '"TranscriptGrew": true'
+
 printf '\n== the stub claude call log (A only)\n'
-grep "$session_a" "$state/calls.log" | sed 's/\x1f/ /g' | sed 's/^CALL //'
+awk -F'\037' -v id="$session_a" 'index($0, id)' "$state/calls.log" | sed 's/^CALL //'
 
 # ---------------------------------------------------------------- reset flow
 printf '\n== pass 2: ccresu reset on the permanently failed session\n'
 reset_out=$(CCRESU_RECOVERY__VERIFICATION_TIMEOUT=20s "$ccresu" reset "$session_b" 2>&1)
 printf '%s\n' "$reset_out"
 after_reset=$(CCRESU_RECOVERY__VERIFICATION_TIMEOUT=20s "$ccresu" inspect "$session_b" 2>&1)
-check "reset moves B to DISABLED" "$(printf '%s' "$after_reset" | sed -n 's/^state:[[:space:]]*\(.*\)$/\1/p' | head -1)" "DISABLED"
+check "reset moves B to DISABLED" "$(state_field "$after_reset")" "DISABLED"
 # The session-level error is cleared; the attempt that failed keeps its reason,
 # because reset must not rewrite what happened.
 header=$(printf '%s' "$after_reset" | awk 'BEGIN { RS = "" } NR == 1')
