@@ -50,6 +50,45 @@ needs an interactive terminal ccresu deliberately never allocates, and
 never do. The message is limited to 8 KiB, must be non-empty, and the session id
 is validated before anything is executed, `claude stop` included.
 
+### Why the message is the last argument
+
+The prompt is a **positional** argument: no flag introduces it. Position is
+therefore the only thing that says which invocation it belongs to, and the
+documented form is `claude -p --resume <session-id> <prompt>` — the prompt comes
+after the session it is being said to. ccresu keeps it last, after the two flags
+that qualify the invocation, and builds the vector in exactly one place:
+
+```go
+// internal/claude/cli.go
+func ResumeArgs(sessionID, message string) []string {
+	return []string{"-p", "--resume", sessionID, "--output-format", "json", message}
+}
+```
+
+`TestResumeArgsExact` asserts that vector as a joined string, so reordering it is
+a failing test rather than a puzzling runtime refusal, and `Resume` hands the
+same slice to both the first attempt and the post-`stop` repeat — `resumeOnce`
+exists so the second invocation cannot be a subtly different command.
+
+The audit trail has to describe the same command. The attempt row's `command`
+column is rendered by `commandPreview` in `internal/recovery/manager.go`:
+
+```text
+claude -p --resume <session-id> --output-format json <N-byte continuation message>
+```
+
+The placeholder `<message>` sits where the real message sits — last. It used to
+print the flags *after* the placeholder, which described an invocation ccresu
+never ran; `ccresu history` is an audit trail, so a preview that disagrees with
+`claude.ResumeArgs` is a worse bug than no preview at all. Both facts are pinned
+by tests: `TestResumeArgsExact` for the vector that is executed, and
+`TestCommandPreviewAndFormattingHelpers` for the preview text and its message
+summary.
+
+The message itself is never stored on the row: the column says how many bytes
+were sent, the log says what happened, and the conversation stays in the
+transcript where it belongs.
+
 ## Discovery and detection
 
 1. `claude agents --json` is parsed defensively: unknown field names, extra
@@ -177,6 +216,14 @@ session's life. One attempt handles it, in three steps:
 This is not a retry in the budget sense: the attempt keeps its number, and no new
 attempt row is written. It is one attempt that has to clear the way first.
 
+The sequence, from the outside:
+
+| Step | What the CLI sees | What ccresu records |
+| --- | --- | --- |
+| 1 | `claude -p --resume <id> --output-format json "<message>"` — refused, session in the background | the attempt, with its single resume command as `command` |
+| 2 | `claude stop <id>` | a log line only: the attempt row still shows one resume |
+| 3 | the same resume, same arguments | the attempt's result, verification included |
+
 If the stop itself fails, or the second resume refuses again (or fails any other
 way), the **original** failure is returned untouched. Nothing loops, the
 classification is unchanged, and the session is dealt with exactly as any other
@@ -186,6 +233,22 @@ permanent resume failure: `ccresu retry <session-id>` for a fresh budget,
 
 Once a session has been stopped this way, the next resume is a normal resume
 again: the background agent no longer holds it, so there is no stop to issue.
+
+### The operator exit from `PERMANENTLY_FAILED`
+
+A session that reached `PERMANENTLY_FAILED` this way (or any other way) is not
+lost, and `ccresu reset <session-id>` is how an operator says so. It is
+deliberately narrow:
+
+- It moves `PERMANENTLY_FAILED` → `DISABLED` and **nothing else**; any other
+  state is refused with exit code `4` and a message naming the state.
+- It clears the stored error, so the session no longer looks broken.
+- It keeps the attempt row, the attempt reason and the counter: the history of
+  what happened stays readable in `ccresu history`.
+- It never resumes anything and never refunds an attempt. `ccresu retry <id>`
+  refills the budget, `ccresu recover <id> --force` tries once more now, and
+  `ccresu enable <id>` makes the session recoverable again with whatever budget
+  it has left.
 
 ## Proving it end to end
 
@@ -201,6 +264,15 @@ and that `ccresu history` still records the single resume command.
 
 The same script with `--pre-fix` is the contrast, and it is the reason the fix
 exists:
+
+```bash
+make e2e                              # the fixed binary: every check passes
+
+# the contrast, against the pre-fix commit (the script needs that binary):
+git worktree add /tmp/ccresu-prefix 00692e3
+(cd /tmp/ccresu-prefix && go build -o /tmp/ccresu-prefix/ccresu ./cmd/ccresu)
+tests/scripts/background-resume-e2e.sh --pre-fix /tmp/ccresu-prefix/ccresu
+```
 
 | Binary | `ccresu recover <id>` | Stub saw | Final state |
 | --- | --- | --- | --- |

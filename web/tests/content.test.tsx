@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import NotFound from "@/app/not-found";
-import { docs } from "@/lib/docs";
+import { docs, getDoc } from "@/lib/docs";
 import { features, workflow } from "@/lib/landing";
 import { exampleVersion, repo, site } from "@/lib/site";
 import { themeBootstrapScript, themeStorageKey } from "@/lib/theme";
@@ -35,6 +35,39 @@ describe("content integrity", () => {
   it("says the binary ships no web UI", () => {
     const joined = `${text} ${site.description}`.toLowerCase();
     expect(joined).toMatch(/no (embedded )?web ui/);
+  });
+
+  it("documents why the continuation message is the last argument", () => {
+    const doc = getDoc("recovery");
+    expect(doc).toBeDefined();
+    const code = (doc?.blocks ?? [])
+      .flatMap((block) => (block.kind === "code" ? [block.code] : []))
+      .join("\n");
+
+    expect(JSON.stringify(doc?.blocks)).toContain(
+      "Why the message is the last argument",
+    );
+    // The vector that is executed, in that order, message last.
+    expect(code).toContain(
+      '"-p", "--resume", sessionID, "--output-format", "json", message',
+    );
+    // The audit preview must put the message where the real one goes: last.
+    expect(code + JSON.stringify(doc?.blocks)).toContain(
+      "--output-format json <N-byte continuation message>",
+    );
+    expect(code + JSON.stringify(doc?.blocks)).toContain("TestResumeArgsExact");
+  });
+
+  it("narrates the background-agent recovery and the operator reset", () => {
+    const body = JSON.stringify(getDoc("recovery")?.blocks ?? []);
+
+    expect(body).toContain("claude stop <session-id>");
+    expect(body).toContain("PERMANENTLY_FAILED");
+    expect(body).toContain("ccresu reset");
+    expect(body).toContain("keeps the attempt row");
+    // The reproduce-then-fix contrast is documented, not just the happy path.
+    expect(body).toContain("--pre-fix");
+    expect(body).toContain("00692e3");
   });
 
   it("keeps the site on the GitHub Pages base path", () => {

@@ -49,6 +49,11 @@ matched rule id and whether the goal was reported paused.
    upgrade or a reboot mid-wait resumes from the database.
 5. **Resume** — `internal/recovery` walks the state machine, calls
    `claude -p --resume <session-id> --output-format json "<continuation message>"`, and records an attempt.
+   The vector comes from `claude.ResumeArgs` and the continuation message is its
+   **last** element: the prompt is positional, so it follows the session id it
+   belongs to instead of sitting between flags. The attempt's `command` column is
+   rendered by `commandPreview` in the same order — a preview that printed the
+   flags after the message described a command that was never run.
 6. **Verification** — the verifier re-reads the transcript and requires both that
 the reported session id equals the original and that the transcript grew
 before the attempt counts as a success.

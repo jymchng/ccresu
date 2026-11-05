@@ -67,6 +67,28 @@ describe("documentation", () => {
     }
   });
 
+  it("explains the resume argument order on the recovery page", () => {
+    render(<DocPageView slug="recovery" />);
+
+    expect(
+      screen.getByRole("heading", {
+        level: 2,
+        name: "Why the message is the last argument",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", {
+        level: 2,
+        name: "The operator exit from PERMANENTLY_FAILED",
+      }),
+    ).toBeInTheDocument();
+
+    const body = document.body.textContent ?? "";
+    expect(body).toContain('"-p", "--resume", sessionID, "--output-format", "json", message');
+    expect(body).toContain("--output-format json <N-byte continuation message>");
+    expect(body).toContain("claude stop <id>");
+  });
+
   it("returns undefined for an unknown slug instead of inventing a page", () => {
     expect(getDoc("does-not-exist")).toBeUndefined();
     expect(() => DocPageView({ slug: "does-not-exist" })).toThrow();

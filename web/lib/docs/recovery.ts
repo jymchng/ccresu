@@ -55,6 +55,34 @@ export const recoveryDoc: DocPage = {
     },
     {
       kind: "h2",
+      text: "Why the message is the last argument",
+    },
+    {
+      kind: "p",
+      text: "The prompt is a positional argument: no flag introduces it. Position is the only thing that says which invocation it belongs to, and the documented form is `claude -p --resume <session-id> <prompt>`, so the message follows the session it is said to. ccresu keeps it last, after both flags, and builds the vector in one place.",
+    },
+    {
+      kind: "code",
+      label: "internal/claude/cli.go",
+      code: `func ResumeArgs(sessionID, message string) []string {\n\treturn []string{"-p", "--resume", sessionID, "--output-format", "json", message}\n}`,
+    },
+    {
+      kind: "ul",
+      items: [
+        "`TestResumeArgsExact` asserts the joined vector, so a reordering is a failing test rather than a puzzling runtime refusal.",
+        "`Resume` hands the same slice to the first attempt and to the repeat after `claude stop`, so the second invocation cannot be a subtly different command.",
+        "The attempt's `command` column, rendered by `commandPreview`, prints the same order: `claude -p --resume <session-id> --output-format json <N-byte continuation message>`, with the placeholder where the message really sits.",
+        "Only a summary is stored, never the text: the column says how many bytes were sent, and the conversation stays in the transcript.",
+      ],
+    },
+    {
+      kind: "note",
+      tone: "info",
+      title: "Why the audit trail has to match",
+      text: "`ccresu history` is an audit trail. The preview used to print the flags after the `<message>` placeholder, describing an invocation ccresu never ran \u2014 worse than no preview, because it looks authoritative. It now renders exactly the order `claude.ResumeArgs` executes.",
+    },
+    {
+      kind: "h2",
       text: "When a background agent still holds the session",
     },
     {
@@ -70,10 +98,36 @@ export const recoveryDoc: DocPage = {
       ],
     },
     {
+      kind: "table",
+      head: ["Step", "What the CLI sees", "What ccresu records"],
+      rows: [
+        ["1", "`claude -p --resume <id> --output-format json \"<message>\"` \u2014 refused, the session is in the background", "the attempt, with its single resume command as `command`"],
+        ["2", "`claude stop <id>`", "a log line only: the attempt row still shows one resume"],
+        ["3", "the same resume, byte-identical arguments", "the attempt's result, verification included"],
+      ],
+    },
+    {
       kind: "note",
       tone: "warning",
       title: "Stopped once, and only once",
       text: "If the stop itself fails, or the second resume refuses again (or fails any other way), the original error is returned untouched: nothing loops and the classification is unchanged. `--fork-session` is still never used — it would continue a copy of the conversation — and `claude attach` needs a terminal ccresu does not have, which is exactly why `stop` is the one remedy taken. A session stopped this way resumes normally next time, because the background agent no longer holds it.",
+    },
+    {
+      kind: "h2",
+      text: "The operator exit from PERMANENTLY_FAILED",
+    },
+    {
+      kind: "p",
+      text: "A session that ended `PERMANENTLY_FAILED` this way \u2014 or any other way \u2014 is not lost. `ccresu reset <session-id>` is how an operator says so, and it is deliberately narrow.",
+    },
+    {
+      kind: "ul",
+      items: [
+        "It moves `PERMANENTLY_FAILED` to `DISABLED` and nothing else: any other state is refused with exit code `4` and a message that names the state and the command to use instead.",
+        "It clears the stored error, so the session no longer looks broken.",
+        "It keeps the attempt row, its reason and the counter, so `ccresu history` still explains what happened.",
+        "It never resumes anything and never refunds an attempt. `ccresu retry <id>` refills the budget, `ccresu recover <id> --force` tries once more now, and `ccresu enable <id>` makes the session recoverable again with whatever budget it has left.",
+      ],
     },
     {
       kind: "h2",
@@ -82,6 +136,11 @@ export const recoveryDoc: DocPage = {
     {
       kind: "p",
       text: "This is not only asserted against fakes. `make e2e` runs `tests/scripts/background-resume-e2e.sh`, which builds the real binary and puts a stub `claude` on `PATH`. The stub keeps a background-agent marker, refuses the first `-p --resume` with the CLI's text above, clears the marker on `claude stop <id>`, and then returns a JSON result with the same `session_id` after growing the transcript. The run asserts that `ccresu recover <id>` exits 0 and ends `RESUMED` with the verification “proven: session id preserved and transcript grew”, that the stub saw exactly resume, stop, resume with byte-identical resume arguments, and that `ccresu history` still records the single resume command.",
+    },
+    {
+      kind: "code",
+      label: "The contrast, against the pre-fix commit",
+      code: `make e2e                              # the fixed binary: every check passes\n\ngit worktree add /tmp/ccresu-prefix 00692e3\n(cd /tmp/ccresu-prefix && go build -o /tmp/ccresu-prefix/ccresu ./cmd/ccresu)\ntests/scripts/background-resume-e2e.sh --pre-fix /tmp/ccresu-prefix/ccresu`,
     },
     {
       kind: "table",
