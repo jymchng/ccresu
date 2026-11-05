@@ -43,14 +43,18 @@ type CLIOptions struct {
 
 // CLI is the version-aware adapter around the claude executable.
 //
-// It exposes exactly the three verified invocations:
+// It exposes exactly the five verified invocations:
 //
 //	claude --version
 //	claude agents --json [--all] [--cwd <path>]
 //	claude -p --resume <session-id> <message> --output-format json
+//	claude stop <session-id>
+//	(the transcript and session-env files are read, not executed)
 //
-// No other command is ever constructed, and the message is always passed as a
-// single argv element so no shell ever sees it.
+// `claude stop` is issued only when a resume is refused because the session is
+// still attached to a background agent: its conversation is kept, so the same
+// resume can follow immediately. No other command is ever constructed, and the
+// message is always passed as a single argv element so no shell ever sees it.
 type CLI struct {
 	bin            string
 	exec           Execer
@@ -305,6 +309,13 @@ func describeRunError(what string, out Output, err error) error {
 	if err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 		return fmt.Errorf("%w: %w", ErrCLIUnavailable, err)
 	}
+	return fmt.Errorf("%w: %s", ErrCLIUnavailable, describeDetail(what, out, err))
+}
+
+// describeDetail renders "<what> failed (exit N): <stderr tail>: <err>" without
+// choosing a sentinel, so a caller that owns a more specific error (such as
+// ErrStopFailed) can reuse the same wording.
+func describeDetail(what string, out Output, err error) string {
 	parts := []string{fmt.Sprintf("%s failed (exit %d)", what, out.ExitCode)}
 	if detail := tail(string(out.Stderr), 400); detail != "" {
 		parts = append(parts, detail)
@@ -312,7 +323,7 @@ func describeRunError(what string, out Output, err error) error {
 	if err != nil {
 		parts = append(parts, err.Error())
 	}
-	return fmt.Errorf("%w: %s", ErrCLIUnavailable, strings.Join(parts, ": "))
+	return strings.Join(parts, ": ")
 }
 
 // tail returns the last n bytes of s on a single line.

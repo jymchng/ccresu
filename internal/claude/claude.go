@@ -88,6 +88,14 @@ var (
 	ErrSessionNotPreserved = errors.New("claude: resumed session id did not match the requested session")
 	// ErrResumeFailed reports a resume whose JSON output carried is_error.
 	ErrResumeFailed = errors.New("claude: resume reported an error")
+	// ErrSessionRunningInBackground reports the CLI refusing to resume a
+	// session that is still attached to a background agent. It is the one
+	// condition ccresu answers with another command (`claude stop <id>`) before
+	// repeating the same resume.
+	ErrSessionRunningInBackground = errors.New("claude: session is running in the background")
+	// ErrStopFailed reports that `claude stop <id>` itself did not succeed, so
+	// the background session is still in the way.
+	ErrStopFailed = errors.New("claude: session stop failed")
 )
 
 // sessionIDPattern matches the UUID form Claude Code uses for session ids.
