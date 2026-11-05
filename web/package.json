@@ -10,6 +10,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:mobile": "node tests/mobile/gate.mjs",
+    "test:mobile:audit": "node tests/mobile/audit.mjs",
     "test:watch": "vitest"
   },
   "dependencies": {
