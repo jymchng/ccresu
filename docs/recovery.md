@@ -125,8 +125,9 @@ again by a stray tick.
 later" and "stop asking": retryable failures wait with exponential backoff plus
 jitter (`initial_delay` 30s, ×2, capped at `max_delay` 15m, ±`jitter` 15%),
 non-retryable failures and an exhausted budget go to `PERMANENTLY_FAILED`.
-`ccresu retry <session-id>` resets the budget, and `ccresu recover <session-id>
---force` tries once more anyway.
+`ccresu retry <session-id>` resets the budget, `ccresu recover <session-id>
+--force` tries once more anyway, and `ccresu reset <session-id>` clears the stored
+failure and leaves the session `DISABLED` — see [cli.md](cli.md).
 
 A failure **before** the resume is issued — the status check in
 `CHECKING_SESSION` or the limit check in `CHECKING_LIMIT` — is different: no
@@ -212,7 +213,8 @@ started is not a recovery.
 | Network error, crashed tool, user cancellation | not a usage limit; not resumed |
 | Normal completion | recognised as completion; not resumed |
 | Limit still in force at resume time | attempt recorded, back to `WAITING_FOR_RESET` |
-| Attempt budget spent | `PERMANENTLY_FAILED` until `ccresu retry` |
+| Session still attached to a background agent | `claude stop <id>` then the identical resume, once per attempt; if the stop fails the original refusal is reported |
+| Attempt budget spent | `PERMANENTLY_FAILED` until `ccresu retry` (fresh budget) or `ccresu reset` (failure cleared, session left `DISABLED`) |
 
 ## Inspecting what happened
 

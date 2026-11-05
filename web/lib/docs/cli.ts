@@ -45,6 +45,7 @@ export const cliDoc: DocPage = {
         ["inspect <session-id>", "Show everything known about one session: identity, state, schedule, attempts and recent transitions."],
         ["recover <session-id>", "Resume one session now. `--force` ignores a spent attempt budget; `--message` overrides the continuation message."],
         ["retry <session-id>", "Reset the attempt budget of a permanently failed session and let the daemon try again."],
+        ["reset <session-id>", "Clear a permanently failed session: the stored error is dropped, the session becomes DISABLED, and the attempt history and counter stay untouched. It never resumes anything and never refunds an attempt; `retry` is what gives the budget back."],
         ["enable <session-id>", "Allow ccresu to recover a session."],
         ["disable <session-id>", "Stop ccresu from recovering a session without forgetting its history."],
         ["history <session-id>", "Print the state transitions and attempts; `--limit` caps how many are shown."],

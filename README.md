@@ -821,10 +821,16 @@ ccresu only uses interfaces that exist in the installed CLI (inspected with
 | Session transcripts | `~/.claude/projects/<slugified-cwd>/<session-id>.jsonl` |
 | Per-session environment | `~/.claude/session-env/<session-id>/` |
 | Resume the original session | `claude -p --resume <session-id> "<continuation message>"` |
+| Release a session a background agent still holds | `claude stop <session-id>` |
 
-No undocumented commands are used, and no new session is ever started in place
-of the original one. See [docs/recovery.md](docs/recovery.md) for the exact
-mechanism and its limitations.
+`--resume` is the command ccresu lives on. `claude stop` is the one exception, and
+it exists for one situation: `claude -p --resume` refuses while the session is
+still attached to the interactive CLI's background agent, so ccresu stops that
+agent and repeats the identical resume. The conversation is untouched — same
+session id, same transcript. There is no `--fork-session` (it would continue a
+copy instead of your conversation), no new session id, no TTY and no keystroke
+injection, and if the stop fails the original refusal is reported unchanged. See
+[docs/recovery.md](docs/recovery.md) for the exact mechanism and its limitations.
 
 ## Interfaces
 
