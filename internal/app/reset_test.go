@@ -19,7 +19,7 @@ func seedFailedSession(t *testing.T, h *harness, id string) storage.Session {
 		s.State = storage.StatePermanentlyFailed
 		s.LastError = "claude executable unavailable: claude -p --resume failed (exit 1)"
 	})
-	attempt, err := h.store.StartAttempt(ctx, id, 0, "claude -p --resume "+id+" <output-format json> <6-byte continuation message>")
+	attempt, err := h.store.StartAttempt(ctx, id, 0, "claude -p --resume "+id+" --output-format json <6-byte continuation message>")
 	if err != nil {
 		t.Fatalf("seed attempt: %v", err)
 	}

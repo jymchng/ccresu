@@ -165,7 +165,7 @@ func TestResumeCommandIsExactlyTheVerifiedOne(t *testing.T) {
 	if resumeArgv == nil {
 		t.Fatal("no resume command was executed")
 	}
-	want := []string{"claude", "-p", "--resume", sessionA, message, "--output-format", "json"}
+	want := []string{"claude", "-p", "--resume", sessionA, "--output-format", "json", message}
 	if len(resumeArgv) != len(want) {
 		t.Fatalf("argv = %q, want exactly %q", resumeArgv, want)
 	}

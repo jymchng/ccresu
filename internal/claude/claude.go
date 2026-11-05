@@ -301,7 +301,7 @@ type ResumeResult struct {
 // SessionProvider discovers and resumes Claude Code sessions.
 //
 // Implementations must never invent a command: resuming uses
-// `claude -p --resume <session-id> "<message>" --output-format json` and, only
+// `claude -p --resume <session-id> --output-format json "<message>"` and, only
 // when the CLI refuses that because the session is still attached to a
 // background agent, the single `claude stop <session-id>` that clears the way
 // before the same resume is repeated.

@@ -190,7 +190,8 @@ func TestFullScenarioReplaysTheRealInterruption(t *testing.T) {
 		t.Fatalf("assertion 6: continuation message = %q, want %q", got, manager.ContinuationMessage())
 	}
 	if len(wantArgs) != 6 || wantArgs[0] != "-p" || wantArgs[1] != "--resume" ||
-		wantArgs[2] != support.SessionID || wantArgs[4] != "--output-format" || wantArgs[5] != "json" {
+		wantArgs[2] != support.SessionID || wantArgs[3] != "--output-format" || wantArgs[4] != "json" ||
+		wantArgs[5] != manager.ContinuationMessage() {
 		t.Fatalf("assertion 6: unexpected resume argv shape %v", wantArgs)
 	}
 

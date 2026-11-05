@@ -35,7 +35,7 @@ Only documented interfaces are used, all verified against Claude Code 2.1.223:
 | Discover sessions | `claude agents --json` (`--all`, `--cwd <path>`) |
 | Transcripts | `~/.claude/projects/<slugified-cwd>/<session-id>.jsonl` |
 | Per-session environment | `~/.claude/session-env/<session-id>/` |
-| Resume the original session | `claude -p --resume <session-id> "<message>" --output-format json` |
+| Resume the original session | `claude -p --resume <session-id> --output-format json "<message>"` |
 
 The resume argv is built in exactly one place (`claude.ResumeArgs`), is passed as
 separate argv elements with no shell, and forks nothing. A session type the CLI

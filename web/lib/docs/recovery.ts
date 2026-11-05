@@ -42,7 +42,7 @@ export const recoveryDoc: DocPage = {
     {
       kind: "code",
       label: "The resume command",
-      code: `claude -p --resume <session-id> "<continuation message>" --output-format json`,
+      code: `claude -p --resume <session-id> --output-format json "<continuation message>"`,
     },
     {
       kind: "ul",

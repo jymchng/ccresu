@@ -837,7 +837,7 @@ func commandPreview(sessionID, message string) string {
 	if trimmed := strings.TrimSpace(message); trimmed != "" {
 		summary = fmt.Sprintf("%d-byte continuation message", len(trimmed))
 	}
-	return fmt.Sprintf("claude -p --resume %s <output-format json> <%s>", sessionID, summary)
+	return fmt.Sprintf("claude -p --resume %s --output-format json <%s>", sessionID, summary)
 }
 
 // truncate caps a stored string so a huge CLI dump cannot bloat the database.

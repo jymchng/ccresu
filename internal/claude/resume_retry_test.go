@@ -128,7 +128,7 @@ func TestResumeStopsABackgroundSessionAndResumesAgain(t *testing.T) {
 	if first != second {
 		t.Errorf("retried argv differs:\n first = %q\nsecond = %q", first, second)
 	}
-	want := []string{"-p", "--resume", testSessionID, "keep going", "--output-format", "json"}
+	want := []string{"-p", "--resume", testSessionID, "--output-format", "json", "keep going"}
 	if first != strings.Join(want, "\x00") {
 		t.Errorf("argv = %q, want %q", resumes[0].Args, want)
 	}
@@ -147,7 +147,7 @@ func TestResumeStopsABackgroundSessionAndResumesAgain(t *testing.T) {
 
 	// The attempt row is built from result.Command, so it must still show the
 	// one resume command and never the stop.
-	if got := strings.Join(result.Command, " "); got != "claude -p --resume "+testSessionID+" keep going --output-format json" {
+	if got := strings.Join(result.Command, " "); got != "claude -p --resume "+testSessionID+" --output-format json keep going" {
 		t.Errorf("result.Command = %q, want the single resume command", got)
 	}
 }

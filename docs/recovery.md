@@ -15,13 +15,13 @@ exactly five interfaces:
 | Discover sessions | `claude agents --json`, with `--all` and `--cwd <path>` |
 | Session transcript | `~/.claude/projects/<slugified-cwd>/<session-id>.jsonl` |
 | Per-session environment | `~/.claude/session-env/<session-id>/` |
-| Resume the original session | `claude -p --resume <session-id> "<message>" --output-format json` |
+| Resume the original session | `claude -p --resume <session-id> --output-format json "<message>"` |
 | Release a session still attached to a background agent | `claude stop <session-id>` |
 
 The resume vector is built in one place, `claude.ResumeArgs`, and is:
 
 ```go
-[]string{"-p", "--resume", sessionID, message, "--output-format", "json"}
+[]string{"-p", "--resume", sessionID, "--output-format", "json", message}
 ```
 
 The stop vector is built in one place too, `claude.StopArgs`, and is:

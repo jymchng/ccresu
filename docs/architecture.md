@@ -48,8 +48,7 @@ matched rule id and whether the goal was reported paused.
 4. **Wait** — the row, not a timer, is the source of truth. A restart, an
    upgrade or a reboot mid-wait resumes from the database.
 5. **Resume** — `internal/recovery` walks the state machine, calls
-   `claude -p --resume <session-id> "<continuation message>" --output-format
-   json`, and records an attempt.
+   `claude -p --resume <session-id> --output-format json "<continuation message>"`, and records an attempt.
 6. **Verification** — the verifier re-reads the transcript and requires both that
 the reported session id equals the original and that the transcript grew
 before the attempt counts as a success.

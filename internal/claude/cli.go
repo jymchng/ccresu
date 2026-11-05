@@ -51,7 +51,7 @@ type CLIOptions struct {
 //
 //	claude --version
 //	claude agents --json [--all] [--cwd <path>]
-//	claude -p --resume <session-id> <message> --output-format json
+//	claude -p --resume <session-id> --output-format json <message>
 //	claude stop <session-id>
 //	(the transcript and session-env files are read, not executed)
 //
@@ -219,7 +219,7 @@ func (c *CLI) Agents(ctx context.Context, query AgentsQuery) ([]AgentEntry, erro
 
 // Resume runs the verified resume command:
 //
-//	claude -p --resume <session-id> <message> --output-format json
+//	claude -p --resume <session-id> --output-format json <message>
 //
 // One situation needs a second command first. The CLI refuses to resume a
 // session that is still attached to a background agent ("That session is
@@ -335,7 +335,7 @@ func (c *CLI) resumeOnce(ctx context.Context, sessionID string, args []string) (
 // Exported so tests and the recovery audit trail can assert the exact command
 // without reimplementing it.
 func ResumeArgs(sessionID, message string) []string {
-	return []string{"-p", "--resume", sessionID, message, "--output-format", "json"}
+	return []string{"-p", "--resume", sessionID, "--output-format", "json", message}
 }
 
 // run executes one command with the per-command timeout applied when the caller

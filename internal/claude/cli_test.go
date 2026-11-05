@@ -275,7 +275,7 @@ func TestResumeArgsExact(t *testing.T) {
 	t.Parallel()
 
 	got := strings.Join(ResumeArgs(testSessionID, "continue"), " ")
-	want := "-p --resume " + testSessionID + " continue --output-format json"
+	want := "-p --resume " + testSessionID + " --output-format json continue"
 	if got != want {
 		t.Fatalf("ResumeArgs() = %q, want %q", got, want)
 	}
@@ -313,19 +313,18 @@ func TestCLIResumeSuccess(t *testing.T) {
 	if last.Name != "claude" {
 		t.Errorf("command name = %q, want claude", last.Name)
 	}
-	want := []string{"-p", "--resume", testSessionID, "keep going", "--output-format", "json"}
+	want := []string{"-p", "--resume", testSessionID, "--output-format", "json", "keep going"}
 	if strings.Join(last.Args, "\x00") != strings.Join(want, "\x00") {
 		t.Errorf("argv = %v, want %v", last.Args, want)
 	}
 	if result.Command[0] != "claude" || strings.Join(result.Command[1:], " ") != strings.Join(want, " ") {
 		t.Errorf("recorded command = %v", result.Command)
 	}
-	// The message must be a single argv element so no shell ever sees it.
-	if strings.Contains(strings.Join(last.Args, " "), ";") || strings.Contains(last.Args[3], " ") == false {
-		// The message itself may contain spaces; it must not be split.
-		if last.Args[3] != "keep going" {
-			t.Errorf("message argv = %q", last.Args[3])
-		}
+	// The message must be the final argv element and a single one, so no shell
+	// ever sees it and no flag parser can mistake it for a flag.
+	message := last.Args[len(last.Args)-1]
+	if message != "keep going" {
+		t.Errorf("message argv = %q, want %q", message, "keep going")
 	}
 }
 

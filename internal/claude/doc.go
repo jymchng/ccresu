@@ -10,7 +10,7 @@
 //
 // Resumption uses exactly two commands:
 //
-//	claude -p --resume <session-id> "<continuation message>" --output-format json
+//	claude -p --resume <session-id> --output-format json "<continuation message>"
 //	claude stop <session-id>
 //
 // The second is issued only when the first is refused because the session is

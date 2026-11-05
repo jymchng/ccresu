@@ -432,7 +432,7 @@ func TestProviderResume(t *testing.T) {
 
 	calls := execer.Calls()
 	last := calls[len(calls)-1]
-	want := strings.Join([]string{"-p", "--resume", testSessionID, "continue the goal", "--output-format", "json"}, " ")
+	want := strings.Join([]string{"-p", "--resume", testSessionID, "--output-format", "json", "continue the goal"}, " ")
 	if got := strings.Join(last.Args, " "); got != want {
 		t.Errorf("resume argv = %q, want %q", got, want)
 	}
