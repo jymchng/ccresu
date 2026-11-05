@@ -4,7 +4,7 @@ import { useState } from "react";
 
 import { CopyButton } from "@/components/copy-button";
 import { cn } from "@/lib/utils";
-import { assetName, exampleVersion, installTargets, releaseDownloadBase, type Platform } from "@/lib/site";
+import { assetName, installTargets, releaseDownloadBase, type Platform } from "@/lib/site";
 
 /**
  * Installation commands per platform.
@@ -14,9 +14,17 @@ import { assetName, exampleVersion, installTargets, releaseDownloadBase, type Pl
  * release does not build. The download base is the pinned-tag form
  * (`/releases/download/v<version>`), the only shape GitHub serves for a specific
  * version.
+ *
+ * `version` is passed in, never baked in here: the page that renders this
+ * component resolves the newest published release at build time
+ * (`lib/release.ts`), so a new tag reaches the copyable command on the next
+ * deploy without anybody editing a constant.
  */
-export function installCommand(os: Platform, arch: "amd64" | "arm64"): string {
-  const version = exampleVersion;
+export function installCommand(
+  os: Platform,
+  arch: "amd64" | "arm64",
+  version: string,
+): string {
   const asset = assetName(version, os, arch);
   const base = releaseDownloadBase(version);
 
@@ -66,13 +74,13 @@ const options = installTargets.map((target) => ({
   arch: target.arch,
 }));
 
-export function InstallCommands() {
+export function InstallCommands({ version }: { version: string }) {
   const [selected, setSelected] = useState(options[0]?.id ?? "linux-amd64");
   const current = options.find((option) => option.id === selected) ?? options[0];
   if (!current) {
     return null;
   }
-  const command = installCommand(current.os, current.arch);
+  const command = installCommand(current.os, current.arch, version);
 
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-card">

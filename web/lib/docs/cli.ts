@@ -12,6 +12,10 @@ export const cliDoc: DocPage = {
       code: `ccresu [--config PATH] [--json] [--log-level LEVEL] <command> [flags]\nccresu --help | --version`,
     },
     {
+      kind: "capture",
+      id: "help",
+    },
+    {
       kind: "h2",
       text: "Global flags",
     },
@@ -106,6 +110,14 @@ export const cliDoc: DocPage = {
       tone: "info",
       title: "Session counts: total vs listed",
       text: "`ccresu status` counts every stored session row; a bare `ccresu sessions` lists only the enabled ones. Both say so: `status` prints `sessions: 27 total, 1 enabled` followed by `listing: ccresu sessions shows the 1 enabled; ccresu sessions --all shows all 27`, and the listing footer reads `1 session(s) shown: enabled only (of 27 matching; --all includes disabled and settled)`. A `--limit` that truncates adds `limit N reached; use --limit 0 to list every match`. `status --json` exposes `sessions` (total), `enabled_sessions` and `sessions_listed_by_default`, the last matching what a bare `sessions --json` returns.",
+    },
+    {
+      kind: "capture",
+      id: "status",
+    },
+    {
+      kind: "capture",
+      id: "sessions",
     },
     {
       kind: "note",

@@ -1,12 +1,25 @@
-import { exampleVersion, assetName, releaseDownloadBase, repo } from "@/lib/site";
+import { assetName, fallbackReleaseVersion, releaseDownloadBase, repo } from "@/lib/site";
 
 import type { DocPage } from "./types";
 
-const linuxAsset = assetName(exampleVersion, "linux", "amd64");
-const macAsset = assetName(exampleVersion, "darwin", "arm64");
-const winAsset = assetName(exampleVersion, "windows", "amd64");
+/**
+ * The installation page depends on a value the content cannot know: which
+ * release is newest. Everything else in the documentation is static, so the
+ * page is built by a function rather than exported as a constant — the caller
+ * supplies the version that `lib/release.ts` resolved at build time.
+ *
+ * The default exists so navigation, the docs index and the tests can hold a
+ * page without a network round trip; the page itself always passes the real
+ * version.
+ */
+export function createInstallationDoc(
+  version: string = fallbackReleaseVersion,
+): DocPage {
+  const linuxAsset = assetName(version, "linux", "amd64");
+  const macAsset = assetName(version, "darwin", "arm64");
+  const winAsset = assetName(version, "windows", "amd64");
 
-export const installationDoc: DocPage = {
+  return {
   slug: "installation",
   title: "Installation",
   summary:
@@ -22,28 +35,28 @@ export const installationDoc: DocPage = {
     },
     {
       kind: "p",
-      text: `Replace the version in the file name with the tag you want. The current example uses \`${exampleVersion}\`.`,
+      text: `Replace the version in the file name with the tag you want. The commands below use \`${version}\`, the latest published release when this page was built.`,
     },
     {
       kind: "code",
       label: "Linux, x86-64",
-      code: `VERSION=${exampleVersion}\nASSET=${linuxAsset}\nBASE=${releaseDownloadBase(exampleVersion)}\n\nmkdir -p ~/.local/bin\ncurl -fsSLO "$BASE/$ASSET"\ncurl -fsSLO "$BASE/checksums.txt"\nsha256sum --check --ignore-missing checksums.txt\ntar -xzf "$ASSET" ccresu\ninstall -m 0755 ccresu ~/.local/bin/ccresu\nrm -f "$ASSET" checksums.txt ccresu\nccresu version`,
+      code: `VERSION=${version}\nASSET=${linuxAsset}\nBASE=${releaseDownloadBase(version)}\n\nmkdir -p ~/.local/bin\ncurl -fsSLO "$BASE/$ASSET"\ncurl -fsSLO "$BASE/checksums.txt"\nsha256sum --check --ignore-missing checksums.txt\ntar -xzf "$ASSET" ccresu\ninstall -m 0755 ccresu ~/.local/bin/ccresu\nrm -f "$ASSET" checksums.txt ccresu\nccresu version`,
     },
     {
       kind: "code",
       label: "macOS, Apple silicon",
-      code: `VERSION=${exampleVersion}\nASSET=${macAsset}\nBASE=${releaseDownloadBase(exampleVersion)}\n\nmkdir -p ~/.local/bin\ncurl -fsSLO "$BASE/$ASSET"\ncurl -fsSLO "$BASE/checksums.txt"\nshasum -a 256 --check --ignore-missing checksums.txt\ntar -xzf "$ASSET" ccresu\ninstall -m 0755 ccresu ~/.local/bin/ccresu\nxattr -d com.apple.quarantine ~/.local/bin/ccresu 2>/dev/null || true`,
+      code: `VERSION=${version}\nASSET=${macAsset}\nBASE=${releaseDownloadBase(version)}\n\nmkdir -p ~/.local/bin\ncurl -fsSLO "$BASE/$ASSET"\ncurl -fsSLO "$BASE/checksums.txt"\nshasum -a 256 --check --ignore-missing checksums.txt\ntar -xzf "$ASSET" ccresu\ninstall -m 0755 ccresu ~/.local/bin/ccresu\nxattr -d com.apple.quarantine ~/.local/bin/ccresu 2>/dev/null || true`,
     },
     {
       kind: "code",
       label: "Windows, x86-64 (PowerShell)",
-      code: `$VERSION = "${exampleVersion}"\n$Asset = "${winAsset}"\n$Base = "${releaseDownloadBase(exampleVersion)}"\n\nInvoke-WebRequest "$Base/$Asset" -OutFile $Asset\nInvoke-WebRequest "$Base/checksums.txt" -OutFile checksums.txt\n$Expected = (Select-String -Path checksums.txt -Pattern $Asset).Line.Split()[0]\nif ((Get-FileHash $Asset -Algorithm SHA256).Hash -ne $Expected.ToUpper()) { throw "checksum mismatch" }\nExpand-Archive $Asset -DestinationPath "$env:LOCALAPPDATA\\ccresu"`,
+      code: `$VERSION = "${version}"\n$Asset = "${winAsset}"\n$Base = "${releaseDownloadBase(version)}"\n\nInvoke-WebRequest "$Base/$Asset" -OutFile $Asset\nInvoke-WebRequest "$Base/checksums.txt" -OutFile checksums.txt\n$Expected = (Select-String -Path checksums.txt -Pattern $Asset).Line.Split()[0]\nif ((Get-FileHash $Asset -Algorithm SHA256).Hash -ne $Expected.ToUpper()) { throw "checksum mismatch" }\nExpand-Archive $Asset -DestinationPath "$env:LOCALAPPDATA\\ccresu"`,
     },
     {
       kind: "note",
       tone: "info",
       title: "Asset naming",
-      text: "Assets are named `ccresu_<version>_<os>_<arch>.tar.gz` (`.zip` on Windows), for example `ccresu_0.1.0_linux_amd64.tar.gz`. Supported targets: linux and darwin on amd64 and arm64, windows on amd64 and arm64.",
+      text: "Assets are named `ccresu_<version>_<os>_<arch>.tar.gz` (`.zip` on Windows), for example `${linuxAsset}`. Supported targets: linux and darwin on amd64 and arm64, windows on amd64 and arm64.",
     },
     {
       kind: "h2",
@@ -97,4 +110,5 @@ export const installationDoc: DocPage = {
       ],
     },
   ],
-};
+  };
+}

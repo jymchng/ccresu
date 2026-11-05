@@ -6,8 +6,15 @@ import { DocBlocks } from "@/components/doc-blocks";
 import { DocsNav } from "@/components/docs-nav";
 import { docs, getDoc } from "@/lib/docs";
 
-export function DocPageView({ slug }: { slug: string }) {
-  const doc = getDoc(slug);
+export function DocPageView({
+  slug,
+  version,
+}: {
+  slug: string;
+  /** The release the install commands should name; only installation uses it. */
+  version?: string;
+}) {
+  const doc = getDoc(slug, version);
   if (!doc) {
     notFound();
   }

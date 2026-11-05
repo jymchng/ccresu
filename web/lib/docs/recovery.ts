@@ -32,6 +32,13 @@ export const recoveryDoc: DocPage = {
       ],
     },
     {
+      kind: "diagram",
+      id: "state-machine",
+      label: "The chain, the retry loop and the two ways out",
+      description:
+        "The solid line is the recorded chain: discovery, the detected limit, the wait, the reset instant, the session check, the limit check and the resume. The dashed line is a failed attempt with budget left, which returns to the session check after a backoff. An attempt that fails with the budget spent, or with an error classed as non-retryable, ends in PERMANENTLY_FAILED; `ccresu reset <id>` is the only operator edge from there, and it lands in DISABLED.",
+    },
+    {
       kind: "h2",
       text: "What \u201cresume\u201d actually runs",
     },
@@ -107,6 +114,13 @@ export const recoveryDoc: DocPage = {
       ],
     },
     {
+      kind: "diagram",
+      id: "stop-then-resume",
+      label: "One attempt, three calls",
+      description:
+        "The resume is refused because the session is still attached to the background agent. ccresu runs `claude stop <id>`, then issues the identical resume with the same arguments, inside the same attempt. That second result becomes the attempt's result, and RESUMED is written only after verification.",
+    },
+    {
       kind: "note",
       tone: "warning",
       title: "Stopped once, and only once",
@@ -141,6 +155,10 @@ export const recoveryDoc: DocPage = {
       kind: "code",
       label: "The contrast, against the pre-fix commit",
       code: `make e2e                              # the fixed binary: every check passes\n\ngit worktree add /tmp/ccresu-prefix 00692e3\n(cd /tmp/ccresu-prefix && go build -o /tmp/ccresu-prefix/ccresu ./cmd/ccresu)\ntests/scripts/background-resume-e2e.sh --pre-fix /tmp/ccresu-prefix/ccresu`,
+    },
+    {
+      kind: "capture",
+      id: "e2e",
     },
     {
       kind: "table",
@@ -204,6 +222,10 @@ export const recoveryDoc: DocPage = {
       kind: "code",
       label: "Follow one session",
       code: `ccresu inspect <session-id>        # state, schedule, attempts\nccresu history <session-id>        # every recorded transition\ncurl -N http://127.0.0.1:8787/api/v1/events   # live SSE feed`,
+    },
+    {
+      kind: "capture",
+      id: "history",
     },
   ],
 };

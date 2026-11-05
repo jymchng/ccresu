@@ -1,4 +1,7 @@
+import { CaptureFigure } from "@/components/capture-figure";
 import { CopyButton } from "@/components/copy-button";
+import { DocDiagram } from "@/components/doc-diagrams";
+import { getCapture } from "@/lib/captures";
 import type { Block } from "@/lib/docs/types";
 import { cn } from "@/lib/utils";
 
@@ -94,6 +97,24 @@ export function DocBlocks({ blocks }: { blocks: readonly Block[] }) {
           case "code":
             return (
               <CodeBlock key={index} code={block.code} label={block.label} />
+            );
+          case "capture": {
+            // Real output only: the id is typed, and an id that somehow does not
+            // resolve renders nothing rather than an empty, misleading box.
+            const capture = getCapture(block.id);
+            if (!capture) {
+              return null;
+            }
+            return <CaptureFigure key={index} capture={capture} />;
+          }
+          case "diagram":
+            return (
+              <DocDiagram
+                key={index}
+                id={block.id}
+                label={block.label}
+                description={block.description}
+              />
             );
           case "note":
             return (

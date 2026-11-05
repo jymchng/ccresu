@@ -17,7 +17,7 @@ export function Hero() {
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(60%_50%_at_50%_0%,theme(colors.primary/12%),transparent)]"
       />
       <div className="relative mx-auto grid w-full max-w-6xl gap-10 px-4 py-16 sm:px-6 lg:grid-cols-[1.1fr_1fr] lg:py-24">
-        <div className="flex flex-col items-start gap-5">
+        <div className="flex min-w-0 flex-col items-start gap-5">
           <Badge variant="outline" className="gap-1.5">
             <span className="size-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
             Local-first watchdog for Claude Code
@@ -54,13 +54,13 @@ export function Hero() {
             </Button>
           </div>
 
-          <dl className="mt-2 grid w-full max-w-lg grid-cols-3 gap-4 border-t border-border pt-5 text-sm">
+          <dl className="mt-2 grid w-full max-w-lg grid-cols-3 gap-3 border-t border-border pt-5 text-sm sm:gap-4">
             {[
               { term: "Runs", detail: "on your machine" },
               { term: "Interface", detail: "CLI + REST/SSE" },
               { term: "Telemetry", detail: "none" },
             ].map((item) => (
-              <div key={item.term} className="flex flex-col gap-0.5">
+              <div key={item.term} className="flex min-w-0 flex-col gap-0.5">
                 <dt className="text-xs uppercase tracking-wide text-muted-foreground">
                   {item.term}
                 </dt>
@@ -70,24 +70,24 @@ export function Hero() {
           </dl>
         </div>
 
-        <div className="flex flex-col gap-3 self-center">
-          <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+        <div className="flex min-w-0 flex-col gap-3 self-center">
+          <div className="min-w-0 max-w-full overflow-hidden rounded-xl border border-border bg-card shadow-sm">
             <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
               <Terminal className="size-3.5" aria-hidden="true" />
               what interrupts your work
             </div>
-            <pre className="overflow-x-auto px-4 py-4 text-xs leading-relaxed">
+            <pre className="max-w-full overflow-x-auto px-4 py-4 text-xs leading-relaxed">
               <code>{`You've hit your 5-hour limit \u00b7 resets 12pm (Europe/Berlin)
 Goal paused \u00b7 usage limit reached \u00b7 send a message after it resets`}</code>
             </pre>
           </div>
 
-          <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+          <div className="min-w-0 max-w-full overflow-hidden rounded-xl border border-border bg-card shadow-sm">
             <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
               <Terminal className="size-3.5" aria-hidden="true" />
               what {site.name} does about it
             </div>
-            <pre className="overflow-x-auto px-4 py-4 text-xs leading-relaxed text-muted-foreground">
+            <pre className="max-w-full overflow-x-auto px-4 py-4 text-xs leading-relaxed text-muted-foreground">
               <code>{`$ ccresu status
 sessions:      3 (3 enabled)
 pending:       1

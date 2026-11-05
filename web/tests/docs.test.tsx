@@ -62,6 +62,15 @@ describe("documentation", () => {
               expect(row).toHaveLength(block.head.length);
             }
             break;
+          case "capture":
+            // The id is typed against lib/captures, and the figure tests
+            // assert the output is really rendered.
+            expect(block.id.length).toBeGreaterThan(0);
+            break;
+          case "diagram":
+            expect(block.label.length).toBeGreaterThan(0);
+            expect(block.description.length).toBeGreaterThan(0);
+            break;
         }
       }
     }

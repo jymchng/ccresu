@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import NotFound from "@/app/not-found";
 import { docs, getDoc } from "@/lib/docs";
 import { features, workflow } from "@/lib/landing";
-import { exampleVersion, repo, site } from "@/lib/site";
+import { fallbackReleaseVersion, repo, site } from "@/lib/site";
 import { themeBootstrapScript, themeStorageKey } from "@/lib/theme";
 import { normalizeHref } from "./helpers";
 
@@ -73,7 +73,9 @@ describe("content integrity", () => {
   it("keeps the site on the GitHub Pages base path", () => {
     expect(site.basePath).toBe("/ccresu");
     expect(site.url).toBe(`https://${repo.owner}.github.io/${repo.name}`);
-    expect(exampleVersion).toMatch(/^\d+\.\d+\.\d+$/);
+    // The pinned fallback must itself be a version the asset naming accepts;
+    // the version actually rendered comes from lib/release.ts at build time.
+    expect(fallbackReleaseVersion).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
   it("bootstraps the theme before paint and honours the stored value", () => {
