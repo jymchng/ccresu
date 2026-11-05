@@ -403,13 +403,13 @@ func (a *App) commands() []commandSpec {
 		},
 		{
 			name:    "sessions",
-			summary: "list discovered sessions",
-			usage:   "sessions [--all] [--state STATE]... [--limit N]",
+			summary: "list, inspect or delete sessions",
+			usage:   sessionsUsage,
 			run:     (*App).cmdSessions,
 		},
 		{
 			name:    "inspect",
-			summary: "show everything known about one session",
+			summary: "show everything known about one session (same as 'sessions status')",
 			usage:   "inspect <session-id>",
 			run:     (*App).cmdInspect,
 		},

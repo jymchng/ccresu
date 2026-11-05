@@ -163,7 +163,18 @@ func (d *Daemon) discover(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("discover sessions: %w", err)
 	}
+	// Sessions the operator deleted are skipped, not upserted: discovery reads the
+	// transcripts on disk, so without this the next pass would re-create the row
+	// and the delete would look like it had failed. One query per pass, not one
+	// per session.
+	deleted, err := rt.Store.DeletedSessionIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("list deleted sessions: %w", err)
+	}
 	for _, session := range sessions {
+		if _, gone := deleted[session.ID]; gone {
+			continue
+		}
 		if _, err := rt.Store.UpsertSession(ctx, storageSession(session)); err != nil {
 			return fmt.Errorf("persist session %s: %w", session.ID, err)
 		}

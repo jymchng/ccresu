@@ -159,12 +159,12 @@ Commands:
   doctor    check the environment ccresu runs in
   enable    allow ccresu to recover a session
   history   show the attempts and state transitions of a session
-  inspect   show everything known about one session
+  inspect   show everything known about one session (same as 'sessions status')
   recover   resume one session now
   reset     clear a permanently failed session (state becomes disabled)
   retry     retry a session whose attempt budget is spent
   serve     run the local REST/SSE API
-  sessions  list discovered sessions
+  sessions  list, inspect or delete sessions
   status    summarise session, schedule and notification state
   version   print version and build metadata
 
@@ -411,11 +411,12 @@ it.
 
 ### Step 7 — Inspect one session
 
-`inspect` is the verbose view: identity, paths, when the next attempt is due and
-why, the latest detected limit, the stored schedule and the recent transitions.
-The `Next attempt` block is first because it is the question you opened `inspect`
-to answer; `--json` carries the same answer as `next_attempt.at` (RFC 3339),
-`next_attempt.reason` and a ready-made `next_attempt.human` countdown.
+`sessions status` (or its alias `inspect`) is the verbose view: identity, paths,
+when the next attempt is due and why, the latest detected limit, the stored
+schedule and the recent transitions. The `Next attempt` block is first because it
+is the question you opened the command to answer; `--json` carries the same
+answer as `next_attempt.at` (RFC 3339), `next_attempt.reason` and a ready-made
+`next_attempt.human` countdown.
 
 ```console
 $ ccresu inspect 3f9d1c07-1111-4222-8333-444455556666
