@@ -100,14 +100,7 @@ Done. Next steps:
 ### Or: `go install` (builds from the module)
 
 ```bash
-# Install ccresu
-go install github.com/jymchng/ccresu/cmd/ccresu@latest
-
-# Add Go binaries to PATH
-export PATH="$PATH:$(go env GOPATH)/bin"
-
-# Verify installation
-ccresu --help
+CGO_ENABLED=0 go install github.com/jymchng/ccresu/cmd/ccresu@latest && "$(go env GOPATH)/bin/ccresu" version
 ```
 
 `go install` puts the binary in `$(go env GOPATH)/bin`, which is not on `PATH`

@@ -1,4 +1,5 @@
-import { assetName, fallbackReleaseVersion, releaseDownloadBase, repo } from "@/lib/site";
+import { renderInstallCommand, installScripts } from "@/lib/install-commands";
+import { assetName, fallbackReleaseVersion, repo } from "@/lib/site";
 
 import type { DocPage } from "./types";
 
@@ -11,6 +12,11 @@ import type { DocPage } from "./types";
  * The default exists so navigation, the docs index and the tests can hold a
  * page without a network round trip; the page itself always passes the real
  * version.
+ *
+ * Every command below is **one line**, and every one of them comes from
+ * `install-commands.json` so that `.github/workflows/install-commands.yml` runs
+ * the same string a reader copies. A multi-line block on this page would be a
+ * script, and a script that is copied in halves is a broken install.
  */
 export function createInstallationDoc(
   version: string = fallbackReleaseVersion,
@@ -23,40 +29,70 @@ export function createInstallationDoc(
   slug: "installation",
   title: "Installation",
   summary:
-    "Install a signed-off release binary, or build from source with Go 1.26 or newer.",
+    "Install a released binary with a single line, or build from source with Go 1.26 or newer.",
   blocks: [
     {
       kind: "p",
-      text: `Releases are published on the GitHub releases page (${repo.releases}). Each tag produces one archive per supported platform plus a \`checksums.txt\` file containing the SHA-256 of every asset. Verify the checksum before you run the binary.`,
+      text: `Releases are published on the GitHub releases page (${repo.releases}). Each tag carries one archive per supported platform plus a \`checksums.txt\` with the SHA-256 of every asset, and the installer verifies the checksum before it extracts anything.`,
     },
     {
       kind: "h2",
-      text: "Download a release",
+      text: "Install with one line",
     },
     {
       kind: "p",
-      text: `Replace the version in the file name with the tag you want. The commands below use \`${version}\`, the latest published release when this page was built.`,
+      text: "Linux and macOS, `amd64` or `arm64`: the installer detects the platform, resolves the newest release, downloads that archive and `checksums.txt`, verifies the hash, installs the binary into `~/.local/bin` and writes `~/.config/ccresu/config.yaml`.",
     },
     {
       kind: "code",
-      label: "Linux, x86-64",
-      code: `VERSION=${version}\nASSET=${linuxAsset}\nBASE=${releaseDownloadBase(version)}\n\nmkdir -p ~/.local/bin\ncurl -fsSLO "$BASE/$ASSET"\ncurl -fsSLO "$BASE/checksums.txt"\nsha256sum --check --ignore-missing checksums.txt\ntar -xzf "$ASSET" ccresu\ninstall -m 0755 ccresu ~/.local/bin/ccresu\nrm -f "$ASSET" checksums.txt ccresu\nccresu version`,
+      label: "Linux and macOS",
+      code: renderInstallCommand("unix"),
+    },
+    {
+      kind: "p",
+      text: "Preview it first if you prefer: the dry run prints every action and downloads nothing.",
     },
     {
       kind: "code",
-      label: "macOS, Apple silicon",
-      code: `VERSION=${version}\nASSET=${macAsset}\nBASE=${releaseDownloadBase(version)}\n\nmkdir -p ~/.local/bin\ncurl -fsSLO "$BASE/$ASSET"\ncurl -fsSLO "$BASE/checksums.txt"\nshasum -a 256 --check --ignore-missing checksums.txt\ntar -xzf "$ASSET" ccresu\ninstall -m 0755 ccresu ~/.local/bin/ccresu\nxattr -d com.apple.quarantine ~/.local/bin/ccresu 2>/dev/null || true`,
+      label: "Preview, changes nothing",
+      code: renderInstallCommand("unixPreview"),
+    },
+    {
+      kind: "p",
+      text: `Pin a release by putting the version in the same line. The one on this page is \`${version}\`, the newest published release when the page was built.`,
     },
     {
       kind: "code",
-      label: "Windows, x86-64 (PowerShell)",
-      code: `$VERSION = "${version}"\n$Asset = "${winAsset}"\n$Base = "${releaseDownloadBase(version)}"\n\nInvoke-WebRequest "$Base/$Asset" -OutFile $Asset\nInvoke-WebRequest "$Base/checksums.txt" -OutFile checksums.txt\n$Expected = (Select-String -Path checksums.txt -Pattern $Asset).Line.Split()[0]\nif ((Get-FileHash $Asset -Algorithm SHA256).Hash -ne $Expected.ToUpper()) { throw "checksum mismatch" }\nExpand-Archive $Asset -DestinationPath "$env:LOCALAPPDATA\\ccresu"`,
+      label: `Pinned to ${version}`,
+      code: renderInstallCommand("unixPinned", version),
+    },
+    {
+      kind: "h2",
+      text: "Install on Windows",
+    },
+    {
+      kind: "p",
+      text: "The PowerShell installer does the same work in a normal, non-elevated window: it verifies the sha256 of the `.zip` before extracting it, installs `ccresu.exe` under `%LOCALAPPDATA%`, adds that directory to your user `PATH` and writes `%APPDATA%\\ccresu\\config.yaml`.",
+    },
+    {
+      kind: "code",
+      label: "Windows, PowerShell",
+      code: renderInstallCommand("windows"),
+    },
+    {
+      kind: "code",
+      label: `Windows, pinned to ${version}`,
+      code: renderInstallCommand("windowsPinned", version),
+    },
+    {
+      kind: "p",
+      text: `The installers are short and readable, and you should read what you pipe into a shell: [scripts/install.sh](${repo.url}/blob/main/scripts/install.sh) and [scripts/install.ps1](${repo.url}/blob/main/scripts/install.ps1). Re-running the same line is the supported upgrade path.`,
     },
     {
       kind: "note",
       tone: "info",
       title: "Asset naming",
-      text: "Assets are named `ccresu_<version>_<os>_<arch>.tar.gz` (`.zip` on Windows), for example `${linuxAsset}`. Supported targets: linux and darwin on amd64 and arm64, windows on amd64 and arm64.",
+      text: `Assets are named \`ccresu_<version>_<os>_<arch>.tar.gz\` (\`.zip\` on Windows), for example \`${linuxAsset}\`, \`${macAsset}\` and \`${winAsset}\`. Supported targets: linux and darwin on amd64 and arm64, windows on amd64 and arm64. The installers pick the matching one for the machine they run on.`,
     },
     {
       kind: "h2",
@@ -64,12 +100,12 @@ export function createInstallationDoc(
     },
     {
       kind: "p",
-      text: "The SQLite driver is pure Go, so the build needs no cgo and no system SQLite library.",
+      text: `The SQLite driver is pure Go, so the build needs no cgo and no system SQLite library. The line below installs into \`$(go env GOPATH)/bin\` and prints the version it produced.`,
     },
     {
       kind: "code",
       label: "Go 1.26 or newer",
-      code: `CGO_ENABLED=0 go install ${repo.url.replace("https://", "")}/cmd/ccresu@latest\nccresu version`,
+      code: renderInstallCommand("go"),
     },
     {
       kind: "h2",
@@ -77,8 +113,8 @@ export function createInstallationDoc(
     },
     {
       kind: "code",
-      label: "Clone and build",
-      code: `git clone ${repo.clone}\ncd ccresu\nmake build          # writes ./ccresu with version, commit and build date\n./ccresu version`,
+      label: "Clone, build, run",
+      code: renderInstallCommand("source"),
     },
     {
       kind: "h2",
@@ -87,7 +123,7 @@ export function createInstallationDoc(
     {
       kind: "ol",
       items: [
-        "Create `~/.config/ccresu/config.yaml` with `ccresu config init`, then edit it.",
+        "Create `~/.config/ccresu/config.yaml` with `ccresu config init`, then edit it. The installers write it for you already.",
         "Run `ccresu config validate` to check the file, the environment overrides and every default.",
         "Run `ccresu doctor` to check the Claude Code CLI, transcript access, the database and the data directory.",
         "Start the watchdog with `ccresu daemon`, or install it as a service (see Deployment).",
@@ -106,7 +142,8 @@ export function createInstallationDoc(
       items: [
         "Claude Code installed and logged in: discovery runs `claude agents --json`, so `claude` must be on PATH.",
         "Read access to `~/.claude/projects` and `~/.claude/session-env` for transcript-based detection and verification.",
-        "No root privileges: everything lives under your home directory.",
+        "No root privileges: everything lives under your home directory, and the installer refuses to run as root.",
+        `The raw scripts the two lines above pipe into a shell: \`${installScripts.unix}\` and \`${installScripts.windows}\`.`,
       ],
     },
   ],

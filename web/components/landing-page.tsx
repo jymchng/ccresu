@@ -65,8 +65,8 @@ export function LandingPage({ releaseVersion }: { releaseVersion: string }) {
               Install in one command
             </h2>
             <p className="max-w-md text-sm leading-relaxed text-muted-foreground">
-              Download the release asset for your platform, verify it against
-              the published {" "}
+              One line: it detects your platform, downloads that release asset,
+              verifies it against the published {" "}
               <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em]">
                 checksums.txt
               </code>

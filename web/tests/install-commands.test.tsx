@@ -7,13 +7,25 @@ import { InstallCommands, installCommand } from "@/components/install-commands";
 import { createInstallationDoc } from "@/lib/docs/installation";
 import type { Block } from "@/lib/docs/types";
 import {
+  installCommandNames,
+  installScripts,
+  renderInstallCommand,
+} from "@/lib/install-commands";
+import {
   assetName,
   assetUrl,
   fallbackReleaseVersion,
-  installTargets,
+  installPlatforms,
   releaseDownloadBase,
   repo,
 } from "@/lib/site";
+
+/** The code blocks of the installation page, parsed once. */
+function installationCodeBlocks(version = fallbackReleaseVersion) {
+  return createInstallationDoc(version).blocks.filter(
+    (block): block is Extract<Block, { kind: "code" }> => block.kind === "code",
+  );
+}
 
 describe("install commands", () => {
   it("names the assets the release workflow publishes", () => {
@@ -28,119 +40,150 @@ describe("install commands", () => {
     );
   });
 
-  it("verifies the checksum before installing on unix", () => {
-    const command = installCommand("linux", "amd64", fallbackReleaseVersion);
+  it("renders every command as a single line", () => {
+    for (const name of installCommandNames) {
+      const command = renderInstallCommand(name, fallbackReleaseVersion);
+      expect(command, name).not.toContain("\n");
+      expect(command.trim(), name).toBe(command);
+      expect(command.length, name).toBeGreaterThan(0);
+    }
+  });
 
-    expect(command).toContain(
-      `curl -fsSLO "$BASE/checksums.txt"`,
+  it("leaves no placeholder behind", () => {
+    for (const name of installCommandNames) {
+      const command = renderInstallCommand(name, "9.9.9");
+      expect(command, name).not.toMatch(/\{[a-zA-Z]+\}/);
+      expect(command, name).not.toContain("<version>");
+    }
+  });
+
+  it("pipes the documented installer scripts, one line each", () => {
+    // The Unix line runs the shell installer and nothing else.
+    expect(renderInstallCommand("unix")).toBe(
+      `curl -fsSL ${installScripts.unix} | bash`,
     );
-    expect(command).toContain("sha256sum --check");
-    expect(command).toContain("install -m 0755 ccresu ~/.local/bin/ccresu");
-    expect(command).toContain(`ccresu_${fallbackReleaseVersion}_linux_amd64.tar.gz`);
+    // Pinning is an environment variable in the same line, so the command stays
+    // a one-liner instead of turning into a script.
+    expect(renderInstallCommand("unixPinned", "1.2.3")).toBe(
+      `curl -fsSL ${installScripts.unix} | CCRESU_VERSION=1.2.3 bash`,
+    );
+    // The dry run changes nothing and is still one line.
+    expect(renderInstallCommand("unixPreview")).toContain("--dry-run");
+
+    expect(renderInstallCommand("windows")).toBe(
+      `irm ${installScripts.windows} | iex`,
+    );
+    expect(renderInstallCommand("windowsPinned", "1.2.3")).toBe(
+      `$env:CCRESU_VERSION = '1.2.3'; irm ${installScripts.windows} | iex`,
+    );
   });
 
-  it("uses shasum and no root on macOS", () => {
-    const command = installCommand("darwin", "arm64", fallbackReleaseVersion);
-    expect(command).toContain("shasum -a 256 --check");
-    expect(command).not.toContain("sudo");
+  it("keeps the documented raw URLs consistent with the repository", () => {
+    // The commands carry raw.githubusercontent.com URLs, which are a fact about
+    // the repository that `lib/site.ts` also states. Both must agree.
+    const rawPrefix = `https://raw.githubusercontent.com/${repo.owner}/${repo.name}/main/`;
+    expect(installScripts.unix).toBe(`${rawPrefix}scripts/install.sh`);
+    expect(installScripts.windows).toBe(`${rawPrefix}scripts/install.ps1`);
+
+    expect(renderInstallCommand("source")).toContain(repo.clone);
+    expect(renderInstallCommand("go")).toContain(
+      `${repo.url.replace("https://", "")}/cmd/ccresu@latest`,
+    );
   });
 
-  it("verifies the hash in PowerShell on Windows", () => {
-    const command = installCommand("windows", "amd64", fallbackReleaseVersion);
-    expect(command).toContain("Get-FileHash");
-    expect(command).toContain("checksum mismatch");
-    expect(command).toContain(`ccresu_${fallbackReleaseVersion}_windows_amd64.zip`);
+  it("pins the version the resolver reported, not the fallback", () => {
+    const resolved = "9.9.9";
+    expect(resolved).not.toBe(fallbackReleaseVersion);
+
+    const unix = renderInstallCommand("unixPinned", resolved);
+    expect(unix).toContain(`CCRESU_VERSION=${resolved}`);
+    expect(unix).not.toContain(fallbackReleaseVersion);
+
+    const windows = renderInstallCommand("windowsPinned", resolved);
+    expect(windows).toContain(`'${resolved}'`);
+    expect(windows).not.toContain(fallbackReleaseVersion);
   });
 
-  it("switches platform when a tab is chosen", async () => {
+  it("installs with a one-liner on every platform tab", async () => {
     const user = userEvent.setup();
     render(<InstallCommands version={fallbackReleaseVersion} />);
 
-    expect(screen.getByRole("tab", { name: "Linux x86-64" })).toHaveAttribute(
+    expect(screen.getByRole("tab", { name: /Linux/ })).toHaveAttribute(
       "aria-selected",
       "true",
     );
-    expect(screen.getByText(/linux_amd64\.tar\.gz/)).toBeInTheDocument();
+    expect(
+      screen.getByText(new RegExp(`CCRESU_VERSION=${fallbackReleaseVersion}`)),
+    ).toBeInTheDocument();
 
-    await user.click(screen.getByRole("tab", { name: "Windows x86-64" }));
+    await user.click(screen.getByRole("tab", { name: /Windows/ }));
 
-    expect(screen.getByRole("tab", { name: "Windows x86-64" })).toHaveAttribute(
+    expect(screen.getByRole("tab", { name: /Windows/ })).toHaveAttribute(
       "aria-selected",
       "true",
     );
-    expect(screen.getByText(/windows_amd64\.zip/)).toBeInTheDocument();
+    expect(screen.getByText(/CCRESU_VERSION/)).toHaveTextContent("irm");
   });
 
-  it("offers every published target as a tab", () => {
+  it("offers one tab per operating system, which is what the installers detect", () => {
     render(<InstallCommands version={fallbackReleaseVersion} />);
 
     const tabs = screen.getAllByRole("tab");
 
-    expect(tabs).toHaveLength(installTargets.length);
-    expect(tabs.map((tab) => tab.textContent)).toEqual(
-      installTargets.map((target) => target.label),
-    );
+    expect(tabs).toHaveLength(installPlatforms.length);
+    for (const platform of installPlatforms) {
+      expect(
+        screen.getByRole("tab", { name: new RegExp(platform.label) }),
+      ).toBeInTheDocument();
+    }
   });
 
   it("downloads from the pinned-tag URL GitHub actually serves", () => {
-    // The two halves the installer scripts join with a slash.
+    // Two halves the installers join with a slash; `/releases/latest/download/
+    // <tag>/<asset>` is a 404, so only the two documented shapes resolve.
     expect(assetUrl(fallbackReleaseVersion, "linux", "amd64")).toBe(
       `${releaseDownloadBase(fallbackReleaseVersion)}/${assetName(fallbackReleaseVersion, "linux", "amd64")}`,
     );
+    expect(assetUrl(fallbackReleaseVersion, "linux", "amd64")).not.toContain(
+      "/latest/download/",
+    );
+  });
 
-    for (const target of installTargets) {
-      const command = installCommand(target.os, target.arch, fallbackReleaseVersion);
+  it("gives the installation page only one-line commands", () => {
+    const blocks = installationCodeBlocks();
 
-      expect(command).toContain(releaseDownloadBase(fallbackReleaseVersion));
-      expect(command).toContain(assetName(fallbackReleaseVersion, target.os, target.arch));
-      // `/releases/latest/download/<tag>/<asset>` is a 404; only the two
-      // documented shapes resolve.
-      expect(command).not.toContain("/latest/download/");
-      expect(command).toContain(
-        `https://github.com/${repo.owner}/${repo.name}/releases/download/v${fallbackReleaseVersion}`,
-      );
+    expect(blocks.length).toBeGreaterThanOrEqual(4);
+    for (const block of blocks) {
+      expect(block.code, block.label).not.toContain("\n");
+      expect(block.code, block.label).not.toMatch(/^\s*#/);
     }
   });
 
-  it("installation doc uses the same download base as the landing page", () => {
-    const installationDoc = createInstallationDoc(fallbackReleaseVersion);
-    const codeBlocks = installationDoc.blocks.filter(
-      (block): block is Extract<Block, { kind: "code" }> => block.kind === "code",
-    );
-    const downloadBlocks = codeBlocks.filter((block) =>
-      block.code.includes("/$ASSET"),
-    );
+  it("documentation page and landing page render the same strings", () => {
+    const version = fallbackReleaseVersion;
+    const blocks = installationCodeBlocks(version).map((block) => block.code);
 
-    expect(downloadBlocks.length).toBeGreaterThan(0);
+    // The documented commands are the rendered commands, not parallel copies.
+    expect(blocks).toContain(renderInstallCommand("unix", version));
+    expect(blocks).toContain(renderInstallCommand("unixPreview", version));
+    expect(blocks).toContain(renderInstallCommand("unixPinned", version));
+    expect(blocks).toContain(renderInstallCommand("windows", version));
+    expect(blocks).toContain(renderInstallCommand("windowsPinned", version));
+    expect(blocks).toContain(renderInstallCommand("go", version));
+    expect(blocks).toContain(renderInstallCommand("source", version));
 
-    for (const block of downloadBlocks) {
-      expect(block.code).toContain(releaseDownloadBase(fallbackReleaseVersion));
-      expect(block.code).not.toContain("/latest/download/");
-      expect(block.code).toContain("checksums.txt");
-    }
-  });
-
-  it("prints the version the resolver reported, not the pinned fallback", () => {
-    const resolved = "9.9.9";
-    expect(resolved).not.toBe(fallbackReleaseVersion);
-
-    // The landing-page command block.
-    const home = render(<InstallCommands version={resolved} />);
+    const home = render(<InstallCommands version={version} />);
     expect(home.container.textContent).toContain(
-      `ccresu_${resolved}_linux_amd64.tar.gz`,
+      installCommand("linux", version),
     );
-    expect(home.container.textContent).toContain(
-      `/releases/download/v${resolved}`,
-    );
-    expect(home.container.textContent).not.toContain(`_${fallbackReleaseVersion}_`);
     home.unmount();
+  });
 
-    // The installation page, whose three download snippets also name a release.
+  it("shows the resolved version on the installation page", () => {
+    const resolved = "9.9.9";
     const doc = render(<DocPageView slug="installation" version={resolved} />);
-    expect(doc.container.textContent).toContain(`VERSION=${resolved}`);
-    expect(doc.container.textContent).toContain(
-      `/releases/download/v${resolved}`,
-    );
+
+    expect(doc.container.textContent).toContain(`CCRESU_VERSION=${resolved}`);
     expect(doc.container.textContent).not.toContain(fallbackReleaseVersion);
   });
 });
