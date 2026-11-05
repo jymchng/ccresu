@@ -1,0 +1,27 @@
+{
+  "_comment": [
+    "The installation commands, in one place, each on a single line.",
+    "The site renders them (web/lib/install-commands.ts) and the CI workflow",
+    "(.github/workflows/install-commands.yml) executes exactly these strings via",
+    "scripts/install-one-liner.mjs, so a documented command that does not work",
+    "fails a run instead of a reader. A test asserts both sides agree.",
+    "Placeholders: {key} from vars, plus {version}."
+  ],
+  "vars": {
+    "repo": "https://github.com/jymchng/ccresu",
+    "module": "github.com/jymchng/ccresu",
+    "clone": "https://github.com/jymchng/ccresu.git",
+    "branch": "main",
+    "installScript": "https://raw.githubusercontent.com/jymchng/ccresu/main/scripts/install.sh",
+    "installScriptPs1": "https://raw.githubusercontent.com/jymchng/ccresu/main/scripts/install.ps1"
+  },
+  "commands": {
+    "unix": "curl -fsSL {installScript} | bash",
+    "unixPreview": "curl -fsSL {installScript} | bash -s -- --dry-run",
+    "unixPinned": "curl -fsSL {installScript} | CCRESU_VERSION={version} bash",
+    "windows": "irm {installScriptPs1} | iex",
+    "windowsPinned": "$env:CCRESU_VERSION = '{version}'; irm {installScriptPs1} | iex",
+    "go": "CGO_ENABLED=0 go install {module}/cmd/ccresu@latest && \"$(go env GOPATH)/bin/ccresu\" version",
+    "source": "git clone {clone} && cd ccresu && make build && ./ccresu version"
+  }
+}

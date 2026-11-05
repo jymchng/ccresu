@@ -78,17 +78,14 @@ export function checksumsUrl(version: string): string {
  */
 export const fallbackReleaseVersion = "0.1.0";
 
-export const installTargets: ReadonlyArray<{
+export const installPlatforms: ReadonlyArray<{
   os: Platform;
-  arch: Arch;
   label: string;
+  note: string;
 }> = [
-  { os: "linux", arch: "amd64", label: "Linux x86-64" },
-  { os: "linux", arch: "arm64", label: "Linux ARM64" },
-  { os: "darwin", arch: "arm64", label: "macOS Apple silicon" },
-  { os: "darwin", arch: "amd64", label: "macOS Intel" },
-  { os: "windows", arch: "amd64", label: "Windows x86-64" },
-  { os: "windows", arch: "arm64", label: "Windows ARM64" },
+  { os: "linux", label: "Linux", note: "amd64 and arm64" },
+  { os: "darwin", label: "macOS", note: "Apple silicon and Intel" },
+  { os: "windows", label: "Windows", note: "amd64 and arm64" },
 ];
 
 export const localApi = {

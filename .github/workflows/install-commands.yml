@@ -1,0 +1,191 @@
+name: Installation commands
+
+# The installation page advertises one-line commands. This workflow runs them.
+#
+# A documented command is a promise, and the last one to break did so only in the
+# field: `curl … | bash` died with `curl: (1) Protocol "https" disabled` while
+# every test passed against a fake http mirror. Nothing here is a simulation —
+# the commands fetch the published raw scripts over the network, install a real
+# release archive, and the binary they install has to report the version it
+# claims to be.
+#
+# The commands come from web/lib/install-commands.json through
+# scripts/install-one-liner.mjs, the same source the site renders, and
+# web/tests/install-one-liner.test.ts asserts the two agree byte for byte.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    # Weekly, so a release or an upstream change cannot silently rot a command.
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: install-commands-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unix:
+    name: One-liner on ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-latest
+          - name: macOS
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Print the documented one-liner
+        id: command
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The exact string the installation page shows, not a reconstruction.
+          command="$(node scripts/install-one-liner.mjs unix)"
+          case "$command" in
+            *$'\n'*) echo "::error::the documented command is not a one-liner"; exit 1 ;;
+          esac
+          printf 'command=%s\n' "$command" >> "$GITHUB_OUTPUT"
+          printf 'running: %s\n' "$command"
+
+      - name: Run the one-liner
+        shell: bash
+        env:
+          COMMAND: ${{ steps.command.outputs.command }}
+        run: |
+          set -euo pipefail
+          # Exactly the documented line, evaluated by the shell it was written for.
+          bash -c "$COMMAND"
+
+      - name: The installed binary reports a version
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="$HOME/.local/bin/ccresu"
+          test -x "$binary"
+          "$binary" version
+          "$binary" version | grep -Eq '^ccresu [0-9]+\.[0-9]+\.[0-9]+$'
+          # A piped install must leave the configuration the page promises.
+          test -f "$HOME/.config/ccresu/config.yaml"
+          printf 'installed: %s\n' "$binary"
+
+  linux-pinned-and-preview:
+    name: Pinned and dry-run one-liners
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: The dry run downloads nothing and installs nothing
+        shell: bash
+        run: |
+          set -euo pipefail
+          command="$(node scripts/install-one-liner.mjs unixPreview)"
+          printf 'running: %s\n' "$command"
+          # A throwaway HOME: if the preview writes, this notices.
+          export HOME
+          HOME="$(mktemp -d)"
+          output="$(bash -c "$command")"
+          printf '%s\n' "$output"
+          printf '%s\n' "$output" | grep -q "dry-run"
+          test ! -e "$HOME/.local/bin/ccresu"
+
+      - name: The pinned one-liner installs the version it names
+        shell: bash
+        run: |
+          set -euo pipefail
+          command="$(node scripts/install-one-liner.mjs unixPinned --version 0.1.0)"
+          printf 'running: %s\n' "$command"
+          export HOME
+          HOME="$(mktemp -d)"
+          bash -c "$command"
+          "$HOME/.local/bin/ccresu" version | grep -Eq '^ccresu 0\.1\.0$'
+
+  go:
+    name: Go and source one-liners
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: The go install one-liner builds and reports its version
+        shell: bash
+        run: |
+          set -euo pipefail
+          command="$(node scripts/install-one-liner.mjs go)"
+          printf 'running: %s\n' "$command"
+          bash -c "$command"
+
+      - name: The source one-liner clones, builds and reports its version
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `cd` into a scratch directory first: the command clones into ./ccresu.
+          command="$(node scripts/install-one-liner.mjs source)"
+          printf 'running: %s\n' "$command"
+          scratch="$(mktemp -d)"
+          ( cd "$scratch" && bash -c "$command" )
+          test -x "$scratch/ccresu/ccresu"
+
+  windows:
+    name: One-liner on Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Print the documented one-liner
+        id: command
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $command = node scripts/install-one-liner.mjs windows
+          if ($command -match "`n") { throw 'the documented command is not a one-liner' }
+          "command=$command" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "running: $command"
+
+      - name: Run the one-liner
+        shell: pwsh
+        env:
+          COMMAND: ${{ steps.command.outputs.command }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # `iex` is what the documented line does, so run it the same way.
+          Invoke-Expression $COMMAND
+
+      - name: The installed binary reports a version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $binary = Join-Path $env:LOCALAPPDATA 'Programs\ccresu\bin\ccresu.exe'
+          if (-not (Test-Path $binary)) { throw "the installer did not put ccresu.exe in $binary" }
+          & $binary version
+          $reported = (& $binary version | Select-Object -First 1)
+          if ($reported -notmatch '^ccresu \d+\.\d+\.\d+$') { throw "unexpected version line: $reported" }
+          Write-Host "installed: $binary"
