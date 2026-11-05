@@ -2,11 +2,13 @@ import { ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { CopyMarkdown } from "@/components/copy-markdown";
 import { DocBlocks } from "@/components/doc-blocks";
 import { DocsMenu } from "@/components/docs-menu";
 import { DocsNav } from "@/components/docs-nav";
 import { JsonLd } from "@/components/structured-data";
 import { docs, getDoc } from "@/lib/docs";
+import { pageToMarkdown } from "@/lib/docs/markdown";
 import { breadcrumbJsonLd, routeByPath, techArticleJsonLd } from "@/lib/seo";
 
 export function DocPageView({
@@ -63,6 +65,14 @@ export function DocPageView({
         <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
           {doc.summary}
         </p>
+
+        {/* The whole page as Markdown, from the same blocks that render below. */}
+        <div className="mt-4">
+          <CopyMarkdown
+            markdown={pageToMarkdown(doc)}
+            filename={`ccresu-docs-${doc.slug}.md`}
+          />
+        </div>
 
         <div className="mt-8">
           <DocBlocks blocks={doc.blocks} />

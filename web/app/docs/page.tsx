@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import { CopyMarkdown } from "@/components/copy-markdown";
 import { DocsMenu } from "@/components/docs-menu";
 import { DocsNav } from "@/components/docs-nav";
 import { JsonLd } from "@/components/structured-data";
 import { docs } from "@/lib/docs";
+import { indexToMarkdown } from "@/lib/docs/markdown";
 import {
   breadcrumbJsonLd,
   collectionPageJsonLd,
@@ -47,6 +49,11 @@ export default function DocsIndexPage() {
           deploy and troubleshoot it. The same material ships in the repository
           under <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em]">docs/</code>.
         </p>
+
+        {/* The list below as Markdown: one link per page, with its summary. */}
+        <div className="mt-4">
+          <CopyMarkdown markdown={indexToMarkdown(docs)} filename="ccresu-docs.md" />
+        </div>
 
         <ul className="mt-8 grid gap-4 sm:grid-cols-2">
           {docs.map((doc, index) => (
