@@ -8,6 +8,10 @@ import { cn } from "@/lib/utils";
 /**
  * Renders `backticked` spans as inline code. Deliberately tiny: the docs are
  * data, and this is the only place that interprets them.
+ *
+ * Inline code gets `overflow-wrap: anywhere`, because the docs are full of URLs
+ * and file paths with no spaces in them: one unbreakable token is enough to make
+ * the whole page wider than a 320px phone.
  */
 export function InlineText({ text }: { text: string }) {
   const parts = text.split("`");
@@ -17,12 +21,14 @@ export function InlineText({ text }: { text: string }) {
         index % 2 === 1 ? (
           <code
             key={index}
-            className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground"
+            className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground [overflow-wrap:anywhere]"
           >
             {part}
           </code>
         ) : (
-          <span key={index}>{part}</span>
+          <span key={index} className="[overflow-wrap:anywhere]">
+            {part}
+          </span>
         ),
       )}
     </>
@@ -135,44 +141,58 @@ export function DocBlocks({ blocks }: { blocks: readonly Block[] }) {
             );
           case "table":
             return (
-              <div
-                key={index}
-                className="overflow-x-auto rounded-xl border border-border"
-              >
-                <table className="w-full border-collapse text-left text-sm">
-                  <thead className="bg-muted/40">
-                    <tr>
-                      {block.head.map((cell) => (
-                        <th
-                          key={cell}
-                          scope="col"
-                          className="whitespace-nowrap px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-                        >
-                          {cell}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {block.rows.map((row, rowIndex) => (
-                      <tr key={rowIndex} className="border-t border-border align-top">
-                        {row.map((cell, cellIndex) => (
-                          <td
-                            key={cellIndex}
-                            className={cn(
-                              "px-4 py-2.5",
-                              cellIndex === 0
-                                ? "font-medium text-foreground"
-                                : "text-muted-foreground",
-                            )}
+              <div key={index} className="flex flex-col gap-1">
+                {/*
+                  A table wider than a phone has to scroll inside its own box —
+                  never widen the page. It is a labelled, focusable scroll
+                  region so a keyboard user can reach it and a screen reader
+                  says what it is, and the hint below is only shown where the
+                  table actually has to scroll (`sm:` upwards the columns fit).
+                */}
+                <div
+                  role="region"
+                  aria-label={block.head.join(", ")}
+                  tabIndex={0}
+                  className="overflow-x-auto rounded-xl border border-border [scrollbar-width:thin] focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <table className="w-full border-collapse text-left text-sm">
+                    <thead className="bg-muted/40">
+                      <tr>
+                        {block.head.map((cell) => (
+                          <th
+                            key={cell}
+                            scope="col"
+                            className="px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground sm:whitespace-nowrap sm:px-4"
                           >
-                            <InlineText text={cell} />
-                          </td>
+                            {cell}
+                          </th>
                         ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {block.rows.map((row, rowIndex) => (
+                        <tr key={rowIndex} className="border-t border-border align-top">
+                          {row.map((cell, cellIndex) => (
+                            <td
+                              key={cellIndex}
+                              className={cn(
+                                "px-3 py-2.5 sm:px-4",
+                                cellIndex === 0
+                                  ? "font-medium text-foreground"
+                                  : "text-muted-foreground",
+                              )}
+                            >
+                              <InlineText text={cell} />
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="text-xs text-muted-foreground sm:hidden">
+                  Swipe the table sideways to see every column.
+                </p>
               </div>
             );
           default:

@@ -45,7 +45,7 @@ export function SiteHeader() {
         <div className="ml-auto flex items-center gap-1">
           <a
             href={repo.url}
-            className="inline-flex min-h-11 items-center gap-1.5 rounded-md px-2.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+            className="inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-md px-2.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
           >
             <GitBranch className="size-4" aria-hidden="true" />
             <span className="hidden sm:inline">GitHub</span>

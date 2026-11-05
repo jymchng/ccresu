@@ -52,6 +52,13 @@
   html {
     scroll-behavior: smooth;
     -webkit-text-size-adjust: 100%;
+    /*
+     * The header is sticky and 56px tall. Without this, jumping to a `#section`
+     * or a heading anchor scrolls the target under the header, so the reader
+     * lands on content they cannot see the start of. `scroll-mt-*` on the
+     * individual headings keeps working and wins where it is set.
+     */
+    scroll-padding-top: 4.5rem;
   }
 
   body {

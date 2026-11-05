@@ -2,6 +2,15 @@ import Link from "next/link";
 
 import { repo, site, localApi } from "@/lib/site";
 
+/**
+ * Footer link rows are `flex min-h-11 items-center`: a bare inline link is a
+ * 20px-tall tap target, which is fine with a mouse and hostile with a thumb.
+ * The column list also reflows to two columns at `sm` before it goes to four at
+ * `md`, so the sections never squeeze into unreadably narrow columns.
+ */
+const linkClass =
+  "flex min-h-11 items-center text-sm text-muted-foreground transition-colors hover:text-foreground";
+
 const productLinks = [
   { href: "/docs/installation/", label: "Installation" },
   { href: "/docs/tutorial/", label: "Tutorial" },
@@ -28,52 +37,40 @@ const projectLinks = [
 export function SiteFooter() {
   return (
     <footer className="border-t border-border bg-muted/20">
-      <div className="mx-auto grid w-full max-w-6xl gap-8 px-4 py-10 sm:px-6 md:grid-cols-4">
-        <div className="flex flex-col gap-2">
+      <div className="mx-auto grid w-full max-w-6xl gap-8 px-4 py-10 sm:grid-cols-2 sm:px-6 md:grid-cols-4">
+        <div className="flex min-w-0 flex-col gap-2">
           <p className="font-semibold tracking-tight">{site.name}</p>
           <p className="max-w-xs text-sm text-muted-foreground">{site.tagline}.</p>
           <p className="text-xs text-muted-foreground">
-            Local API: <code className="font-mono">{localApi.address}</code>
+            Local API: <code className="font-mono [overflow-wrap:anywhere]">{localApi.address}</code>
           </p>
         </div>
-        <div className="flex flex-col gap-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        <div className="flex min-w-0 flex-col sm:gap-0.5">
+          <p className="pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Product
           </p>
           {productLinks.map((link) => (
-            <Link
-              key={link.href}
-              href={link.href}
-              className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-            >
+            <Link key={link.href} href={link.href} className={linkClass}>
               {link.label}
             </Link>
           ))}
         </div>
-        <div className="flex flex-col gap-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        <div className="flex min-w-0 flex-col sm:gap-0.5">
+          <p className="pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Reference
           </p>
           {referenceLinks.map((link) => (
-            <Link
-              key={link.href}
-              href={link.href}
-              className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-            >
+            <Link key={link.href} href={link.href} className={linkClass}>
               {link.label}
             </Link>
           ))}
         </div>
-        <div className="flex flex-col gap-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        <div className="flex min-w-0 flex-col sm:gap-0.5">
+          <p className="pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Project
           </p>
           {projectLinks.map((link) => (
-            <a
-              key={link.href}
-              href={link.href}
-              className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-            >
+            <a key={link.href} href={link.href} className={linkClass}>
               {link.label}
             </a>
           ))}

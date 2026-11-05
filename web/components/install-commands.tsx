@@ -97,7 +97,7 @@ export function InstallCommands({ version }: { version: string }) {
             aria-selected={option.id === selected}
             onClick={() => setSelected(option.id)}
             className={cn(
-              "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+              "flex min-h-11 items-center rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
               option.id === selected
                 ? "bg-background text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground",

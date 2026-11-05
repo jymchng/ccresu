@@ -37,7 +37,7 @@ export function DocPageView({
 
       <article className="min-w-0">
         <nav aria-label="Breadcrumb" className="mb-4 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
-          <Link href="/docs/" className="hover:text-foreground">
+          <Link href="/docs/" className="-ml-2 flex min-h-11 min-w-11 items-center px-2 hover:text-foreground">
             Docs
           </Link>
           <ChevronRight className="size-3" aria-hidden="true" />
@@ -59,7 +59,7 @@ export function DocPageView({
           {previous ? (
             <Link
               href={`/docs/${previous.slug}/`}
-              className="text-muted-foreground hover:text-foreground"
+              className="flex min-h-11 items-center text-muted-foreground hover:text-foreground"
             >
               ← {previous.title}
             </Link>
@@ -67,7 +67,10 @@ export function DocPageView({
             <span />
           )}
           {next ? (
-            <Link href={`/docs/${next.slug}/`} className="text-muted-foreground hover:text-foreground">
+            <Link
+              href={`/docs/${next.slug}/`}
+              className="flex min-h-11 items-center text-muted-foreground hover:text-foreground"
+            >
               {next.title} →
             </Link>
           ) : (
