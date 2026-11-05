@@ -847,7 +847,15 @@ injection, and if the stop fails the original refusal is reported unchanged. See
 go build ./...
 go test ./... && go test -race ./...
 make cover-check     # enforces the 80% statement-coverage gate
+make e2e             # stop-then-resume and `reset` against a stub `claude` CLI
 ```
+
+`make e2e` runs `tests/scripts/background-resume-e2e.sh`: it builds the real
+binary, puts a stub `claude` on `PATH` that refuses the first resume because the
+session is still attached to a background agent, and then asserts that `ccresu`
+stops the session, repeats the identical resume, verifies that the conversation
+grew, and reports `RESUMED` — followed by `ccresu reset` on a session that ended
+in `PERMANENTLY_FAILED`.
 
 ## License
 

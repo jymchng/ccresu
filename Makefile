@@ -52,6 +52,10 @@ lint: ## Run golangci-lint (v2)
 test: ## Run the unit and integration tests
 	go test ./...
 
+.PHONY: e2e
+e2e: ## Prove stop-then-resume and reset against a stub claude CLI
+	tests/scripts/background-resume-e2e.sh
+
 .PHONY: race
 race: ## Run tests with the race detector
 	go test -race ./...
