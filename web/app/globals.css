@@ -47,9 +47,9 @@
    * These three layers — a primary glow at the top, a second wash off to the
    * right, and a vertical blend between two near-background tones — paint one
    * continuous surface behind the header, the hero, the sections and the
-   * footer. Section fills on top of it are translucent (`bg-muted/20`) or
-   * opaque cards, so the wash reads through the page instead of stopping at
-   * each band.
+   * footer. Section fills on top of it are translucent (`bg-foreground/5`,
+   * the tinted bands) or opaque cards floating above the wash, so the gradient
+   * reads through the page instead of stopping at each band.
    *
    * `--page-glow`/`--page-glow-2` are `rgb()` channels rather than hex so the
    * alpha can be set per layer, and so the contrast test can composite the
