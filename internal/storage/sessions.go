@@ -275,6 +275,65 @@ func enabledReason(enabled bool) string {
 	return "session disabled by operator"
 }
 
+// ResetFailedSession clears a PERMANENTLY_FAILED verdict on the operator's
+// instruction: the session moves to DISABLED, its stored error and any pending
+// retry instant are cleared, and the transition explaining why is appended.
+//
+// Only PERMANENTLY_FAILED may be reset. Every other state either has a legal
+// next step that `recover`, `retry` or `enable` already takes, or is terminal by
+// definition (UNRECOVERABLE, COMPLETED, USER_TERMINATED), so the guard is
+// enforced here as well as in the CLI: the store is the last place that can see
+// the state it is about to overwrite.
+//
+// The attempts are deliberately untouched. They are the record of what was
+// tried, not part of the verdict, and replenishing the budget is `ccresu retry`'s
+// job; a reset must not quietly hand out more attempts.
+func (s *Store) ResetFailedSession(ctx context.Context, id, reason string) (Transition, error) {
+	if s == nil || s.db == nil {
+		return Transition{}, ErrClosed
+	}
+	var transition Transition
+	err := s.InTx(ctx, func(tx *sql.Tx) error {
+		current, err := sessionStateTx(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if current != StatePermanentlyFailed {
+			return fmt.Errorf("%w: session %s is %s, not %s", ErrInvalid, id, current, StatePermanentlyFailed)
+		}
+		now := s.now().UTC()
+		// retry_at is NULLed for the same reason SetSessionEnabled does it: a
+		// disabled session must not carry an instant nothing will act on.
+		result, err := tx.ExecContext(ctx,
+			`UPDATE sessions
+			    SET state = ?, enabled = 0, last_error = '', retry_at = NULL, updated_at = ?
+			  WHERE id = ?`,
+			string(StateDisabled), timeToDB(now), id)
+		if err != nil {
+			return fmt.Errorf("reset session %s: %w", id, err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("reset session %s: %w", id, err)
+		}
+		if affected == 0 {
+			return fmt.Errorf("%w: session %s", ErrNotFound, id)
+		}
+		transition = Transition{
+			SessionID:  id,
+			FromState:  current,
+			ToState:    StateDisabled,
+			Reason:     reason,
+			OccurredAt: now,
+		}
+		return recordTransitionTx(ctx, tx, transition)
+	})
+	if err != nil {
+		return Transition{}, err
+	}
+	return transition, nil
+}
+
 // SetSessionRetryAt records the instant a retrying session will be tried again:
 // the backoff ccresu computed for it, written down rather than re-derived.
 //

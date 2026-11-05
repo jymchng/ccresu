@@ -30,7 +30,7 @@ func TestHelpListsEveryCommand(t *testing.T) {
 	}
 	for _, name := range []string{
 		"daemon", "status", "sessions", "inspect", "recover", "retry", "enable",
-		"disable", "history", "config", "doctor", "serve", "version",
+		"reset", "disable", "history", "config", "doctor", "serve", "version",
 	} {
 		if !strings.Contains(stdout, name) {
 			t.Errorf("help does not mention %q", name)

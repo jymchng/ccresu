@@ -771,6 +771,78 @@ func (a *App) cmdDisable(ctx context.Context, args []string) error {
 	return a.setEnabled(ctx, args, false)
 }
 
+// cmdReset clears a PERMANENTLY_FAILED verdict.
+//
+// It is the one operator edge the state machine defines out of that dead end:
+// PERMANENTLY_FAILED -> DISABLED. It never resumes anything and never returns
+// attempts to the budget — `ccresu retry` is what spends another one — so the
+// only thing it changes is the verdict, the stored error and the audit trail.
+func (a *App) cmdReset(ctx context.Context, args []string) error {
+	fs := a.flags("reset", "reset <session-id>")
+	if err := a.parseFlags(fs, args); err != nil {
+		return err
+	}
+	id, err := a.sessionArg(fs, "reset")
+	if err != nil {
+		return err
+	}
+
+	rt, release, err := a.openRuntime(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	session, err := rt.Store.GetSession(ctx, id)
+	if err != nil {
+		return fmt.Errorf("reset %s: %w", id, err)
+	}
+	if session.State != storage.StatePermanentlyFailed {
+		return withCode(ExitNotEligible, fmt.Errorf("reset %s: %s", id, resetRefusal(session.State)))
+	}
+
+	const reason = "operator reset a permanently failed session"
+	transition, err := rt.Store.ResetFailedSession(ctx, id, reason)
+	if err != nil {
+		return fmt.Errorf("reset %s: %w", id, err)
+	}
+
+	if a.json {
+		return a.writeJSON(a.stdout, map[string]any{
+			"session_id":     id,
+			"state":          string(storage.StateDisabled),
+			"previous_state": string(transition.FromState),
+			"enabled":        false,
+			"reason":         transition.Reason,
+		})
+	}
+	a.field(a.stdout, "session", id)
+	a.field(a.stdout, "state", string(storage.StateDisabled))
+	a.field(a.stdout, "previous state", string(transition.FromState))
+	a.field(a.stdout, "error", "cleared")
+	a.field(a.stdout, "attempts", "kept (use 'ccresu retry' to spend another)")
+	fmt.Fprintf(a.stdout, "session %s: reset; run 'ccresu enable %s' to let ccresu recover it again\n", id, id)
+	return nil
+}
+
+// resetRefusal explains why a session in state cannot be reset, and what to do
+// instead. The wording is specific rather than generic because the state is the
+// only thing that tells an operator which command they actually want.
+func resetRefusal(state storage.State) string {
+	switch state {
+	case storage.StateUnrecoverable:
+		return fmt.Sprintf("state %s cannot be reset: the session cannot be resumed at all, so there is no failure to clear (see 'ccresu inspect')", state)
+	case storage.StateCompleted:
+		return "state COMPLETED cannot be reset: the session finished normally and carries no failure"
+	case storage.StateUserTerminated:
+		return "state USER_TERMINATED cannot be reset: the operator ended the session and no state follows it"
+	case storage.StateDisabled:
+		return "state DISABLED cannot be reset: the session is already disabled (use 'ccresu enable' to let ccresu recover it again)"
+	default:
+		return fmt.Sprintf("state %s is not %s: reset only clears a session that has given up; use 'ccresu recover' to resume it now, or 'ccresu retry' if its attempt budget is spent", state, storage.StatePermanentlyFailed)
+	}
+}
+
 // setEnabled implements enable and disable.
 func (a *App) setEnabled(ctx context.Context, args []string, enabled bool) error {
 	command := "enable"

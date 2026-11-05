@@ -32,7 +32,12 @@ const (
 	// ReasonNoLimit is reported for a session with no usage limit detected yet.
 	ReasonNoLimit = "no usage limit detected yet"
 	// ReasonBudgetSpent is reported when the attempt budget is exhausted.
-	ReasonBudgetSpent = "attempt budget spent; use 'ccresu retry'"
+	//
+	// It names both operator commands because they answer different questions:
+	// `retry` spends one more attempt, `reset` accepts the verdict and stops
+	// asking. Mentioning only the first would leave an operator who is done
+	// with the session with no way out of PERMANENTLY_FAILED.
+	ReasonBudgetSpent = "attempt budget spent; use 'ccresu retry' for one more attempt, or 'ccresu reset' to clear the failure"
 	// ReasonUnrecoverable is reported when the session cannot be resumed at all.
 	ReasonUnrecoverable = "session cannot be recovered"
 	// ReasonResumed is reported once ccresu has resumed the session.
