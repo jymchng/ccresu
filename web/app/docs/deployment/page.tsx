@@ -1,12 +1,16 @@
 import type { Metadata } from "next";
 
 import { DocPageView } from "@/components/doc-page-view";
+import { docMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
-  title: 'Deployment',
-  description: 'Run ccresu as a user-level systemd unit, keep it alive, and upgrade it safely.',
-};
+/**
+ * Title and description come from `lib/docs/deployment.ts` through `docMetadata`,
+ * so the `<title>`, the `<meta name="description">`, the Open Graph tags, the
+ * canonical URL and the `TechArticle` on the page all read the same sentence —
+ * and the sitemap cannot list a title that the page does not show.
+ */
+export const metadata: Metadata = docMetadata("deployment");
 
 export default function Page() {
-  return <DocPageView slug='deployment' />;
+  return <DocPageView slug="deployment" />;
 }

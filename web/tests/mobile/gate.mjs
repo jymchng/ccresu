@@ -73,7 +73,7 @@ const artifactDir = path.join(import.meta.dirname, "artifacts");
 const shotDir = path.join(artifactDir, "screenshots");
 
 const failures = [];
-const checks = { overflow: 0, targets: 0, menu: 0, backdrop: 0, legibility: 0 };
+const checks = { overflow: 0, targets: 0, menu: 0, backdrop: 0, legibility: 0, seo: 0 };
 
 function fail(subject, detail) {
   failures.push({ subject, detail });
@@ -491,7 +491,28 @@ async function main() {
   // Toggle the theme: the light and dark washes are separate gradients, so the
   // computed value must change and must still be a gradient.
   await page.locator("header button[aria-label$='theme']").click();
-  await page.waitForTimeout(120);
+
+  // Wait for the colour transition to finish rather than guessing a delay. The
+  // badge carries `transition-colors`, so for ~150ms after the toggle it is
+  // mid-animation between the two themes while the `--*-rgb` custom properties
+  // have already flipped — reading then compares a half-way colour against the
+  // new background and reports a contrast that is not the one a reader sees.
+  // Two identical consecutive samples mean the animation is over.
+  let previousColour = null;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const colour = await page.evaluate(() => {
+      const el = [...document.querySelectorAll("span")].find(
+        (node) => node.textContent.trim() === "Local-first watchdog for Claude Code",
+      );
+      return el ? getComputedStyle(el).color : null;
+    });
+    if (colour !== null && colour === previousColour) {
+      break;
+    }
+    previousColour = colour;
+    await page.waitForTimeout(50);
+  }
+
   const secondTheme = await backdrop();
   const secondOk = checkBackdrop(secondTheme, `${secondTheme.theme} theme`);
   const secondBadge = checkBadge(await heroBadge());
@@ -505,6 +526,60 @@ async function main() {
       fail("page backdrop", "light and dark resolve to the same gradient");
     } else {
       checks.backdrop += 2;
+    }
+  }
+
+  // 6: SEO, measured in a browser rather than trusted to the build. Every route
+  // must carry its own canonical URL (base path intact), a unique og:title, a
+  // description, and JSON-LD a parser accepts — a broken `@graph` is invisible
+  // to Vitest but not to `JSON.parse` on the rendered tag.
+  await page.setViewportSize({ width: 1024, height: 800 });
+  const seoTitles = new Set();
+  for (const route of ROUTES) {
+    await page.goto(`${server.base}${route}`, { waitUntil: "networkidle" });
+    const seo = await page.evaluate(() => {
+      const attr = (selector, name) => document.querySelector(selector)?.getAttribute(name) ?? null;
+      const blocks = [...document.querySelectorAll('script[type="application/ld+json"]')];
+      let jsonLd = null;
+      try {
+        jsonLd = blocks
+          .map((block) => JSON.parse(block.textContent ?? "null"))
+          .flatMap((parsed) => (parsed && parsed["@graph"]) || [parsed])
+          .map((node) => node?.["@type"] ?? null);
+      } catch (error) {
+        jsonLd = `parse error: ${error.message}`;
+      }
+      return {
+        canonical: attr('link[rel="canonical"]', "href"),
+        ogTitle: attr('meta[property="og:title"]', "content"),
+        ogUrl: attr('meta[property="og:url"]', "content"),
+        description: attr('meta[name="description"]', "content"),
+        twitterTitle: attr('meta[name="twitter:title"]', "content"),
+        lang: document.documentElement.getAttribute("lang"),
+        h1: document.querySelectorAll("h1").length,
+        jsonLd,
+      };
+    });
+
+    const expected = `https://jymchng.github.io/ccresu${route}`;
+    const problems = [];
+    if (seo.canonical !== expected) problems.push(`canonical ${seo.canonical}, expected ${expected}`);
+    if (seo.ogUrl !== expected) problems.push(`og:url ${seo.ogUrl}`);
+    if (!seo.ogTitle) problems.push("no og:title");
+    if (!seo.twitterTitle) problems.push("no twitter:title");
+    if (!seo.description) problems.push("no description");
+    if (seo.lang !== "en") problems.push(`html lang is ${seo.lang}`);
+    if (seo.h1 !== 1) problems.push(`${seo.h1} h1 elements`);
+    if (!Array.isArray(seo.jsonLd) || seo.jsonLd.length === 0) {
+      problems.push(`JSON-LD ${JSON.stringify(seo.jsonLd)}`);
+    }
+    if (seoTitles.has(seo.ogTitle)) problems.push(`og:title ${seo.ogTitle} is not unique`);
+    seoTitles.add(seo.ogTitle);
+
+    if (problems.length > 0) {
+      fail(`seo ${route}`, problems.join("; "));
+    } else {
+      checks.seo += 1;
     }
   }
 
@@ -533,6 +608,7 @@ async function main() {
       `\n${checks.menu}/${DOC_ROUTES.length * DOCS_MENU_WIDTHS.length + ROUTES.length * HEADER_MENU_WIDTHS.length} menu open/navigate/close checks passed` +
       `\n${checks.backdrop}/2 page-backdrop checks passed (gradient applied per theme, not fixed)` +
       `\n${checks.legibility}/2 hero-badge legibility checks passed (theme foreground, >= 14px, own fill)` +
+      `\n${checks.seo}/${ROUTES.length} pages carry their own canonical, og/twitter pair, one h1 and parseable JSON-LD` +
       `\n${shots.length} screenshots in web/tests/mobile/artifacts/screenshots/`,
   );
   console.log(failures.length === 0 ? "\nPASS" : `\n${failures.length} failure(s)`);

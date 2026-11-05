@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:export": "CCRESU_REQUIRE_EXPORT=1 vitest run tests/seo.test.ts",
     "test:mobile": "node tests/mobile/gate.mjs",
     "test:mobile:audit": "node tests/mobile/audit.mjs",
     "test:watch": "vitest"

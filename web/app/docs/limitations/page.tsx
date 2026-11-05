@@ -1,12 +1,16 @@
 import type { Metadata } from "next";
 
 import { DocPageView } from "@/components/doc-page-view";
+import { docMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
-  title: 'Known limitations',
-  description: 'What ccresu deliberately does not do, and where it reports failure instead of guessing.',
-};
+/**
+ * Title and description come from `lib/docs/limitations.ts` through `docMetadata`,
+ * so the `<title>`, the `<meta name="description">`, the Open Graph tags, the
+ * canonical URL and the `TechArticle` on the page all read the same sentence —
+ * and the sitemap cannot list a title that the page does not show.
+ */
+export const metadata: Metadata = docMetadata("limitations");
 
 export default function Page() {
-  return <DocPageView slug='limitations' />;
+  return <DocPageView slug="limitations" />;
 }

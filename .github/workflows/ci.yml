@@ -112,6 +112,14 @@ jobs:
       - name: Build static export
         run: npm run build
 
+      # The SEO cross-check reads the export, so it runs after the build: every
+      # built index.html must appear in sitemap.xml, robots.txt must point at
+      # that sitemap, and every page's head must carry its own canonical and
+      # og/twitter pair. `CCRESU_REQUIRE_EXPORT=1` (set by `npm run test:export`)
+      # makes a missing export a failure instead of a skip.
+      - name: Check the exported SEO surface
+        run: npm run test:export
+
       - name: upload static export
         uses: actions/upload-artifact@v4
         with:

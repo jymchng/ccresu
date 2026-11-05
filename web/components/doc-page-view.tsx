@@ -5,7 +5,9 @@ import { notFound } from "next/navigation";
 import { DocBlocks } from "@/components/doc-blocks";
 import { DocsMenu } from "@/components/docs-menu";
 import { DocsNav } from "@/components/docs-nav";
+import { JsonLd } from "@/components/structured-data";
 import { docs, getDoc } from "@/lib/docs";
+import { breadcrumbJsonLd, routeByPath, techArticleJsonLd } from "@/lib/seo";
 
 export function DocPageView({
   slug,
@@ -26,6 +28,17 @@ export function DocPageView({
 
   return (
     <div className="mx-auto grid w-full max-w-6xl gap-10 px-4 py-10 sm:px-6 lg:grid-cols-[220px_1fr]">
+      <JsonLd
+        data={[
+          breadcrumbJsonLd([
+            { name: "Home", path: "/" },
+            { name: "Documentation", path: "/docs/" },
+            { name: doc.title, path: `/docs/${doc.slug}/` },
+          ]),
+          techArticleJsonLd(routeByPath(`/docs/${doc.slug}/`)),
+        ]}
+      />
+
       <aside className="hidden lg:block">
         <div className="sticky top-20">
           <DocsNav activeSlug={slug} />

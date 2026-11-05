@@ -3,18 +3,33 @@ import Link from "next/link";
 
 import { DocsMenu } from "@/components/docs-menu";
 import { DocsNav } from "@/components/docs-nav";
+import { JsonLd } from "@/components/structured-data";
 import { docs } from "@/lib/docs";
+import {
+  breadcrumbJsonLd,
+  collectionPageJsonLd,
+  pageMetadata,
+  routeByPath,
+} from "@/lib/seo";
 import { repo } from "@/lib/site";
 
-export const metadata: Metadata = {
-  title: "Documentation",
-  description:
-    "Installation, a hands-on tutorial, configuration, CLI reference, recovery mechanism, Telegram setup, deployment, security, troubleshooting and known limitations for ccresu.",
-};
+const route = routeByPath("/docs/");
+
+export const metadata: Metadata = pageMetadata(route);
 
 export default function DocsIndexPage() {
   return (
     <div className="mx-auto grid w-full max-w-6xl gap-10 px-4 py-10 sm:px-6 lg:grid-cols-[220px_1fr]">
+      <JsonLd
+        data={[
+          breadcrumbJsonLd([
+            { name: "Home", path: "/" },
+            { name: "Documentation", path: "/docs/" },
+          ]),
+          collectionPageJsonLd(route),
+        ]}
+      />
+
       <aside className="hidden lg:block">
         <div className="sticky top-20">
           <DocsNav activeSlug="" />

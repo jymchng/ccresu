@@ -1,12 +1,16 @@
 import type { Metadata } from "next";
 
 import { DocPageView } from "@/components/doc-page-view";
+import { docMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
-  title: 'Troubleshooting',
-  description: 'Diagnose with doctor, inspect and history, then match the symptom to the fix.',
-};
+/**
+ * Title and description come from `lib/docs/troubleshooting.ts` through `docMetadata`,
+ * so the `<title>`, the `<meta name="description">`, the Open Graph tags, the
+ * canonical URL and the `TechArticle` on the page all read the same sentence —
+ * and the sitemap cannot list a title that the page does not show.
+ */
+export const metadata: Metadata = docMetadata("troubleshooting");
 
 export default function Page() {
-  return <DocPageView slug='troubleshooting' />;
+  return <DocPageView slug="troubleshooting" />;
 }

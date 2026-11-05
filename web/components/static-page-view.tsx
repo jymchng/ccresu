@@ -1,7 +1,9 @@
 import Link from "next/link";
 
+import { JsonLd } from "@/components/structured-data";
 import type { StaticPage } from "@/lib/static-pages";
 import { staticPages } from "@/lib/static-pages";
+import { breadcrumbJsonLd, routeByPath, webPageJsonLd } from "@/lib/seo";
 
 /**
  * One template for About, Terms and Privacy.
@@ -22,6 +24,16 @@ export function StaticPageView({ page }: { page: StaticPage }) {
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
+      <JsonLd
+        data={[
+          breadcrumbJsonLd([
+            { name: "Home", path: "/" },
+            { name: page.title, path: `${page.href}/` },
+          ]),
+          webPageJsonLd(routeByPath(`${page.href}/`)),
+        ]}
+      />
+
       <article className="min-w-0">
         <h1 className="text-3xl font-bold tracking-tight">{page.title}</h1>
         <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
