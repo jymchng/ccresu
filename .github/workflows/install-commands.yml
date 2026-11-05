@@ -177,7 +177,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           # `iex` is what the documented line does, so run it the same way.
-          Invoke-Expression $COMMAND
+          # Env vars are `$env:NAME` in PowerShell; `$COMMAND` is null.
+          if (-not $env:COMMAND) { throw 'the documented command was not passed to this step' }
+          Invoke-Expression $env:COMMAND
 
       - name: The installed binary reports a version
         shell: pwsh
