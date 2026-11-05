@@ -31,6 +31,19 @@ readonly PROGRAM="ccresu"
 readonly REPO="jymchng/ccresu"
 readonly DEFAULT_BASE_URL="https://github.com"
 
+# The protocols curl may speak, as one `--proto` argument.
+#
+# The syntax is evaluated left to right and `=` *resets* the permitted set, so
+# the obvious spelling `=https,=http` ends up permitting only http and disabling
+# https altogether — the first real download then dies with
+# `curl: (1) Protocol "https" disabled` while an http-only test mirror keeps
+# passing. After the `=` reset, later entries must use `+` to be added.
+#
+# http stays permitted on purpose: CCRESU_BASE_URL points the installer at a
+# plain-http mirror in the air-gapped installer tests, and refusing http there
+# would only be a pretense of security — the checksum still has to match.
+readonly CURL_PROTOCOLS='=https,+http'
+
 log() { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "warning: $*" >&2; }
 die() {
@@ -149,7 +162,7 @@ fetch_stdout() {
 	# fetch_stdout URL - print the body to stdout.
 	local url="$1"
 	if command -v curl >/dev/null 2>&1; then
-		curl -fsSL --proto '=https,=http' "$url"
+		curl -fsSL --proto "$CURL_PROTOCOLS" "$url"
 	elif command -v wget >/dev/null 2>&1; then
 		wget -q -O - "$url"
 	else
@@ -161,7 +174,7 @@ fetch_file() {
 	# fetch_file URL DEST
 	local url="$1" dest="$2" status=0
 	if command -v curl >/dev/null 2>&1; then
-		curl -fsSL --proto '=https,=http' -o "$dest" "$url" || status=$?
+		curl -fsSL --proto "$CURL_PROTOCOLS" -o "$dest" "$url" || status=$?
 	elif command -v wget >/dev/null 2>&1; then
 		wget -q -O "$dest" "$url" || status=$?
 	else
@@ -182,7 +195,7 @@ fetch_file() {
 try_fetch_repo_file() {
 	local path="$1" dest="$2"
 	if command -v curl >/dev/null 2>&1; then
-		curl -fsSL --proto '=https,=http' -o "$dest" "$base_url/$REPO/raw/v$version/$path" 2>/dev/null
+		curl -fsSL --proto "$CURL_PROTOCOLS" -o "$dest" "$base_url/$REPO/raw/v$version/$path" 2>/dev/null
 	elif command -v wget >/dev/null 2>&1; then
 		wget -q -O "$dest" "$base_url/$REPO/raw/v$version/$path" 2>/dev/null
 	else

@@ -26,7 +26,10 @@
 #      of the ~/.config and ~/.local/share defaults;
 #  10. piped into bash from outside a checkout — the documented one-liner — it
 #      still installs, and --systemd fetches the unit from the release tag
-#      instead of failing because there is no repository beside it.
+#      instead of failing because there is no repository beside it;
+#  11. the curl protocol allow-list still permits https — the mirror here is
+#      plain http, so without this check `--proto '=https,=http'` (which resets
+#      the list to http only) passed every scenario and broke every real install.
 #
 # The installer resolves its directories from XDG_* when they are set, so every
 # invocation below runs with those variables scrubbed: the suite asserts paths
@@ -499,6 +502,43 @@ main() {
 	assert_contains "$(cat "$WORK/systemctl.log")" "--user enable --now ccresu.service" \
 		"the installer must enable the unit it installed"
 	pass "a piped install works without a checkout, and --systemd reads the unit from the tag"
+
+	# --- 11. the download protocol allow-list still permits https ----------
+	# Regression guard for `curl: (1) Protocol "https" disabled`.
+	#
+	# The mirror above is plain http, so every scenario in this file kept
+	# passing while the installer could not download a single byte over https
+	# in the real world: `--proto '=https,=http'` resets the permitted set on
+	# each `=`, leaving only http. Assert the list against curl itself, using
+	# a port nothing listens on — with https permitted the failure is a
+	# connection error, with https disabled it is the protocol error at exit 1.
+	local proto_list
+	proto_list="$(sed -n "s/^readonly CURL_PROTOCOLS='\(.*\)'$/\1/p" "$INSTALL_SCRIPT")"
+	[ -n "$proto_list" ] \
+		|| fail "could not read CURL_PROTOCOLS from $INSTALL_SCRIPT; the regression guard is blind"
+	# One definition, used by every download: a hard-coded list on a call site
+	# is how this drifted in the first place.
+	assert_equal "$(grep -c '^readonly CURL_PROTOCOLS=' "$INSTALL_SCRIPT")" "1" \
+		"the protocol list must be defined exactly once"
+	assert_equal "$(grep -c -F -- '--proto "' "$INSTALL_SCRIPT")" "3" \
+		"every curl call in the installer must pass --proto"
+	assert_equal "$(grep -c 'CURL_PROTOCOLS' "$INSTALL_SCRIPT")" "4" \
+		"the three curl calls must use the shared list, not a literal"
+
+	local probe_status probe_error scheme
+	for scheme in https http; do
+		probe_status=0
+		probe_error="$(curl -sS --proto "$proto_list" -o /dev/null \
+			"$scheme://127.0.0.1:1/" 2>&1)" || probe_status=$?
+		case "$probe_error" in
+		*'disabled'*)
+			fail "$scheme is not permitted by --proto '$proto_list' (curl said: $probe_error)"$'\n'"a real install over $scheme would fail at the first download"
+			;;
+		esac
+		[ "$probe_status" -ne 0 ] \
+			|| fail "the closed-port probe for $scheme unexpectedly succeeded; the guard proves nothing"
+	done
+	pass "the --proto list permits https (and http for mirror tests)"
 
 	printf '\n%d installer scenario checks passed\n' "$TESTS"
 }
