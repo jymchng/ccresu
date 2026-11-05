@@ -1,0 +1,13 @@
+config:        ~/.config/ccresu/config.yaml
+database:      ~/.local/share/ccresu/ccresu.db
+sessions:      1 total, 1 enabled
+listing:       ccresu sessions shows the 1 enabled; ccresu sessions --all shows all 1
+pending:       1
+schedules:     1
+next wake:     2020-01-01T04:00:00Z
+telegram:      no
+recovery:      yes (max attempts 10)
+now:           (captured-at)
+
+STATE               SESSIONS
+RESET_TIME_REACHED  1

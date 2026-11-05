@@ -1,0 +1,32 @@
+ccresu dev — resume Claude Code sessions after a usage limit resets
+
+Usage:
+  ccresu [--config PATH] [--json] [--log-level LEVEL] <command> [flags]
+  ccresu --help | --version
+
+Commands:
+  config    create, validate (or print) the configuration
+  daemon    run the watchdog loop until interrupted
+  disable   stop ccresu from recovering a session
+  doctor    check the environment ccresu runs in
+  enable    allow ccresu to recover a session
+  history   show the attempts and state transitions of a session
+  inspect   show everything known about one session
+  recover   resume one session now
+  reset     clear a permanently failed session (state becomes disabled)
+  retry     retry a session whose attempt budget is spent
+  serve     run the local REST/SSE API
+  sessions  list discovered sessions
+  status    summarise session, schedule and notification state
+  version   print version and build metadata
+
+Global flags:
+  -c, --config PATH      configuration file (default: ~/.config/ccresu/config.yaml)
+      --json             emit machine-readable JSON where the command supports it
+      --log-level LEVEL  debug, info, warn or error
+      --log-format FMT   json or text
+  -v, --verbose          shorthand for --log-level debug
+  -q, --quiet            shorthand for --log-level error
+
+Exit codes: 0 ok, 1 failure, 2 usage, 3 not found, 4 not eligible, 130 interrupted.
+Run 'ccresu <command> --help' for the flags of one command.

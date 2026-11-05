@@ -56,6 +56,14 @@ test: ## Run the unit and integration tests
 e2e: ## Prove stop-then-resume and reset against a stub claude CLI
 	tests/scripts/background-resume-e2e.sh
 
+.PHONY: web-captures
+web-captures: ## Regenerate the site's real command-output figures from the binary
+	scripts/web-captures.sh
+
+.PHONY: web-captures-check
+web-captures-check: ## Fail when the committed figures no longer match the binary
+	scripts/web-captures.sh --check
+
 .PHONY: race
 race: ## Run tests with the race detector
 	go test -race ./...

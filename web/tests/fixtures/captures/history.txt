@@ -1,0 +1,8 @@
+session:       4d1f9c2a-0000-4000-8000-1a2b3c4d5e6f
+state:         RESET_TIME_REACHED
+
+No recovery attempts recorded.
+WHEN                     TRANSITION                                 REASON
+(captured-at)              DISCOVERED -> USAGE_LIMIT_DETECTED         usage limit detected in the transcript
+(captured-at)              USAGE_LIMIT_DETECTED -> WAITING_FOR_RESET  waiting until 2020-01-01T04:00:00Z
+(captured-at)              WAITING_FOR_RESET -> RESET_TIME_REACHED    the scheduled reset time has arrived

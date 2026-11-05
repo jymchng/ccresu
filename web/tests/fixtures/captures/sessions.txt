@@ -1,0 +1,4 @@
+SESSION   STATE               NEXT ATTEMPT  ENABLED  RECOVERABLE  PROJECT                      LAST SEEN                NOTE
+4d1f9c2a  RESET_TIME_REACHED  due now       yes      yes          <project>                    (captured-at)
+
+1 session(s) shown (--all: disabled and settled sessions included)

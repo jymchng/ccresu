@@ -1,0 +1,48 @@
+
+== pass 1: discover, opt in, then `ccresu recover` each session
+reconcile pass complete (2 sessions)
+reconcile pass complete (2 sessions)
+--- recover aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa
+session:       aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa
+state:         RESUMED
+resumed:       yes
+attempt:       1
+verification:  proven: session id preserved and transcript grew
+when:          (captured-at)
+--- recover bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb
+ccresu: recover bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb: recovery: session bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb ended in PERMANENTLY_FAILED: resume session bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb: claude: claude executable unavailable: claude -p --resume failed (exit 1): Invalid API key · Please run /login: claude -p --resume bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb --output-format json Continue working on the existing active goal from where execution was interrupted by the usage limit. Review the current state, avoid repeating completed work, and continue until the goal is completed.: exit status 1
+ok    recover A exits 0
+ok    session A ends RESUMED
+ok    recover A proves the conversation continued
+ok    recover B is refused (exit 1)
+ok    session B ends PERMANENTLY_FAILED
+ok    the resume ran exactly twice for A
+ok    one stop call cleared the background agent
+ok    both resumes used byte-identical arguments
+ok    the calls run resume, stop, resume
+ok    history records the stop-then-resume success
+ok    the audit row keeps the one resume command
+ok    session id was preserved
+ok    the transcript grew
+
+== the stub claude call log (A only)
+CALL-p--resumeaaaaaaaa-1111-4111-8111-aaaaaaaaaaaa--output-formatjsonContinue working on the existing active goal from where execution was interrupted by the usage limit. Review the current state, avoid repeating completed work, and continue until the goal is completed.
+CALLstopaaaaaaaa-1111-4111-8111-aaaaaaaaaaaa
+CALL-p--resumeaaaaaaaa-1111-4111-8111-aaaaaaaaaaaa--output-formatjsonContinue working on the existing active goal from where execution was interrupted by the usage limit. Review the current state, avoid repeating completed work, and continue until the goal is completed.
+
+== pass 2: ccresu reset on the permanently failed session
+session:       bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb
+state:         DISABLED
+previous state: PERMANENTLY_FAILED
+error:         cleared
+attempts:      kept (use 'ccresu retry' to spend another)
+session bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb: reset; run 'ccresu enable bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb' to let ccresu recover it again
+ok    reset moves B to DISABLED
+ok    reset clears the session's stored error
+ok    the attempt history was kept
+ok    the kept attempt still records why it failed
+ok    a second reset is refused with exit 4
+ok    enable after reset leaves B recoverable
+ok    and enabled again
+
+PASSED: the background session was stopped, resumed and verified end to end
