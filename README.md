@@ -20,13 +20,16 @@ Goal paused · usage limit reached · send a message after it resets
 
 ## Install
 
-One line, on Linux or macOS (`amd64`/`arm64`):
+One line, on Linux or macOS (`amd64`/`arm64`). Preview it first — `--dry-run`
+prints every action and downloads nothing:
 
 ```bash
-# preview every action; nothing is downloaded or changed
 curl -fsSL https://raw.githubusercontent.com/jymchng/ccresu/main/scripts/install.sh | bash -s -- --dry-run
+```
 
-# install
+Then, when the plan looks right, the install itself:
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/jymchng/ccresu/main/scripts/install.sh | bash
 ```
 
@@ -34,7 +37,6 @@ On Windows (`amd64`/`arm64`) the equivalent is a PowerShell one-liner, run in a
 normal (non-elevated) PowerShell window:
 
 ```powershell
-# install
 irm https://raw.githubusercontent.com/jymchng/ccresu/main/scripts/install.ps1 | iex
 ```
 
@@ -44,11 +46,17 @@ The Windows installer does the same work: it resolves the release, downloads
 adds that directory to your user `PATH`, and writes `%APPDATA%\ccresu\config.yaml`
 from the example shipped in the archive. A piped script has no arguments, so
 `CCRESU_VERSION` (pin a release), `CCRESU_PREFIX` and `CCRESU_BASE_URL` (a mirror)
-are read from the environment. From a checkout the script takes flags:
+are read from the environment. From a checkout the script takes flags — preview
+with `-DryRun`, which changes nothing either:
 
 ```powershell
-pwsh -File scripts/install.ps1 -Version 0.1.0 -DryRun   # preview, change nothing
-pwsh -File scripts/install.ps1 -Force                   # reinstall the same version
+pwsh -File scripts/install.ps1 -Version 0.1.0 -DryRun
+```
+
+Reinstall a version you already have with `-Force`:
+
+```powershell
+pwsh -File scripts/install.ps1 -Force
 ```
 
 The script downloads the release matching your OS/architecture, verifies it
@@ -112,7 +120,15 @@ by default — that is the only reason for the second line. Append it to
 git clone https://github.com/jymchng/ccresu.git
 cd ccresu
 go build -o ~/.local/bin/ccresu ./cmd/ccresu
-./scripts/install.sh                # the same install, from the checkout
+```
+
+Those three lines are one procedure — the `go build` only means anything inside
+the clone. If you would rather have the released binary than your own, the
+checkout carries the same installer, so run it from the clone instead of
+building:
+
+```bash
+./scripts/install.sh
 ```
 
 Then create the configuration once:
