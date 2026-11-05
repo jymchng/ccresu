@@ -11,13 +11,15 @@
 // Resumption uses exactly two commands:
 //
 //	claude -p --resume <session-id> --output-format json "<continuation message>"
-//	claude stop <session-id>
+//	claude stop <job-id>
 //
 // The second is issued only when the first is refused because the session is
 // still attached to a background agent ("That session is running in the
-// background"). Stopping keeps the conversation and the session id, so the same
-// resume follows immediately; `claude attach` would need a terminal ccresu does
-// not have, and `--fork-session` would branch a new conversation.
+// background"). Its argument is the eight lower-case hex job name that refusal
+// prints -- not the session UUID, which `claude stop` answers with "No job
+// matching" and exit 1. Stopping keeps the conversation and the session id, so
+// the same resume follows immediately; `claude attach` would need a terminal
+// ccresu does not have, and `--fork-session` would branch a new conversation.
 //
 // No TTY is attached, no keystroke is injected, no shell is involved and no new
 // session is ever started in place of the original one: the returned session id

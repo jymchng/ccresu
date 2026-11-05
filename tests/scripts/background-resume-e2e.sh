@@ -5,10 +5,15 @@
 #
 # The stub is the whole point: it keeps a "background session" state file, makes
 # the first `claude -p --resume <id>` fail with the CLI's real refusal text,
-# makes `claude stop <id>` clear that state, and makes the second, identical
+# makes `claude stop <job>` clear that state, and makes the second, identical
 # resume print a valid JSON result and grow the transcript. Nobody tells ccresu
 # what to do; it has to notice the refusal, stop the session, resume again and
 # then *prove* the conversation continued.
+#
+# `claude stop` is resolved the way the real CLI resolves it: only an eight-hex
+# job name is accepted, and the refusal names that job, not the session UUID.
+# A stub that accepted any argument is what let a UUID-carrying stop pass every
+# test and fail in the field with "No job matching '<uuid>'" (exit 1).
 #
 # Two sessions are set up in one scratch HOME:
 #
@@ -105,7 +110,21 @@ agents)
 	;;
 stop)
 	id=${2:-}
-	rm -f "$state/background-$id"
+	# The real CLI resolves an eight-hex job name and answers anything else --
+	# a session UUID included -- with exit 1 and this line.
+	case "$id" in
+	[a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9]) ;;
+	*)
+		printf "No job matching '%s'. Run 'claude agents' to list running sessions.\n" "$id" >&2
+		exit 1
+		;;
+	esac
+	if [ ! -f "$state/job-$id" ]; then
+		printf "No job matching '%s'. Run 'claude agents' to list running sessions.\n" "$id" >&2
+		exit 1
+	fi
+	session=$(cat "$state/job-$id")
+	rm -f "$state/background-$session" "$state/job-$id"
 	printf 'stopped %s\n' "$id"
 	exit 0
 	;;
@@ -120,8 +139,13 @@ for a in "$@"; do
 done
 
 if [ -f "$state/background-$id" ]; then
-	# The CLI's refusal, verbatim.
-	printf 'Error: That session is running in the background (837eaaea). Run `claude attach 837eaaea` to open it, or `claude stop 837eaaea` first to resume it here. Add --fork-session to branch off a copy instead.\n' >&2
+	# The CLI's refusal, verbatim except for the name: the job is the session
+	# id's first eight characters, and it is the job -- never the UUID -- that
+	# `claude stop` accepts. Single quotes keep the backticks literal without
+	# tripping ShellCheck's SC2016.
+	job=$(printf '%s' "$id" | cut -c1-8)
+	printf 'Error: That session is running in the background (%s). Run `claude attach %s` to open it, or `claude stop %s` first to resume it here. Add --fork-session to branch off a copy instead.\n' \
+		"$job" "$job" "$job" >&2
 	exit 1
 fi
 if [ -f "$state/poison-$id" ]; then
@@ -169,7 +193,11 @@ seed_transcript "$session_a" >/dev/null
 seed_transcript "$session_b" >/dev/null
 
 # A keeps its background agent; B is poisoned so its resume can never succeed.
+# The job file is what `claude stop <job>` resolves: the job name is the session
+# id's first eight characters, as in the CLI's own refusal.
+job_a=$(printf '%s' "$session_a" | cut -c1-8)
 : >"$state/background-$session_a"
+printf '%s' "$session_a" >"$state/job-$job_a"
 : >"$state/poison-$session_b"
 
 cat >"$state/agents.json" <<JSON
@@ -213,7 +241,11 @@ state_field() { printf '%s' "$1" | sed -n 's/^state:[[:space:]]*\(.*\)$/\1/p' | 
 # be matched field by field instead of by a fragile regular expression.
 resume_calls=$(awk -F'\037' -v id="$session_a" '$2=="-p" && $3=="--resume" && $4==id' \
 	"$state/calls.log" | wc -l | tr -d ' ')
-stop_calls=$(awk -F'\037' -v id="$session_a" '$2=="stop" && $3==id' "$state/calls.log" | wc -l | tr -d ' ')
+# `claude stop` takes the eight-hex job name, not the session UUID, so that is
+# what the call log has to be matched on.
+stop_calls=$(awk -F'\037' -v job="$job_a" '$2=="stop" && $3==job' "$state/calls.log" | wc -l | tr -d ' ')
+stop_uuid_calls=$(awk -F'\037' -v id="$session_a" '$2=="stop" && $3==id' "$state/calls.log" | wc -l | tr -d ' ')
+stop_arg=$(awk -F'\037' '$2=="stop" { print $3; exit }' "$state/calls.log")
 
 if [ "$mode" = prefix ]; then
 	# The contrast: the pre-fix binary cannot get past the refusal.
@@ -222,7 +254,8 @@ if [ "$mode" = prefix ]; then
 	check "pre-fix: the resume ran once" "$resume_calls" "1"
 	check "pre-fix: no stop was attempted" "$stop_calls" "0"
 	printf '\n== the stub claude call log (A only)\n'
-	awk -F'\037' -v id="$session_a" 'index($0, id)' "$state/calls.log" | sed 's/^CALL //'
+	awk -F'\037' -v id="$session_a" -v job="$job_a" '$4==id || ($2=="stop" && $3==job)' \
+	"$state/calls.log" | sed 's/^CALL //'
 	printf '\n'
 	if [ "$fail" -ne 0 ]; then
 		printf 'FAILED: the pre-fix binary did not fail the way it was expected to\n'
@@ -241,13 +274,15 @@ check "session B ends PERMANENTLY_FAILED" "$(state_field "$inspect_b")" "PERMANE
 
 check "the resume ran exactly twice for A" "$resume_calls" "2"
 check "one stop call cleared the background agent" "$stop_calls" "1"
+check "the stop named the eight-hex job, not the session" "$stop_arg" "$job_a"
+check "the session UUID was never passed to claude stop" "$stop_uuid_calls" "0"
 
 first_resume=$(awk -F'\037' -v id="$session_a" '$2=="-p" && $3=="--resume" && $4==id' "$state/calls.log" | sed -n '1p')
 second_resume=$(awk -F'\037' -v id="$session_a" '$2=="-p" && $3=="--resume" && $4==id' "$state/calls.log" | sed -n '2p')
 check "both resumes used byte-identical arguments" "$first_resume" "$second_resume"
 
 # The order has to be resume, stop, resume -- not stop first.
-sequence=$(awk -F'\037' -v id="$session_a" 'index($0, id) { if ($2=="-p") print "-p"; else if ($2=="stop") print "stop" }' \
+sequence=$(awk -F'\037' -v id="$session_a" -v job="$job_a" '($2=="-p" && $4==id) || ($2=="stop" && $3==job) { if ($2=="-p") print "-p"; else if ($2=="stop") print "stop" }' \
 	"$state/calls.log" | tr '\n' ' ')
 check "the calls run resume, stop, resume" "$(printf '%s' "$sequence" | sed 's/ *$//')" "-p stop -p"
 
@@ -262,7 +297,8 @@ contains "session id was preserved" "$attempt" '"SessionIDVerified": true'
 contains "the transcript grew" "$attempt" '"TranscriptGrew": true'
 
 printf '\n== the stub claude call log (A only)\n'
-awk -F'\037' -v id="$session_a" 'index($0, id)' "$state/calls.log" | sed 's/^CALL //'
+awk -F'\037' -v id="$session_a" -v job="$job_a" '$4==id || ($2=="stop" && $3==job)' \
+	"$state/calls.log" | sed 's/^CALL //'
 
 # ---------------------------------------------------------------- reset flow
 printf '\n== pass 2: ccresu reset on the permanently failed session\n'

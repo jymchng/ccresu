@@ -427,8 +427,9 @@ has left.
 One failure is not the session's fault at all: `claude -p --resume` refuses while
 the session is still attached to Claude Code's background agent
 (`That session is running in the background (837eaaea) …`). ccresu treats that as
-"busy", not "gone": in the same attempt it runs `claude stop <id>` and then
-repeats the *identical* resume once, so the session ends up `RESUMED` without you
+"busy", not "gone": in the same attempt it runs `claude stop <job-id>` (the
+eight-hex job name the refusal prints — not the session id) and then repeats the
+*identical* resume once, so the session ends up `RESUMED` without you
 doing anything. The conversation is untouched — same session id, same transcript —
 and the stop appears in the log, not in the attempt row. If the stop fails, or the
 second resume refuses again, the original error is reported unchanged and the

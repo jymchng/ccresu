@@ -282,7 +282,7 @@ const STOP_RESUME_STEPS: readonly Step[] = [
     ],
   },
   {
-    command: ["claude stop <id>"],
+    command: ["claude stop <job-id>"],
     note: [
       "the agent releases it. Written to the log,",
       "never to the attempt row",

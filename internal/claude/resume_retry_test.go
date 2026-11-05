@@ -11,9 +11,20 @@ import (
 )
 
 // backgroundRefusalOutput is what the CLI printed in the field: exit 1, the
-// refusal on stderr, nothing on stdout.
+// refusal on stderr, nothing on stdout. The refusal names the job that holds
+// testSessionID.
 func backgroundRefusalOutput() Output {
-	return Output{Stderr: []byte(backgroundRefusal + "\n"), ExitCode: 1}
+	return Output{Stderr: []byte(backgroundRefusalFor(testSessionID) + "\n"), ExitCode: 1}
+}
+
+// noJobMatchingOutput is the CLI's answer to a `claude stop` whose argument is
+// not one of the eight-hex job names it keeps. It is exit 1 in the field: that
+// is how a stop that passes a session UUID fails.
+func noJobMatchingOutput(arg string) Output {
+	return Output{
+		Stderr:   []byte("No job matching '" + arg + "'. Run 'claude agents' to list running sessions.\n"),
+		ExitCode: 1,
+	}
 }
 
 // resumeCalls returns the recorded calls whose argv is a resume invocation.
@@ -41,6 +52,11 @@ func stopCalls(calls []Call) []Call {
 // resumeScript answers the version probe, the resume invocations and the stop
 // invocation from small counters, so a test can describe the CLI's behaviour
 // without depending on the exact number of incidental calls.
+//
+// The stop arm resolves its argument the way the real CLI does: it matches only
+// an eight-hex job name it knows about, and answers anything else -- including
+// the session UUID -- with "No job matching" and exit 1. A fake that accepted
+// any argument is what let the session-UUID stop reach the field.
 type resumeScript struct {
 	mu       sync.Mutex
 	resumes  int
@@ -48,6 +64,10 @@ type resumeScript struct {
 	onResume func(attempt int) (Output, error)
 	onStop   func(attempt int) (Output, error)
 }
+
+// knownJobs are the background jobs the stub CLI holds; stopping anything else
+// is "No job matching".
+var knownJobs = map[string]bool{testBackgroundJobID: true}
 
 func (s *resumeScript) handle(call Call) (Output, error) {
 	if len(call.Args) == 0 {
@@ -62,6 +82,9 @@ func (s *resumeScript) handle(call Call) (Output, error) {
 		attempt := s.stops
 		hook := s.onStop
 		s.mu.Unlock()
+		if err := resolveStopArg(call.Args[1:]); err != "" {
+			return noJobMatchingOutput(err), nil
+		}
 		if hook != nil {
 			return hook(attempt)
 		}
@@ -77,6 +100,20 @@ func (s *resumeScript) handle(call Call) (Output, error) {
 		}
 		return Output{Stdout: []byte(testResumeJSON)}, nil
 	}
+}
+
+// resolveStopArg mirrors the CLI's resolver: one argument, and it has to name a
+// job the CLI holds. It returns the offending argument, or "" when the stop is
+// resolvable.
+func resolveStopArg(args []string) string {
+	if len(args) != 1 {
+		return strings.Join(args, " ")
+	}
+	arg := args[0]
+	if !ValidBackgroundJobID(arg) || !knownJobs[arg] {
+		return arg
+	}
+	return ""
 }
 
 func newScriptedResumeCLI(t *testing.T, script *resumeScript, logger *slog.Logger) (*CLI, *FakeExecer) {
@@ -137,7 +174,9 @@ func TestResumeStopsABackgroundSessionAndResumesAgain(t *testing.T) {
 	if len(stops) != 1 {
 		t.Fatalf("stop invoked %d times, want exactly 1: %v", len(stops), calls)
 	}
-	wantStop := []string{"stop", testSessionID}
+	// The stop takes the job name the refusal printed, never the session UUID:
+	// the CLI answers a UUID with "No job matching" and exit 1.
+	wantStop := []string{"stop", testBackgroundJobID}
 	if strings.Join(stops[0].Args, "\x00") != strings.Join(wantStop, "\x00") {
 		t.Errorf("stop argv = %q, want %q", stops[0].Args, wantStop)
 	}
@@ -149,6 +188,67 @@ func TestResumeStopsABackgroundSessionAndResumesAgain(t *testing.T) {
 	// one resume command and never the stop.
 	if got := strings.Join(result.Command, " "); got != "claude -p --resume "+testSessionID+" --output-format json keep going" {
 		t.Errorf("result.Command = %q, want the single resume command", got)
+	}
+}
+
+// TestResumeNeverPassesTheSessionIDToStop is the regression test for the field
+// failure: with the old code the stop carried the session UUID, the stub CLI
+// answered "No job matching" and exited 1, and the session ended
+// PERMANENTLY_FAILED. Every recorded stop argument must be a job name.
+func TestResumeNeverPassesTheSessionIDToStop(t *testing.T) {
+	t.Parallel()
+
+	script := &resumeScript{onResume: func(attempt int) (Output, error) {
+		if attempt == 1 {
+			return backgroundRefusalOutput(), nil
+		}
+		return Output{Stdout: []byte(testResumeJSON)}, nil
+	}}
+	cli, execer := newScriptedResumeCLI(t, script, nil)
+
+	if _, err := cli.Resume(context.Background(), testSessionID, "keep going"); err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	for _, call := range stopCalls(execer.Calls()) {
+		if len(call.Args) < 2 {
+			t.Fatalf("stop called without an argument: %q", call.Args)
+		}
+		if !ValidBackgroundJobID(call.Args[1]) {
+			t.Errorf("stop argument %q is not an eight-hex job name", call.Args[1])
+		}
+		if call.Args[1] == testSessionID {
+			t.Errorf("stop was given the session UUID %q", call.Args[1])
+		}
+	}
+}
+
+// TestResumeDoesNotStopWhenTheRefusalNamesNoJob keeps the second command
+// honest: without a job name there is nothing safe to stop, so the refusal is
+// reported unchanged rather than a guessed job being stopped.
+func TestResumeDoesNotStopWhenTheRefusalNamesNoJob(t *testing.T) {
+	t.Parallel()
+
+	script := &resumeScript{onResume: func(int) (Output, error) {
+		return Output{
+			Stderr:   []byte("Error: That session is running in the background.\n"),
+			ExitCode: 1,
+		}, nil
+	}}
+	cli, execer := newScriptedResumeCLI(t, script, nil)
+
+	_, err := cli.Resume(context.Background(), testSessionID, "keep going")
+	if err == nil {
+		t.Fatal("Resume() error = nil, want the refusal to surface")
+	}
+	if !IsSessionRunningInBackground(err) {
+		t.Errorf("error %v lost the background marker", err)
+	}
+	calls := execer.Calls()
+	if got := len(stopCalls(calls)); got != 0 {
+		t.Errorf("stop invoked %d times, want none: %v", got, calls)
+	}
+	if got := len(resumeCalls(calls)); got != 1 {
+		t.Errorf("resume invoked %d times, want 1: %v", got, calls)
 	}
 }
 
@@ -287,5 +387,38 @@ func TestResumeLogsTheStop(t *testing.T) {
 	}
 	if !strings.Contains(logged, "resuming again") {
 		t.Errorf("log %q does not record the stop-then-resume decision", logged)
+	}
+	// The job name is what was actually passed to `claude stop`, so the log has
+	// to carry it: the two ids differ and one is not the other.
+	if !strings.Contains(logged, testBackgroundJobID) {
+		t.Errorf("log %q does not name the stopped background job", logged)
+	}
+}
+
+// TestScriptedCLIRejectsASessionUUIDStop keeps the fake honest. If the stub ever
+// accepts a session UUID again, every assertion built on it becomes worthless --
+// which is exactly how the field failure passed 125 tests.
+func TestScriptedCLIRejectsASessionUUIDStop(t *testing.T) {
+	t.Parallel()
+
+	script := &resumeScript{}
+	cli, execer := newScriptedResumeCLI(t, script, nil)
+
+	err := cli.Stop(context.Background(), testBackgroundJobID)
+	if err != nil {
+		t.Fatalf("Stop(job name) error = %v, want success", err)
+	}
+
+	// Bypass Stop's own validation to prove the stub's resolver, not ccresu,
+	// refuses a UUID: run the command the way the old code would have.
+	out, runErr := execer.Run(context.Background(), "claude", []string{"stop", testSessionID}, RunOptions{})
+	if runErr != nil {
+		t.Fatalf("direct stop run failed: %v", runErr)
+	}
+	if out.ExitCode == 0 {
+		t.Fatal("the stub accepted a session UUID as a `claude stop` argument; the real CLI does not")
+	}
+	if !strings.Contains(string(out.Stderr), "No job matching") {
+		t.Errorf("stderr = %q, want the CLI's \"No job matching\" wording", out.Stderr)
 	}
 }

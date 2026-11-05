@@ -16,7 +16,7 @@ exactly five interfaces:
 | Session transcript | `~/.claude/projects/<slugified-cwd>/<session-id>.jsonl` |
 | Per-session environment | `~/.claude/session-env/<session-id>/` |
 | Resume the original session | `claude -p --resume <session-id> --output-format json "<message>"` |
-| Release a session still attached to a background agent | `claude stop <session-id>` |
+| Release a session still attached to a background agent | `claude stop <job-id>` (the eight-hex job name the refusal prints) |
 
 The resume vector is built in one place, `claude.ResumeArgs`, and is:
 
@@ -27,15 +27,31 @@ The resume vector is built in one place, `claude.ResumeArgs`, and is:
 The stop vector is built in one place too, `claude.StopArgs`, and is:
 
 ```go
-[]string{"stop", sessionID}
+[]string{"stop", jobID}
 ```
+
+`jobID` is not the session UUID. `claude stop` resolves a background job name —
+exactly eight lower-case hex characters, matched by prefix against the job
+directories the CLI keeps — so a UUID is answered with
+
+```console
+No job matching '837eaaea-ee9a-4ef0-ae47-add73a107369'. Run 'claude agents' to
+list running sessions.
+```
+
+and exit 1. The job name comes from the refusal message itself, which prints the
+working command (`claude stop 837eaaea`); `claude.BackgroundJobID` extracts it,
+`claude.ValidBackgroundJobID` pins its shape, and `Stop` refuses anything else
+before a process starts. If the refusal names no job, no stop is attempted and
+the original refusal is reported: guessing a job name could stop another
+session's agent.
 
 `claude stop` is the single exception to "`--resume` is the only command ccresu
 runs", and it is narrow by construction: it is issued only after a resume has
 already been refused because the session is still attached to a background agent
 (see [When the session is still attached to a background
 agent](#when-the-session-is-still-attached-to-a-background-agent)), it takes the
-session id and nothing else, and it is bounded by the query timeout rather than
+job name and nothing else, and it is bounded by the query timeout rather than
 the resume timeout. The conversation survives it — the transcript, the session id
 and the project directory are untouched — so the resume that follows is the same
 `-p --resume` command with the same arguments.
@@ -47,8 +63,9 @@ refusal offers `claude attach …`, `claude stop …` and `--fork-session`, and 
 `stop` keeps the promise that the *original* conversation continues. `attach`
 needs an interactive terminal ccresu deliberately never allocates, and
 `--fork-session` would continue a copy instead — the one thing a recovery must
-never do. The message is limited to 8 KiB, must be non-empty, and the session id
-is validated before anything is executed, `claude stop` included.
+never do. The message is limited to 8 KiB, must be non-empty, the session id of
+a resume is validated before anything is executed, and a `claude stop` target
+must be an eight-hex job name, so neither can be read as a flag or a path.
 
 ### Why the message is the last argument
 
@@ -206,7 +223,11 @@ session's life. One attempt handles it, in three steps:
    wrapping collapsed — so a restyled or wrapped message still matches. A nil
    error never matches, and the marker is narrow enough that an unrelated failure
    is not mistaken for this one.
-2. `claude stop <session-id>` releases the background agent. The stop is recorded
+2. `claude stop <job-id>` releases the background agent — `claude.BackgroundJobID`
+   reads the eight-hex name out of this very message, preferring the `claude stop`
+   clause and falling back to the parenthesised name. A refusal that names no job
+   is not stopped at all: the original error is reported instead of a guess. The
+   stop is recorded
    in the log, never in the attempt row: `ccresu history` still shows the single
    `claude -p --resume …` command that was run, not a command ccresu issued for
    its own bookkeeping.
@@ -221,7 +242,7 @@ The sequence, from the outside:
 | Step | What the CLI sees | What ccresu records |
 | --- | --- | --- |
 | 1 | `claude -p --resume <id> --output-format json "<message>"` — refused, session in the background | the attempt, with its single resume command as `command` |
-| 2 | `claude stop <id>` | a log line only: the attempt row still shows one resume |
+| 2 | `claude stop <job-id>` — eight hex characters, never the session UUID | a log line only: the attempt row still shows one resume |
 | 3 | the same resume, same arguments | the attempt's result, verification included |
 
 If the stop itself fails, or the second resume refuses again (or fails any other
@@ -256,8 +277,11 @@ This is not only asserted against fakes. `make e2e` runs
 `tests/scripts/background-resume-e2e.sh`, which builds the real binary and puts a
 stub `claude` on `PATH`. The stub keeps a background-agent marker, refuses the
 first `-p --resume` with the CLI's text above, clears the marker on `claude stop
-<id>`, and then returns a JSON result with the same `session_id` after growing the
-transcript. The run asserts that `ccresu recover <id>` exits 0 and ends `RESUMED`
+<job-id>`, and then returns a JSON result with the same `session_id` after growing
+the transcript. The stub resolves its argument the way the real CLI does — only
+an eight-hex job name it holds, anything else answered with `No job matching` and
+exit 1 — and the run asserts that the stop carried the job name and never the
+session UUID. Run against the pre-fix binary, that assertion is what fails. The run asserts that `ccresu recover <id>` exits 0 and ends `RESUMED`
 with the verification "proven: session id preserved and transcript grew", that
 the stub saw exactly *resume, stop, resume* with byte-identical resume arguments,
 and that `ccresu history` still records the single resume command.
@@ -310,7 +334,7 @@ started is not a recovery.
 | Network error, crashed tool, user cancellation | not a usage limit; not resumed |
 | Normal completion | recognised as completion; not resumed |
 | Limit still in force at resume time | attempt recorded, back to `WAITING_FOR_RESET` |
-| Session still attached to a background agent | `claude stop <id>` then the identical resume, once per attempt; if the stop fails the original refusal is reported |
+| Session still attached to a background agent | `claude stop <job-id>` then the identical resume, once per attempt; if the stop fails the original refusal is reported |
 | Attempt budget spent | `PERMANENTLY_FAILED` until `ccresu retry` (fresh budget) or `ccresu reset` (failure cleared, session left `DISABLED`) |
 
 ## Inspecting what happened

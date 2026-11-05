@@ -95,7 +95,7 @@ describe("documentation", () => {
     const body = document.body.textContent ?? "";
     expect(body).toContain('"-p", "--resume", sessionID, "--output-format", "json", message');
     expect(body).toContain("--output-format json <N-byte continuation message>");
-    expect(body).toContain("claude stop <id>");
+    expect(body).toContain("claude stop <job-id>");
   });
 
   it("returns undefined for an unknown slug instead of inventing a page", () => {

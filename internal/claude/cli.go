@@ -52,12 +52,14 @@ type CLIOptions struct {
 //	claude --version
 //	claude agents --json [--all] [--cwd <path>]
 //	claude -p --resume <session-id> --output-format json <message>
-//	claude stop <session-id>
+//	claude stop <job-id>
 //	(the transcript and session-env files are read, not executed)
 //
-// `claude stop` is issued only when a resume is refused because the session is
-// still attached to a background agent: its conversation is kept, so the same
-// resume can follow immediately. No other command is ever constructed, and the
+// `claude stop` takes an eight-hex background job name, not the session UUID --
+// the CLI resolves job names only and answers a UUID with "No job matching" and
+// exit 1. It is issued only when a resume is refused because the session is
+// still attached to a background agent, and the job name is read out of that
+// refusal: its conversation is kept, so the same resume can follow immediately. No other command is ever constructed, and the
 // message is always passed as a single argv element so no shell ever sees it.
 type CLI struct {
 	bin            string
@@ -223,9 +225,11 @@ func (c *CLI) Agents(ctx context.Context, query AgentsQuery) ([]AgentEntry, erro
 //
 // One situation needs a second command first. The CLI refuses to resume a
 // session that is still attached to a background agent ("That session is
-// running in the background"). Because `claude stop <id>` keeps both the
+// running in the background"). Because `claude stop <job-id>` keeps both the
 // conversation and the session id, ccresu answers that refusal by stopping the
 // background agent and repeating the identical resume argument vector once.
+// The stop takes the eight-hex job name the refusal itself prints, not the
+// session UUID; see stop.go.
 // Only that exact refusal is handled this way: every other failure, a stop that
 // itself fails, and a resume that still refuses after a successful stop are
 // returned unchanged, so the existing classification (permanent, no attempt
@@ -264,17 +268,29 @@ func (c *CLI) Resume(ctx context.Context, sessionID, message string) (ResumeResu
 	// survive, so the resume that follows is the same command with the same
 	// arguments. The stop is recorded in the log only; the attempt row keeps
 	// showing the one `claude -p --resume …` command.
+	//
+	// The stop needs the CLI's eight-hex job name, not the session UUID: the
+	// refusal names it ("claude stop 837eaaea"), so it is read from there. When
+	// the message names no job, no stop is attempted and the refusal is
+	// reported unchanged -- guessing a job name could stop another session.
+	jobID := BackgroundJobID(resumeErr)
+	if jobID == "" {
+		c.log.Warn("the refusal named no background job id; cannot stop the session holding it",
+			"session", sessionID)
+		return result, resumeErr
+	}
 	c.log.Warn("claude refused the resume because the session is attached to a background agent; stopping it and resuming again",
-		"session", sessionID)
-	if stopErr := c.Stop(ctx, sessionID); stopErr != nil {
+		"session", sessionID, "job", jobID)
+	if stopErr := c.Stop(ctx, jobID); stopErr != nil {
 		// Without the stop the session is still in the way, so the original
 		// refusal is the honest result. Returning it untouched keeps the
 		// existing permanent classification intact.
 		c.log.Warn("claude stop did not clear the background session; reporting the original resume failure",
-			"session", sessionID, "error", stopErr)
+			"session", sessionID, "job", jobID, "error", stopErr)
 		return result, resumeErr
 	}
-	c.log.Info("stopped the background session; repeating the identical resume", "session", sessionID)
+	c.log.Info("stopped the background session; repeating the identical resume",
+		"session", sessionID, "job", jobID)
 
 	retried, retryErr := c.resumeOnce(ctx, sessionID, args)
 	if retryErr != nil {

@@ -61,7 +61,7 @@ describe("content integrity", () => {
   it("narrates the background-agent recovery and the operator reset", () => {
     const body = JSON.stringify(getDoc("recovery")?.blocks ?? []);
 
-    expect(body).toContain("claude stop <session-id>");
+    expect(body).toContain("claude stop <job-id>");
     expect(body).toContain("PERMANENTLY_FAILED");
     expect(body).toContain("ccresu reset");
     expect(body).toContain("keeps the attempt row");

@@ -90,12 +90,17 @@ var (
 	ErrResumeFailed = errors.New("claude: resume reported an error")
 	// ErrSessionRunningInBackground reports the CLI refusing to resume a
 	// session that is still attached to a background agent. It is the one
-	// condition ccresu answers with another command (`claude stop <id>`) before
-	// repeating the same resume.
+	// condition ccresu answers with another command (`claude stop <job-id>`)
+	// before repeating the same resume.
 	ErrSessionRunningInBackground = errors.New("claude: session is running in the background")
-	// ErrStopFailed reports that `claude stop <id>` itself did not succeed, so
-	// the background session is still in the way.
+	// ErrStopFailed reports that `claude stop <job-id>` itself did not succeed,
+	// so the background session is still in the way.
 	ErrStopFailed = errors.New("claude: session stop failed")
+	// ErrInvalidBackgroundJobID reports a `claude stop` argument that is not the
+	// eight-hex background job name the CLI resolves. A session UUID belongs
+	// here: the CLI answers it with "No job matching" and exit 1, so passing it
+	// is refused locally instead of costing a failed recovery.
+	ErrInvalidBackgroundJobID = errors.New("claude: invalid background job id")
 )
 
 // sessionIDPattern matches the UUID form Claude Code uses for session ids.
@@ -303,8 +308,9 @@ type ResumeResult struct {
 // Implementations must never invent a command: resuming uses
 // `claude -p --resume <session-id> --output-format json "<message>"` and, only
 // when the CLI refuses that because the session is still attached to a
-// background agent, the single `claude stop <session-id>` that clears the way
-// before the same resume is repeated.
+// background agent, the single `claude stop <job-id>` that clears the way
+// before the same resume is repeated. The job id is the eight-hex name the
+// refusal prints, never the session UUID.
 type SessionProvider interface {
 	// Discover lists known sessions, newest activity first.
 	Discover(ctx context.Context, filter DiscoverFilter) ([]Session, error)

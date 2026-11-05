@@ -130,8 +130,11 @@ A resume can also be refused because the session is still attached to Claude
 Code's background agent
 (`That session is running in the background (837eaaea) …`). ccresu treats that as
 "the conversation is busy", not as "the conversation is gone": inside the same
-attempt it runs `claude stop <session-id>`, then repeats the *identical*
-`claude -p --resume <session-id> …` once. The stop keeps the conversation — same
+attempt it runs `claude stop <job-id>`, then repeats the *identical*
+`claude -p --resume <session-id> …` once. `<job-id>` is the eight lower-case
+hex job name the refusal itself prints (`837eaaea`), not the session UUID:
+`claude stop` resolves job names only, and answers a UUID with
+`No job matching` and exit 1. The stop keeps the conversation — same
 session id, same transcript — and it goes to the log rather than to the attempt
 row, so `ccresu history` still shows one resume command. If the stop fails or the
 second resume refuses again, the original error is reported unchanged, exactly as

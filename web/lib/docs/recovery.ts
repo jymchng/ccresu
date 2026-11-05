@@ -44,7 +44,7 @@ export const recoveryDoc: DocPage = {
     },
     {
       kind: "p",
-      text: "ccresu uses five verified interfaces: discovery (`claude agents --json`), the session transcript and per-session environment directories under `~/.claude`, the resume command below, and `claude stop <session-id>` for one narrow case. Nothing else is invoked, and no new session is ever started in place of the original one.",
+      text: "ccresu uses five verified interfaces: discovery (`claude agents --json`), the session transcript and per-session environment directories under `~/.claude`, the resume command below, and `claude stop <job-id>` for one narrow case. Nothing else is invoked, and no new session is ever started in place of the original one.",
     },
     {
       kind: "code",
@@ -100,7 +100,7 @@ export const recoveryDoc: DocPage = {
       kind: "ol",
       items: [
         "The refusal is recognised after normalisation — ANSI colour codes stripped, indentation and line wrapping collapsed — so a restyled message still matches, and an unrelated failure is not mistaken for this one.",
-        "`claude stop <session-id>` releases the background agent. The stop is written to the log, never to the attempt row: `ccresu history` still shows the one resume command that was run.",
+        "`claude stop <job-id>` releases the background agent. The job name is the eight lower-case hex name this very refusal prints (`837eaaea`), never the session UUID: `claude stop` resolves job names only and answers a UUID with `No job matching` and exit 1. A refusal that names no job is not stopped at all — guessing could stop another session's agent. The stop is written to the log, never to the attempt row: `ccresu history` still shows the one resume command that was run.",
         "The identical resume is issued once more — same arguments, same session id, same continuation message — and its result becomes the attempt's result. It is not a second try against the budget: the attempt keeps its number.",
       ],
     },
@@ -109,7 +109,7 @@ export const recoveryDoc: DocPage = {
       head: ["Step", "What the CLI sees", "What ccresu records"],
       rows: [
         ["1", "`claude -p --resume <id> --output-format json \"<message>\"` \u2014 refused, the session is in the background", "the attempt, with its single resume command as `command`"],
-        ["2", "`claude stop <id>`", "a log line only: the attempt row still shows one resume"],
+        ["2", "`claude stop <job-id>` — eight hex characters, never the session UUID", "a log line only: the attempt row still shows one resume"],
         ["3", "the same resume, byte-identical arguments", "the attempt's result, verification included"],
       ],
     },
@@ -118,7 +118,7 @@ export const recoveryDoc: DocPage = {
       id: "stop-then-resume",
       label: "One attempt, three calls",
       description:
-        "The resume is refused because the session is still attached to the background agent. ccresu runs `claude stop <id>`, then issues the identical resume with the same arguments, inside the same attempt. That second result becomes the attempt's result, and RESUMED is written only after verification.",
+        "The resume is refused because the session is still attached to the background agent. ccresu runs `claude stop <job-id>`, then issues the identical resume with the same arguments, inside the same attempt. That second result becomes the attempt's result, and RESUMED is written only after verification.",
     },
     {
       kind: "note",
@@ -149,7 +149,7 @@ export const recoveryDoc: DocPage = {
     },
     {
       kind: "p",
-      text: "This is not only asserted against fakes. `make e2e` runs `tests/scripts/background-resume-e2e.sh`, which builds the real binary and puts a stub `claude` on `PATH`. The stub keeps a background-agent marker, refuses the first `-p --resume` with the CLI's text above, clears the marker on `claude stop <id>`, and then returns a JSON result with the same `session_id` after growing the transcript. The run asserts that `ccresu recover <id>` exits 0 and ends `RESUMED` with the verification “proven: session id preserved and transcript grew”, that the stub saw exactly resume, stop, resume with byte-identical resume arguments, and that `ccresu history` still records the single resume command.",
+      text: "This is not only asserted against fakes. `make e2e` runs `tests/scripts/background-resume-e2e.sh`, which builds the real binary and puts a stub `claude` on `PATH`. The stub keeps a background-agent marker, refuses the first `-p --resume` with the CLI's text above, clears the marker on `claude stop <job-id>`, and then returns a JSON result with the same `session_id` after growing the transcript. The stub resolves its argument the way the real CLI does — only an eight-hex job name it holds, anything else answered with `No job matching` and exit 1 — so a stop that carried the session UUID fails there exactly as it does in the field. The run asserts that `ccresu recover <id>` exits 0 and ends `RESUMED` with the verification “proven: session id preserved and transcript grew”, that the stub saw exactly resume, stop, resume with byte-identical resume arguments, and that `ccresu history` still records the single resume command. One more assertion closes the gap the field found: the stop carried the job name and never the session UUID.",
     },
     {
       kind: "code",

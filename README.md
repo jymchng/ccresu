@@ -654,8 +654,10 @@ recoverable again with whatever budget it has left.
 One failure is not the session's fault at all: `claude -p --resume` refuses while
 the session is still attached to Claude Code's background agent
 (`That session is running in the background (837eaaea) …`). ccresu treats that as
-"busy", not "gone". In the same attempt it runs `claude stop <id>` and then
-repeats the *identical* resume once, so the session ends up `RESUMED` instead of
+"busy", not "gone". In the same attempt it runs `claude stop <job-id>` — the
+eight-hex job name that refusal prints, not the session UUID; `claude stop`
+answers a UUID with `No job matching` and exit 1 — and then repeats the
+*identical* resume once, so the session ends up `RESUMED` instead of
 `PERMANENTLY_FAILED` without you doing anything. The conversation is untouched —
 same session id, same transcript — and the stop appears in the log, not in the
 attempt row. If the stop fails, or the second resume refuses again, the original
@@ -837,12 +839,15 @@ ccresu only uses interfaces that exist in the installed CLI (inspected with
 | Session transcripts | `~/.claude/projects/<slugified-cwd>/<session-id>.jsonl` |
 | Per-session environment | `~/.claude/session-env/<session-id>/` |
 | Resume the original session | `claude -p --resume <session-id> "<continuation message>"` |
-| Release a session a background agent still holds | `claude stop <session-id>` |
+| Release a session a background agent still holds | `claude stop <job-id>` (the eight-hex job name the refusal prints) |
 
 `--resume` is the command ccresu lives on. `claude stop` is the one exception, and
 it exists for one situation: `claude -p --resume` refuses while the session is
 still attached to the interactive CLI's background agent, so ccresu stops that
-agent and repeats the identical resume. The conversation is untouched — same
+agent and repeats the identical resume. The job name is taken from the refusal
+itself ("or `claude stop 837eaaea` first"); the session UUID is never passed,
+because `claude stop` resolves only eight-hex job names and answers anything else
+with `No job matching` and exit 1. The conversation is untouched — same
 session id, same transcript. There is no `--fork-session` (it would continue a
 copy instead of your conversation), no new session id, no TTY and no keystroke
 injection, and if the stop fails the original refusal is reported unchanged. See
