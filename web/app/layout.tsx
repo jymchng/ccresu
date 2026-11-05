@@ -46,7 +46,7 @@ export default function RootLayout({
         {/* Applies a stored light preference before first paint; dark is the default. */}
         <script dangerouslySetInnerHTML={{ __html: themeBootstrapScript }} />
       </head>
-      <body className="flex min-h-screen flex-col">
+      <body className="page-backdrop flex min-h-screen flex-col">
         <a
           href="#main"
           className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-background focus:px-3 focus:py-2 focus:text-sm focus:shadow"

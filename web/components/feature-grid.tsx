@@ -34,7 +34,7 @@ export function FeatureGrid() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <p className="text-xs text-muted-foreground/80">
+                <p className="text-xs text-muted-foreground">
                   <InlineText text={feature.detail} />
                 </p>
               </CardContent>

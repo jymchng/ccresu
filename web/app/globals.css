@@ -11,37 +11,133 @@
  */
 
 :root {
-  --background: #fbfbfd;
-  --foreground: #1b1c22;
-  --card: #ffffff;
-  --card-foreground: #1b1c22;
-  --muted: #f3f3f7;
-  --muted-foreground: #5c6170;
-  --primary: #6d4ade;
-  --primary-foreground: #fdfcff;
-  --secondary: #ecebf5;
-  --secondary-foreground: #2c2745;
-  --accent: #f0eefb;
-  --accent-foreground: #302a52;
-  --border: #e2e2ea;
-  --ring: #6d4ade;
+  --background-rgb: 251 251 253;
+  --background: rgb(var(--background-rgb));
+  --foreground-rgb: 27 28 34;
+  --foreground: rgb(var(--foreground-rgb));
+  --card-rgb: 255 255 255;
+  --card: rgb(var(--card-rgb));
+  --card-foreground-rgb: 27 28 34;
+  --card-foreground: rgb(var(--card-foreground-rgb));
+  --muted-rgb: 243 243 247;
+  --muted: rgb(var(--muted-rgb));
+  --muted-foreground-rgb: 92 97 112;
+  --muted-foreground: rgb(var(--muted-foreground-rgb));
+  --primary-rgb: 109 74 222;
+  --primary: rgb(var(--primary-rgb));
+  --primary-foreground-rgb: 253 252 255;
+  --primary-foreground: rgb(var(--primary-foreground-rgb));
+  --secondary-rgb: 236 235 245;
+  --secondary: rgb(var(--secondary-rgb));
+  --secondary-foreground-rgb: 44 39 69;
+  --secondary-foreground: rgb(var(--secondary-foreground-rgb));
+  --accent-rgb: 240 238 251;
+  --accent: rgb(var(--accent-rgb));
+  --accent-foreground-rgb: 48 42 82;
+  --accent-foreground: rgb(var(--accent-foreground-rgb));
+  --border-rgb: 226 226 234;
+  --border: rgb(var(--border-rgb));
+  --ring-rgb: 109 74 222;
+  --ring: rgb(var(--ring-rgb));
+
+  /*
+   * The page backdrop.
+   *
+   * A flat `--background` fill made every section a panel sitting on a sheet.
+   * These three layers — a primary glow at the top, a second wash off to the
+   * right, and a vertical blend between two near-background tones — paint one
+   * continuous surface behind the header, the hero, the sections and the
+   * footer. Section fills on top of it are translucent (`bg-muted/20`) or
+   * opaque cards, so the wash reads through the page instead of stopping at
+   * each band.
+   *
+   * `--page-glow`/`--page-glow-2` are `rgb()` channels rather than hex so the
+   * alpha can be set per layer, and so the contrast test can composite the
+   * worst case (glow over the lightest stop) instead of trusting the eye.
+   */
+  --page-glow: 109 74 222; /* --primary */
+  --page-glow-2: 240 238 251; /* --accent */
+  --page-top: #ffffff;
+  --page-bottom: #f5f3fc;
+  --page-gradient:
+    radial-gradient(
+      1100px 620px at 50% 0%,
+      rgb(var(--page-glow) / 8%) 0%,
+      transparent 68%
+    ),
+    radial-gradient(
+      900px 560px at 100% 0%,
+      rgb(var(--page-glow-2) / 32%) 0%,
+      transparent 60%
+    ),
+    linear-gradient(
+      180deg,
+      var(--page-top) 0%,
+      var(--background) 25%,
+      var(--page-bottom) 100%
+    );
 }
 
 .dark {
-  --background: #16171d;
-  --foreground: #f6f6f9;
-  --card: #1d1f27;
-  --card-foreground: #f6f6f9;
-  --muted: #262832;
-  --muted-foreground: #a7acbc;
-  --primary: #b39cff;
-  --primary-foreground: #1a1330;
-  --secondary: #2b2d38;
-  --secondary-foreground: #f4f4f8;
-  --accent: #2c2a3c;
-  --accent-foreground: #f7f5ff;
-  --border: #343743;
-  --ring: #b39cff;
+  --background-rgb: 22 23 29;
+  --background: rgb(var(--background-rgb));
+  --foreground-rgb: 246 246 249;
+  --foreground: rgb(var(--foreground-rgb));
+  --card-rgb: 29 31 39;
+  --card: rgb(var(--card-rgb));
+  --card-foreground-rgb: 246 246 249;
+  --card-foreground: rgb(var(--card-foreground-rgb));
+  --muted-rgb: 38 40 50;
+  --muted: rgb(var(--muted-rgb));
+  --muted-foreground-rgb: 167 172 188;
+  --muted-foreground: rgb(var(--muted-foreground-rgb));
+  --primary-rgb: 179 156 255;
+  --primary: rgb(var(--primary-rgb));
+  --primary-foreground-rgb: 26 19 48;
+  --primary-foreground: rgb(var(--primary-foreground-rgb));
+  --secondary-rgb: 43 45 56;
+  --secondary: rgb(var(--secondary-rgb));
+  --secondary-foreground-rgb: 244 244 248;
+  --secondary-foreground: rgb(var(--secondary-foreground-rgb));
+  --accent-rgb: 44 42 60;
+  --accent: rgb(var(--accent-rgb));
+  --accent-foreground-rgb: 247 245 255;
+  --accent-foreground: rgb(var(--accent-foreground-rgb));
+  --border-rgb: 52 55 67;
+  --border: rgb(var(--border-rgb));
+  --ring-rgb: 179 156 255;
+  --ring: rgb(var(--ring-rgb));
+
+  /*
+   * The dark backdrop is its own gradient, not the light one with the colours
+   * flipped: the glow comes from the dark theme's lighter primary and the
+   * second wash is a cool blue rather than the light theme's lavender, so the
+   * dark page has depth without lifting the background far enough to hurt
+   * `--muted-foreground`. The alphas are deliberately small: the two radials
+   * overlap in the top-right corner, and their combined lift is what the
+   * contrast test measures.
+   */
+  --page-glow: 179 156 255; /* --primary */
+  --page-glow-2: 56 189 248;
+  --page-top: #181a24;
+  --page-bottom: #0d0e12;
+  --page-gradient:
+    radial-gradient(
+      1100px 620px at 50% 0%,
+      rgb(var(--page-glow) / 10%) 0%,
+      transparent 68%
+    ),
+    radial-gradient(
+      900px 560px at 100% 0%,
+      rgb(var(--page-glow-2) / 6%) 0%,
+      transparent 62%
+    ),
+    linear-gradient(
+      180deg,
+      var(--page-top) 0%,
+      var(--background) 25%,
+      var(--page-bottom) 100%
+    );
 }
 
 @layer base {
@@ -59,6 +155,13 @@
      * individual headings keeps working and wins where it is set.
      */
     scroll-padding-top: 4.5rem;
+
+    /*
+     * The canvas behind the body. Without this, the area outside the body box
+     * — overscroll on iOS, the strip under a short page — is painted with the
+     * browser default rather than the theme's background.
+     */
+    background-color: var(--background);
   }
 
   body {
@@ -79,6 +182,36 @@
     outline: 2px solid var(--ring);
     outline-offset: 2px;
   }
+}
+
+/*
+ * The gradient itself, as a class so the page shell names what it is doing and
+ * a test can assert the link (`app/layout.tsx` puts this on <body>).
+ *
+ * Deliberately NOT `background-attachment: fixed`: iOS Safari ignores it, so
+ * the effect already degrades to a scrolling gradient there, and on the
+ * browsers that honour it a fixed background repaints on every scroll frame.
+ *
+ * The three layers are sized and positioned individually, which is why this is
+ * a comma list and not one `background-size`:
+ *
+ *  - the two radial glows keep their pixel size and are pinned near the top of
+ *    the page, so they read at the size they were drawn at. As percentages of
+ *    the whole document they would be stretched thousands of pixels tall and a
+ *    glow positioned at `-12%` would sit a screen and a half above the fold —
+ *    which is exactly what happened before this was split out;
+ *  - the linear layer stretches `100% 100%`, one wash over the whole document,
+ *    painted once and never repeated.
+ *
+ * No repeat: the glows fade out where they end, and the page carries on with the
+ * vertical blend underneath.
+ */
+.page-backdrop {
+  background-image: var(--page-gradient);
+  background-repeat: no-repeat;
+  background-size: 1100px 620px, 900px 560px, 100% 100%;
+  background-position: 50% -150px, 100% -140px, 0 0;
+  background-color: var(--background);
 }
 
 /* Keep long command lines readable without breaking the layout. */

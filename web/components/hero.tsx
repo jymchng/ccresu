@@ -8,17 +8,19 @@ import { repo, site } from "@/lib/site";
 /**
  * The hero tells the whole story in one screen: the message that interrupts
  * your work, and the promise that the same session continues afterwards.
+ *
+ * It used to paint its own `primary/12%` radial behind the heading. That glow
+ * now comes from the page backdrop (`--page-gradient` in globals.css), which is
+ * centred at the same place: keeping both meant the top of the hero was tinted
+ * twice while every other section was tinted once, which is the band-per-
+ * section look the gradient replaced. Do not add it back here.
  */
 export function Hero() {
   return (
     <section className="relative overflow-hidden border-b border-border">
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-0 bg-[radial-gradient(60%_50%_at_50%_0%,theme(colors.primary/12%),transparent)]"
-      />
       <div className="relative mx-auto grid w-full max-w-6xl gap-10 px-4 py-16 sm:px-6 lg:grid-cols-[1.1fr_1fr] lg:py-24">
         <div className="flex min-w-0 flex-col items-start gap-5">
-          <Badge variant="outline" className="gap-1.5">
+          <Badge variant="outline" className="gap-1.5 py-1 text-sm">
             <span className="size-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
             Local-first watchdog for Claude Code
           </Badge>

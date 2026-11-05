@@ -61,7 +61,7 @@ export function CaptureFigure({
 
       <div className="flex flex-col gap-1 border-t border-border px-3 py-2 text-xs leading-relaxed text-muted-foreground sm:px-4">
         <p id={descriptionId}>{capture.description}</p>
-        <p className="text-[0.7rem] text-muted-foreground/80">
+        <p className="text-[0.7rem] text-muted-foreground">
           Captured from the binary at{" "}
           <code className="font-mono">{captureSource.commit}</code> on{" "}
           {captureSource.generated}; scratch paths and wall-clock columns are

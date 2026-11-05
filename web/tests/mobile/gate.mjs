@@ -73,7 +73,7 @@ const artifactDir = path.join(import.meta.dirname, "artifacts");
 const shotDir = path.join(artifactDir, "screenshots");
 
 const failures = [];
-const checks = { overflow: 0, targets: 0, menu: 0 };
+const checks = { overflow: 0, targets: 0, menu: 0, backdrop: 0, legibility: 0 };
 
 function fail(subject, detail) {
   failures.push({ subject, detail });
@@ -375,6 +375,143 @@ async function main() {
     }
   }
 
+  // 4: the page backdrop. A gradient is CSS the jsdom suite can only read, so
+  // this asserts the *built* stylesheet actually paints one: two radial washes
+  // over a vertical blend, on <body>, in both themes, and never with
+  // `background-attachment: fixed` (which iOS ignores and other engines
+  // repaint on every scroll frame).
+  await page.setViewportSize({ width: 1024, height: 800 });
+  await page.goto(`${server.base}/`, { waitUntil: "networkidle" });
+
+  const backdrop = async () =>
+    page.evaluate(() => {
+      const style = getComputedStyle(document.body);
+      const image = style.backgroundImage;
+      return {
+        image,
+        radial: (image.match(/radial-gradient/g) ?? []).length,
+        linear: (image.match(/linear-gradient/g) ?? []).length,
+        attachment: style.backgroundAttachment,
+        size: style.backgroundSize,
+        repeat: style.backgroundRepeat,
+        theme: document.documentElement.classList.contains("dark") ? "dark" : "light",
+      };
+    });
+
+  const checkBackdrop = (state, label) => {
+    if (state.radial !== 2 || state.linear !== 1) {
+      fail("page backdrop", `${label}: ${state.radial} radial + ${state.linear} linear layer(s), expected 2 + 1`);
+      return false;
+    }
+    if (state.attachment.includes("fixed")) {
+      fail("page backdrop", `${label}: background-attachment is ${state.attachment}`);
+      return false;
+    }
+    // Three layers, each sized explicitly: two pixel-sized glows and one
+    // stretched ground. A single `100% 100%` would stretch the glows over the
+    // whole document and push them above the fold.
+    const sizes = state.size.split(",").map((value) => value.trim());
+    if (sizes.length !== 3 || sizes[2] !== "100% 100%" || !sizes[0].includes("px")) {
+      fail("page backdrop", `${label}: background-size ${state.size}`);
+      return false;
+    }
+    if (!state.repeat.includes("no-repeat")) {
+      fail("page backdrop", `${label}: background-repeat ${state.repeat}`);
+      return false;
+    }
+    return true;
+  };
+
+  // 5: the hero's "Local-first watchdog" pill. It was 12px muted-grey text in a
+  // transparent hairline pill (5.95:1 in light), which read as washed out on the
+  // gradient. It must now be foreground-coloured, at least 14px, and have a fill
+  // of its own; the contrast is computed against the theme's own tokens.
+  const heroBadge = async () =>
+    page.evaluate(() => {
+      const el = [...document.querySelectorAll("span")].find(
+        (node) => node.textContent.trim() === "Local-first watchdog for Claude Code",
+      );
+      if (!el) return null;
+      const style = getComputedStyle(el);
+      const root = getComputedStyle(document.documentElement);
+      const hex = (value) => {
+        const clean = value.trim().replace("#", "");
+        return [
+          Number.parseInt(clean.slice(0, 2), 16),
+          Number.parseInt(clean.slice(2, 4), 16),
+          Number.parseInt(clean.slice(4, 6), 16),
+        ];
+      };
+      const rgb = (value) => (value.match(/[\d.]+/g) ?? []).map(Number).slice(0, 3);
+      return {
+        color: rgb(style.color),
+        muted: (root.getPropertyValue("--muted-foreground-rgb").trim().split(/\s+/) ?? []).map(Number),
+        background: (root.getPropertyValue("--background-rgb").trim().split(/\s+/) ?? []).map(Number),
+        fontSize: Number.parseFloat(style.fontSize),
+        fill: rgb(style.backgroundColor),
+        fillAlpha: Number((style.backgroundColor.match(/[\d.]+/g) ?? ["0"])[3] ?? 1),
+        theme: document.documentElement.classList.contains("dark") ? "dark" : "light",
+      };
+    });
+
+  const contrastOf = ([r1, g1, b1], [r2, g2, b2]) => {
+    const lum = ([r, g, b]) => {
+      const channel = (c) => {
+        const value = c / 255;
+        return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+    };
+    const [hi, lo] = [lum([r1, g1, b1]), lum([r2, g2, b2])].sort((a, b) => b - a);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+
+  const checkBadge = (state) => {
+    if (!state) {
+      fail("hero badge", "the \"Local-first watchdog\" pill was not found");
+      return false;
+    }
+    const problems = [];
+    const ratio = contrastOf(state.color, state.background);
+    if (state.fontSize < 14) problems.push(`${state.fontSize}px text, expected >= 14px`);
+    if (ratio < 7) problems.push(`contrast ${ratio.toFixed(2)}:1 against --background, expected >= 7`);
+    if (state.fillAlpha === 0) problems.push("no fill of its own (transparent pill)");
+    if (state.color.join() === state.muted.join()) problems.push("still using --muted-foreground");
+    if (problems.length > 0) {
+      fail("hero badge", `${state.theme} theme: ${problems.join("; ")}`);
+      return false;
+    }
+    return true;
+  };
+
+  const firstTheme = await backdrop();
+  const firstOk = checkBackdrop(firstTheme, `${firstTheme.theme} theme`);
+  const firstBadge = checkBadge(await heroBadge());
+
+  // Toggle the theme: the light and dark washes are separate gradients, so the
+  // computed value must change and must still be a gradient.
+  await page.locator("header button[aria-label$='theme']").click();
+  await page.waitForTimeout(120);
+  const secondTheme = await backdrop();
+  const secondOk = checkBackdrop(secondTheme, `${secondTheme.theme} theme`);
+  const secondBadge = checkBadge(await heroBadge());
+
+  if (firstBadge && secondBadge) checks.legibility += 2;
+
+  if (firstOk && secondOk) {
+    if (firstTheme.theme === secondTheme.theme) {
+      fail("page backdrop", `the theme toggle did not switch themes (still ${firstTheme.theme})`);
+    } else if (firstTheme.image === secondTheme.image) {
+      fail("page backdrop", "light and dark resolve to the same gradient");
+    } else {
+      checks.backdrop += 2;
+    }
+  }
+
+  // Taken after the toggle, so this is the light wash; the dark one is in
+  // every other screenshot in the suite.
+  await shot("backdrop-light", false);
+
   await browser.close();
   server.close();
 
@@ -394,6 +531,8 @@ async function main() {
     `\n${checks.overflow}/${ROUTES.length * WIDTHS.length} route/width pairs fit the viewport` +
       `\n${checks.targets}/${ROUTES.length * WIDTHS.length} route/width pairs have no target under ${MIN_TARGET}x${MIN_TARGET}` +
       `\n${checks.menu}/${DOC_ROUTES.length * DOCS_MENU_WIDTHS.length + ROUTES.length * HEADER_MENU_WIDTHS.length} menu open/navigate/close checks passed` +
+      `\n${checks.backdrop}/2 page-backdrop checks passed (gradient applied per theme, not fixed)` +
+      `\n${checks.legibility}/2 hero-badge legibility checks passed (theme foreground, >= 14px, own fill)` +
       `\n${shots.length} screenshots in web/tests/mobile/artifacts/screenshots/`,
   );
   console.log(failures.length === 0 ? "\nPASS" : `\n${failures.length} failure(s)`);

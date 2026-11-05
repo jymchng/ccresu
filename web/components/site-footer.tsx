@@ -37,7 +37,7 @@ const projectLinks = [
 
 export function SiteFooter() {
   return (
-    <footer className="border-t border-border bg-muted/20">
+    <footer className="border-t border-border bg-foreground/5">
       <div className="mx-auto grid w-full max-w-6xl gap-8 px-4 py-10 sm:grid-cols-2 sm:px-6 md:grid-cols-4">
         <div className="flex min-w-0 flex-col gap-2">
           <p className="font-semibold tracking-tight">{site.name}</p>

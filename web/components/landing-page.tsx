@@ -121,7 +121,7 @@ export function LandingPage({ releaseVersion }: { releaseVersion: string }) {
 
       <section
         aria-labelledby="guarantees-heading"
-        className="border-t border-border bg-muted/20"
+        className="border-t border-border bg-foreground/5"
       >
         <div className="mx-auto w-full max-w-6xl px-4 py-16 sm:px-6">
           <h2

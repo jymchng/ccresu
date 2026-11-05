@@ -2,6 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { Hero } from "@/components/hero";
+import { badgeVariants } from "@/components/ui/badge";
 import { LandingPage } from "@/components/landing-page";
 import { features, workflow } from "@/lib/landing";
 import { fallbackReleaseVersion, repo, site } from "@/lib/site";
@@ -19,6 +20,20 @@ describe("landing page", () => {
     expect(banner.closest("code")).toHaveTextContent(
       "resets 12pm (Europe/Berlin)",
     );
+  });
+
+  it("gives the hero label a legible pill, not 12px muted text", () => {
+    // Reported as "not legible on the website": the pill was `text-xs` in
+    // `--muted-foreground` with a transparent background, which measured
+    // 5.95:1 in the light theme and read as washed out on the page wash.
+    render(<Hero />);
+
+    const pill = screen.getByText("Local-first watchdog for Claude Code");
+    expect(pill.className).toContain("text-sm");
+    const outline = badgeVariants({ variant: "outline" });
+    expect(outline).toContain("text-foreground");
+    expect(outline).toContain("bg-background/70");
+    expect(outline).not.toContain("text-muted-foreground");
   });
 
   it("renders all eight feature cards", () => {

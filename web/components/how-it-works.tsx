@@ -6,7 +6,7 @@ export function HowItWorks() {
     <section
       id="how-it-works"
       aria-labelledby="how-it-works-heading"
-      className="border-y border-border bg-muted/20"
+      className="border-y border-border bg-foreground/5"
     >
       <div className="mx-auto w-full max-w-6xl px-4 py-16 sm:px-6">
         <div className="mb-10 flex max-w-2xl flex-col gap-2">
