@@ -5,6 +5,7 @@ import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { docs } from "@/lib/docs";
 import { repo } from "@/lib/site";
+import { staticPages } from "@/lib/static-pages";
 import { normalizeHref } from "./helpers";
 
 /** Every internal route the export actually builds. */
@@ -12,6 +13,7 @@ const knownRoutes = new Set([
   "/",
   "/docs",
   ...docs.map((doc) => `/docs/${doc.slug}`),
+  ...staticPages.map((page) => page.href),
 ]);
 
 function internalHrefs(container: HTMLElement): string[] {

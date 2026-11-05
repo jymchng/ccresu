@@ -11,7 +11,7 @@ const base = process.env.CCRESU_SITE_BASE ?? "http://127.0.0.1:8982/ccresu";
 const widths = [320, 375, 414, 768, 1024];
 const routes = process.env.CCRESU_ROUTES
   ? process.env.CCRESU_ROUTES.split(",")
-  : ["/", "/docs/", "/docs/cli/", "/docs/configuration/", "/docs/deployment/", "/docs/installation/", "/docs/limitations/", "/docs/recovery/", "/docs/security/", "/docs/telegram/", "/docs/troubleshooting/", "/docs/tutorial/"];
+  : ["/", "/about/", "/docs/", "/docs/cli/", "/docs/configuration/", "/docs/deployment/", "/docs/installation/", "/docs/limitations/", "/docs/recovery/", "/docs/security/", "/docs/telegram/", "/docs/troubleshooting/", "/docs/tutorial/", "/privacy/", "/terms/"];
 
 const browser = await chromium.launch();
 const page = await browser.newPage();

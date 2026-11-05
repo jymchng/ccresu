@@ -43,6 +43,7 @@ import path from "node:path";
 
 const ROUTES = [
   "/",
+  "/about/",
   "/docs/",
   "/docs/cli/",
   "/docs/configuration/",
@@ -54,6 +55,8 @@ const ROUTES = [
   "/docs/telegram/",
   "/docs/troubleshooting/",
   "/docs/tutorial/",
+  "/privacy/",
+  "/terms/",
 ];
 
 const WIDTHS = [320, 375, 414, 768, 1024];

@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { repo, site, localApi } from "@/lib/site";
+import { staticPages } from "@/lib/static-pages";
 
 /**
  * Footer link rows are `flex min-h-11 items-center`: a bare inline link is a
@@ -9,7 +10,7 @@ import { repo, site, localApi } from "@/lib/site";
  * `md`, so the sections never squeeze into unreadably narrow columns.
  */
 const linkClass =
-  "flex min-h-11 items-center text-sm text-muted-foreground transition-colors hover:text-foreground";
+  "flex min-h-11 min-w-11 items-center text-sm text-muted-foreground transition-colors hover:text-foreground";
 
 const productLinks = [
   { href: "/docs/installation/", label: "Installation" },
@@ -75,6 +76,28 @@ export function SiteFooter() {
             </a>
           ))}
         </div>
+      </div>
+      <div className="border-t border-border px-4 py-3 sm:px-6">
+        {/*
+          The three non-documentation pages are linked here and only here: they
+          are site furniture (who runs this, what you agreed to, what happens to
+          your data), not chapters of the manual, so they must not appear in
+          `DocsNav`. `flex-wrap` keeps the row from running off a 320px screen,
+          and each link keeps the 44px row the rest of the footer uses.
+        */}
+        <nav
+          aria-label="Site"
+          className="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-x-5"
+        >
+          {staticPages.map((page) => (
+            <Link key={page.href} href={`${page.href}/`} className={linkClass}>
+              {page.title}
+            </Link>
+          ))}
+          <a href={repo.license} className={linkClass}>
+            MIT licence
+          </a>
+        </nav>
       </div>
       <div className="border-t border-border px-4 py-4 text-center text-xs text-muted-foreground sm:px-6">
         {site.name} is a local tool: no telemetry, no hosted service, no web UI
