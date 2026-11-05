@@ -23,7 +23,7 @@ const specPath = join(here, "..", "web", "lib", "install-commands.json");
 const spec = JSON.parse(readFileSync(specPath, "utf8"));
 
 /** The fallback release; the site passes the version it resolved instead. */
-const FALLBACK_VERSION = "0.1.0";
+const FALLBACK_VERSION = "0.2.0";
 
 function fail(message) {
   process.stderr.write(`install-one-liner: ${message}\n`);
