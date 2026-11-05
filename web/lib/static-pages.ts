@@ -126,8 +126,9 @@ export const termsPage: StaticPage = {
       id: "no-liability",
       heading: "No liability",
       paragraphs: [
+        "In one sentence: if running ccresu costs you something \u2014 time, quota, work or data \u2014 that cost is yours, not the maintainer's. The software is provided as-is, and it is run at your own risk.",
         "To the fullest extent permitted by law, the author and copyright holder of ccresu is not liable for any damages of any kind arising from the use of, or the inability to use, this software \u2014 whether in contract, tort or otherwise, and whether the damage was foreseeable or not. This mirrors the licence's clause that in no event shall the authors or copyright holders be liable for any claim, damages or other liability arising from, out of or in connection with the software or its use.",
-        "That exclusion specifically covers, without limiting it:",
+        "The exclusion covers damages arising from the use of ccresu or from the inability to use it \u2014 a machine that cannot run the binary, a service that rejects the resume, a build that does not compile \u2014 and it specifically includes, without limiting it:",
       ],
       bullets: [
         "lost work, truncated responses or a conversation that does not continue as you expected;",
@@ -142,7 +143,7 @@ export const termsPage: StaticPage = {
       id: "your-responsibility",
       heading: "Your responsibility",
       paragraphs: [
-        "You are responsible for supervising what you delegate. Running ccresu as a daemon means an automated process will send a continuation message to your session after a limit resets; if that is not what you want for a particular session, do not leave it enabled for that session.",
+        "You are responsible for supervising resumption. Running ccresu as a daemon means an automated process will send a continuation message to your session after a limit resets; if that is not what you want for a particular session, do not leave it enabled for that session, and read the attempt history before you assume a resume did what you asked.",
         "You are also responsible for the third-party terms you are subject to. ccresu drives Claude Code, and your use of Claude Code \u2014 including anything ccresu does on your behalf \u2014 remains governed by Anthropic's own terms and usage policy. ccresu is not affiliated with, endorsed by or supported by Anthropic, and it does not attempt to evade any limit or policy those terms impose.",
       ],
     },
