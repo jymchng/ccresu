@@ -41,7 +41,7 @@ export function SiteFooter() {
       <div className="mx-auto grid w-full max-w-6xl gap-8 px-4 py-10 sm:grid-cols-2 sm:px-6 md:grid-cols-4">
         <div className="flex min-w-0 flex-col gap-2">
           <p className="font-semibold tracking-tight">{site.name}</p>
-          <p className="max-w-xs whitespace-nowrap text-sm text-muted-foreground">{site.tagline}.</p>
+          <p className="max-w-xs text-sm text-muted-foreground">{site.tagline}.</p>
           <p className="text-xs text-muted-foreground">
             Local API: <code className="font-mono [overflow-wrap:anywhere]">{localApi.address}</code>
           </p>
