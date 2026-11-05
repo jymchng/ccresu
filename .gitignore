@@ -27,6 +27,9 @@ web/next-env.d.ts
 .agenthicc/
 tests/.cassette/
 
+# Local-only drafts (linkedin posts and their screenshots are never pushed)
+linkedin-posts/
+
 # Editors / OS
 .DS_Store
 .idea/
