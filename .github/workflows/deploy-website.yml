@@ -83,6 +83,35 @@ jobs:
       - name: Check the exported SEO surface
         run: npm run test:export
 
+      # The only gate that measures the real thing: every other check is a claim
+      # about markup, and jsdom has no layout engine. This walks the built export
+      # in Chromium at 320/375/414/768/1024, asserts nothing overflows the
+      # viewport, that every visible control is at least 44x44 CSS pixels, and
+      # that the header and docs menus open, navigate and close on a phone.
+      #
+      # Its output (57 full-page screenshots plus report.json with a SHA-256 per
+      # image) is uploaded below and is the point of running it in CI: locally
+      # the directory is git-ignored, so before this step the evidence could only
+      # be regenerated, never inspected by someone reviewing a deploy.
+      - name: Install the Chromium the browser gate needs
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser gate (layouts, menus, screenshots)
+        run: npm run test:mobile
+
+      # `if: always()` on purpose: the screenshots of a *failing* layout are the
+      # ones worth downloading, so the evidence must survive a red gate. A green
+      # build still gates the `deploy` job below, which `needs: build`.
+      - name: Upload the browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-gate-evidence
+          # Relative to the workspace root, not to the step's working-directory.
+          path: web/tests/mobile/artifacts/
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Upload the exported site
         uses: actions/upload-artifact@v4
         with:
