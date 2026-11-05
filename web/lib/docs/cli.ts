@@ -4,7 +4,7 @@ export const cliDoc: DocPage = {
   slug: "cli",
   title: "CLI reference",
   summary:
-    "Thirteen commands, five global flags, and exit codes a script can branch on.",
+    "Fourteen commands, five global flags, and exit codes a script can branch on.",
   blocks: [
     {
       kind: "code",
@@ -80,6 +80,25 @@ export const cliDoc: DocPage = {
       kind: "code",
       label: "A typical session",
       code: `ccresu status\nccresu sessions --state WAITING_FOR_RESET\nccresu inspect 4d1f9c2a-... \nccresu history 4d1f9c2a-... --limit 20\nccresu recover 4d1f9c2a-... --force\nccresu --json sessions | jq '.[].id'`,
+    },
+    {
+      kind: "h2",
+      text: "Clearing a permanently failed session",
+    },
+    {
+      kind: "code",
+      label: "ccresu reset",
+      code: `$ ccresu reset 7c1b2a44-0000-4000-8000-abcdefabcdef\nsession:       7c1b2a44-0000-4000-8000-abcdefabcdef\nstate:         DISABLED\nprevious state: PERMANENTLY_FAILED\nerror:         cleared\nattempts:      kept (use 'ccresu retry' to spend another)\nsession 7c1b2a44-0000-4000-8000-abcdefabcdef: reset; run 'ccresu enable 7c1b2a44-0000-4000-8000-abcdefabcdef' to let ccresu recover it again`,
+    },
+    {
+      kind: "p",
+      text: "`reset` is the only operator edge out of `PERMANENTLY_FAILED` into `DISABLED`: it drops the stored error and disables the session, leaving the attempt history and the counter alone. It never resumes and never refunds an attempt — `ccresu retry` refills the budget, `ccresu recover --force` tries once more now, and `ccresu enable` after a reset makes the session recoverable again with whatever budget it has left. Any other state is refused with exit code `4` and a message that names the state and the command to use instead; an unknown session is `3` and a missing or extra argument `2`. `--json` reports `session_id`, `state`, `previous_state`, `enabled` and `reason`.",
+    },
+    {
+      kind: "note",
+      tone: "info",
+      title: "A background session is stopped, not abandoned",
+      text: "When `claude -p --resume` refuses because the session is still attached to Claude Code's background agent (`That session is running in the background (837eaaea) …`), ccresu runs `claude stop <id>` and repeats the identical resume once inside the same attempt. The conversation is kept — same session id, same transcript — and the stop is logged rather than recorded as the attempt's command. If the stop fails, or the second resume refuses again, the original error is reported unchanged.",
     },
     {
       kind: "note",

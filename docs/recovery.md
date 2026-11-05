@@ -8,7 +8,7 @@ code does, and what the end-to-end test asserts.
 
 ccresu is verified against Claude Code **2.0.0 or newer**
 (`claude.MinimumVersion`); an older CLI is refused rather than guessed at. It uses
-exactly four interfaces:
+exactly five interfaces:
 
 | Purpose | Interface |
 | --- | --- |
@@ -16,6 +16,7 @@ exactly four interfaces:
 | Session transcript | `~/.claude/projects/<slugified-cwd>/<session-id>.jsonl` |
 | Per-session environment | `~/.claude/session-env/<session-id>/` |
 | Resume the original session | `claude -p --resume <session-id> "<message>" --output-format json` |
+| Release a session still attached to a background agent | `claude stop <session-id>` |
 
 The resume vector is built in one place, `claude.ResumeArgs`, and is:
 
@@ -23,9 +24,31 @@ The resume vector is built in one place, `claude.ResumeArgs`, and is:
 []string{"-p", "--resume", sessionID, message, "--output-format", "json"}
 ```
 
-There is no `--fork-session`, no new session id, no TTY, no keystroke injection
-into your terminal, and no invented subcommand. The message is limited to 8 KiB,
-must be non-empty, and the session id is validated before anything is executed.
+The stop vector is built in one place too, `claude.StopArgs`, and is:
+
+```go
+[]string{"stop", sessionID}
+```
+
+`claude stop` is the single exception to "`--resume` is the only command ccresu
+runs", and it is narrow by construction: it is issued only after a resume has
+already been refused because the session is still attached to a background agent
+(see [When the session is still attached to a background
+agent](#when-the-session-is-still-attached-to-a-background-agent)), it takes the
+session id and nothing else, and it is bounded by the query timeout rather than
+the resume timeout. The conversation survives it — the transcript, the session id
+and the project directory are untouched — so the resume that follows is the same
+`-p --resume` command with the same arguments.
+
+There is still no `--fork-session`, no new session id, no TTY, no keystroke
+injection into your terminal, and no other undocumented subcommand. The
+`--fork-session` prohibition is the reason `stop` was chosen at all: the CLI's own
+refusal offers `claude attach …`, `claude stop …` and `--fork-session`, and only
+`stop` keeps the promise that the *original* conversation continues. `attach`
+needs an interactive terminal ccresu deliberately never allocates, and
+`--fork-session` would continue a copy instead — the one thing a recovery must
+never do. The message is limited to 8 KiB, must be non-empty, and the session id
+is validated before anything is executed, `claude stop` included.
 
 ## Discovery and detection
 
@@ -91,7 +114,7 @@ edge is rejected with `ErrInvalidTransition`. The interesting ones:
 | `RESUMING` | `RESUMED`, `RETRY_WAIT`, `PERMANENTLY_FAILED` |
 | `RETRY_WAIT` | `CHECKING_SESSION`, `WAITING_FOR_RESET`, `PERMANENTLY_FAILED` |
 | `RESUMED` | `RUNNING`, `COMPLETED`, `USER_TERMINATED`, `DISABLED` — never straight back to `RESUMING` |
-| `PERMANENTLY_FAILED` | `CHECKING_SESSION` (an operator asked for another go), `USER_TERMINATED`, `DISABLED` |
+| `PERMANENTLY_FAILED` | `CHECKING_SESSION` (an operator asked for another go), `USER_TERMINATED`, `DISABLED` (via `ccresu reset`) |
 
 `COMPLETED`, `USER_TERMINATED` and `UNRECOVERABLE` are terminal. `RESUMED`,
 `COMPLETED`, `USER_TERMINATED`, `DISABLED` and `UNRECOVERABLE` are **settled**:
@@ -120,8 +143,48 @@ state that still permits automatic work — including `WAITING_FOR_RESET`, where
 the scheduler parks a session whose limit is still in force, and
 `CHECKING_SESSION`, where a crash mid-check leaves one. The guard runs before any
 check, records `maximum attempts reached (10)`, and returns
-`errors.Is(err, ErrMaxAttempts)` as a terminal error; `ccresu retry` or
-`ccresu recover --force` is then the only way forward.
+`errors.Is(err, ErrMaxAttempts)` as a terminal error; `ccresu retry` (fresh
+budget), `ccresu reset` (clear the failure, leave it disabled) or `ccresu recover
+--force` (one more try now) is then the only way forward.
+
+## When the session is still attached to a background agent
+
+`claude -p --resume <session-id>` refuses outright when the same session is still
+held by the interactive CLI's background agent:
+
+```console
+Error: That session is running in the background (837eaaea). Run `claude attach
+837eaaea` to open it, or `claude stop 837eaaea` first to resume it here. Add
+--fork-session to branch off a copy instead.
+```
+
+Nothing about the conversation is lost here, so the refusal must not end the
+session's life. One attempt handles it, in three steps:
+
+1. The refusal is recognised by `claude.IsSessionRunningInBackground`, after the
+   message has been normalised — ANSI colour codes stripped, indentation and line
+   wrapping collapsed — so a restyled or wrapped message still matches. A nil
+   error never matches, and the marker is narrow enough that an unrelated failure
+   is not mistaken for this one.
+2. `claude stop <session-id>` releases the background agent. The stop is recorded
+   in the log, never in the attempt row: `ccresu history` still shows the single
+   `claude -p --resume …` command that was run, not a command ccresu issued for
+   its own bookkeeping.
+3. The *identical* resume is issued once more — same argument vector, same
+   session id, same continuation message — and its result is the attempt's result.
+
+This is not a retry in the budget sense: the attempt keeps its number, and no new
+attempt row is written. It is one attempt that has to clear the way first.
+
+If the stop itself fails, or the second resume refuses again (or fails any other
+way), the **original** failure is returned untouched. Nothing loops, the
+classification is unchanged, and the session is dealt with exactly as any other
+permanent resume failure: `ccresu retry <session-id>` for a fresh budget,
+`ccresu recover <session-id> --force` for one more try now, or `ccresu reset
+<session-id>` to clear the failure and park the session in `DISABLED`.
+
+Once a session has been stopped this way, the next resume is a normal resume
+again: the background agent no longer holds it, so there is no stop to issue.
 
 ## Verification: proof, not optimism
 

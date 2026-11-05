@@ -33,6 +33,7 @@ Exit codes: `0` ok, `1` failure, `2` usage, `3` not found, `4` not eligible,
 | `inspect` | `inspect <session-id>` | Everything known about one session. |
 | `recover` | `recover <session-id> [--message TEXT] [--force]` | Resumes one session now, optionally with a different continuation message. `--force` tries even when the attempt budget is spent. |
 | `retry` | `retry <session-id>` | Retries a session whose attempt budget is spent. |
+| `reset` | `reset <session-id>` | Clears a `PERMANENTLY_FAILED` session: the stored error goes away and the session becomes `DISABLED`. It never resumes anything and never refunds an attempt. |
 | `enable` | `enable <session-id>` | Allows ccresu to recover a session. |
 | `disable` | `disable <session-id>` | Stops ccresu from recovering a session. |
 | `history` | `history <session-id> [--limit N]` | Attempts and state transitions (default `--limit 50`). |
@@ -124,6 +125,50 @@ $ ccresu recover 4d1f9c2a-... --force      # budget spent, try anyway
 
 A manual recovery goes through the same state machine, locking and verification
 as an automatic one: it is not a bypass.
+
+A resume can also be refused because the session is still attached to Claude
+Code's background agent
+(`That session is running in the background (837eaaea) …`). ccresu treats that as
+"the conversation is busy", not as "the conversation is gone": inside the same
+attempt it runs `claude stop <session-id>`, then repeats the *identical*
+`claude -p --resume <session-id> …` once. The stop keeps the conversation — same
+session id, same transcript — and it goes to the log rather than to the attempt
+row, so `ccresu history` still shows one resume command. If the stop fails or the
+second resume refuses again, the original error is reported unchanged, exactly as
+before. See [recovery.md](recovery.md).
+
+### Clear a permanently failed session
+
+```console
+$ ccresu reset 7c1b2a44-0000-4000-8000-abcdefabcdef
+session:       7c1b2a44-0000-4000-8000-abcdefabcdef
+state:         DISABLED
+previous state: PERMANENTLY_FAILED
+error:         cleared
+attempts:      kept (use 'ccresu retry' to spend another)
+session 7c1b2a44-0000-4000-8000-abcdefabcdef: reset; run 'ccresu enable 7c1b2a44-0000-4000-8000-abcdefabcdef' to let ccresu recover it again
+```
+
+`reset` takes a session out of `PERMANENTLY_FAILED` and nothing else. It clears
+the stored error, records the transition with the reason `operator reset a
+permanently failed session`, and leaves the session `DISABLED` so nothing resumes
+it until you say so. It does **not** resume the session, and it does **not** give
+back an attempt: the attempt history and the counter are untouched. That split is
+deliberate:
+
+| You want | Command |
+| --- | --- |
+| Another go now | `ccresu recover <id> --force` |
+| A full fresh attempt budget | `ccresu retry <id>` |
+| The failure forgotten and the session out of the way | `ccresu reset <id>` |
+| It recoverable again, with whatever budget it has left | `ccresu reset <id>` then `ccresu enable <id>` |
+
+Every other state is refused with exit code `4` and a message that names the
+state and the command to use instead — `UNRECOVERABLE` has no legal edge at all,
+`COMPLETED` and `USER_TERMINATED` carry no failure to clear, and a `DISABLED`
+session is already where `reset` would put it. An unknown session is exit `3`
+(`not found`), and a missing or extra argument is exit `2` (`usage`). `--json`
+reports `session_id`, `state`, `previous_state`, `enabled` and `reason`.
 
 ### Stop a session from being resumed
 

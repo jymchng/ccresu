@@ -275,14 +275,15 @@ WHEN                     TRANSITION                                 REASON
     { kind: "h2", text: "Step 10 — Act manually" },
     {
       kind: "p",
-      text: "Three commands bypass the wait, with different rules: `recover` resumes now (still respecting the attempt budget), `recover --force` tries even when the budget is spent, and `retry` gives a spent or terminal session a fresh budget.",
+      text: "Four commands bypass the wait, with different rules: `recover` resumes now (still respecting the attempt budget), `recover --force` tries even when the budget is spent, `retry` gives a spent or terminal session a fresh budget, and `reset` clears a permanently failed session into `DISABLED` without refunding an attempt.",
     },
     {
       kind: "code",
-      label: "recover / retry",
+      label: "recover / retry / reset",
       code: `ccresu recover 3f9d1c07-1111-4222-8333-444455556666
 ccresu recover <id> --message "Pick up where the limit interrupted you." --force
-ccresu retry <id>`,
+ccresu retry <id>
+ccresu reset <id>`,
     },
     {
       kind: "p",
@@ -329,6 +330,27 @@ SESSION   STATE               NEXT ATTEMPT                    ENABLED  RECOVERAB
 
 $ ccresu retry 7c1b2a44-0000-4000-8000-abcdefabcdef
 ccresu: retry 7c1b2a44-0000-4000-8000-abcdefabcdef: recovery: session 7c1b2a44-0000-4000-8000-abcdefabcdef ended in PERMANENTLY_FAILED: resume session 7c1b2a44-0000-4000-8000-abcdefabcdef: claude: malformed claude output: empty resume output`,
+    },
+    {
+      kind: "p",
+      text: "`reset` is the way out that does not spend an attempt: it accepts only `PERMANENTLY_FAILED`, drops the stored error, and parks the session as `DISABLED`. It never resumes, and the attempt history and counter are untouched (`retry` is what refills the budget). Any other state is refused with exit code 4 and a message naming what to use instead; exit 3 means no such session, 2 means a bad argument.",
+    },
+    {
+      kind: "code",
+      label: "Clearing the failure",
+      code: `$ ccresu reset 7c1b2a44-0000-4000-8000-abcdefabcdef
+session:       7c1b2a44-0000-4000-8000-abcdefabcdef
+state:         DISABLED
+previous state: PERMANENTLY_FAILED
+error:         cleared
+attempts:      kept (use 'ccresu retry' to spend another)
+session 7c1b2a44-0000-4000-8000-abcdefabcdef: reset; run 'ccresu enable 7c1b2a44-0000-4000-8000-abcdefabcdef' to let ccresu recover it again`,
+    },
+    {
+      kind: "note",
+      tone: "info",
+      title: "A background session is stopped, not abandoned",
+      text: "One failure is not the session's fault at all: `claude -p --resume` refuses while the session is still attached to Claude Code's background agent (`That session is running in the background (837eaaea) …`). ccresu treats that as busy, not gone: in the same attempt it runs `claude stop <id>` and repeats the identical resume once, so the session reaches RESUMED without intervention and the conversation is kept — same session id, same transcript. The stop is logged, not recorded as the attempt's command. If the stop fails or the second resume refuses again, the original error is reported unchanged and the session lands in PERMANENTLY_FAILED, which is where `retry`, `reset` and `recover --force` come in.",
     },
     { kind: "h2", text: "Step 12 — Turn on Telegram notifications (optional)" },
     {

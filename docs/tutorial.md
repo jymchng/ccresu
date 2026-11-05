@@ -336,6 +336,9 @@ ccresu recover <id> --message "Pick up where the limit interrupted you." --force
 
 # put a spent/terminal session back to work with a fresh budget
 ccresu retry <id>
+
+# clear a permanently failed session: it becomes DISABLED and the error is gone
+ccresu reset <id>
 ```
 
 `recover` refuses when the session cannot be resumed, and says why:
@@ -395,13 +398,41 @@ SESSION   STATE               NEXT ATTEMPT                    ENABLED  RECOVERAB
 7c1b2a44  PERMANENTLY_FAILED  none (attempt budget spent;...  yes      yes          /home/you/projects/demo 2026-11-05 03:28:24 +08  resume session 7c1b2a44-0000-4000-800...
 ```
 
-That is the point at which `ccresu retry <id>` (fresh budget) or
+That is the point at which `ccresu retry <id>` (fresh budget), `ccresu reset <id>`
+(the failure cleared, the session parked as `DISABLED`) or
 `ccresu recover <id> --force` (one more try now) is the right tool:
 
 ```console
 $ ccresu retry 7c1b2a44-0000-4000-8000-abcdefabcdef
 ccresu: retry 7c1b2a44-0000-4000-8000-abcdefabcdef: recovery: session 7c1b2a44-0000-4000-8000-abcdefabcdef ended in PERMANENTLY_FAILED: resume session 7c1b2a44-0000-4000-8000-abcdefabcdef: claude: malformed claude output: empty resume output
 ```
+
+`reset` is the way out that does not spend an attempt. It accepts only
+`PERMANENTLY_FAILED`, and it never resumes anything:
+
+```console
+$ ccresu reset 7c1b2a44-0000-4000-8000-abcdefabcdef
+session:       7c1b2a44-0000-4000-8000-abcdefabcdef
+state:         DISABLED
+previous state: PERMANENTLY_FAILED
+error:         cleared
+attempts:      kept (use 'ccresu retry' to spend another)
+session 7c1b2a44-0000-4000-8000-abcdefabcdef: reset; run 'ccresu enable 7c1b2a44-0000-4000-8000-abcdefabcdef' to let ccresu recover it again
+```
+
+`retry` gives the budget back; `reset` only forgets the failure. A following
+`ccresu enable <id>` makes the session recoverable again with whatever budget it
+has left.
+
+One failure is not the session's fault at all: `claude -p --resume` refuses while
+the session is still attached to Claude Code's background agent
+(`That session is running in the background (837eaaea) …`). ccresu treats that as
+"busy", not "gone": in the same attempt it runs `claude stop <id>` and then
+repeats the *identical* resume once, so the session ends up `RESUMED` without you
+doing anything. The conversation is untouched — same session id, same transcript —
+and the stop appears in the log, not in the attempt row. If the stop fails, or the
+second resume refuses again, the original error is reported unchanged and the
+session lands in `PERMANENTLY_FAILED` as before.
 
 ## Step 12 — Turn on Telegram notifications (optional)
 

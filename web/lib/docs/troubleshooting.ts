@@ -68,7 +68,7 @@ export const troubleshootingDoc: DocPage = {
     },
     {
       kind: "p",
-      text: "For a single session, prefer `ccresu retry` (reset the attempt budget), `ccresu enable`/`disable` (stop recovery without forgetting history), or `ccresu recover --force` (try again now) over deleting state.",
+      text: "For a single session, prefer `ccresu retry` (reset the attempt budget), `ccresu reset` (clear a permanently failed session, leaving it disabled), `ccresu enable`/`disable` (stop recovery without forgetting history), or `ccresu recover --force` (try again now) over deleting state.",
     },
   ],
 };

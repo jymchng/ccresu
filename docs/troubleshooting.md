@@ -26,7 +26,7 @@ journalctl --user -u ccresu.service -n 100 --no-pager
 | `invalid configuration: <field>: <reason>` | Validation is strict and never silent. The message names the field — an unknown key, wrong type, negative duration, unparsable timezone, relative path where an absolute one is required, or out-of-range value. |
 | Exit `3` from `inspect`/`history` | Unknown session id (`recovery: session not found`). `ccresu sessions --all` lists what exists. |
 | Exit `4` from `recover` | The session is not eligible: settled (`RESUMED`, `COMPLETED`, `USER_TERMINATED`, `DISABLED`, `UNRECOVERABLE`), disabled, or out of attempts. `ccresu inspect <id>` shows the state and the last transition reason. |
-| `recovery: maximum attempts reached` | The attempt budget (default 10) is spent. `ccresu retry <id>` resets it; `ccresu recover <id> --force` tries once more without resetting. |
+| `recovery: maximum attempts reached` | The attempt budget (default 10) is spent. `ccresu retry <id>` resets it; `ccresu recover <id> --force` tries once more without resetting; `ccresu reset <id>` clears the failure and leaves the session `DISABLED`. |
 | `recovery: usage limit is still in force` | The recheck found the limit still active. This is correct behaviour: the session goes back to `WAITING_FOR_RESET` and waits for a new reset time. |
 | `recovery: a recovery attempt is already running` | Per-session lock held by the daemon or another CLI invocation. Wait, or check for a stuck child with the identity recorded in the attempt. |
 | `recovery: concurrency limit reached` | `recovery.max_concurrent_recoveries` (default 3) is saturated; the session stays in `RESET_TIME_REACHED` until a slot frees. |

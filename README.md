@@ -152,6 +152,7 @@ Commands:
   history   show the attempts and state transitions of a session
   inspect   show everything known about one session
   recover   resume one session now
+  reset     clear a permanently failed session (state becomes disabled)
   retry     retry a session whose attempt budget is spent
   serve     run the local REST/SSE API
   sessions  list discovered sessions
@@ -530,7 +531,7 @@ schedules:     0
 
 ### Step 10 — Act manually
 
-Three commands let you bypass the wait, with different rules:
+Four commands let you bypass the wait, with different rules:
 
 ```bash
 # resume now, ignoring the schedule (still respects the attempt budget)
@@ -541,6 +542,9 @@ ccresu recover <id> --message "Pick up where the limit interrupted you." --force
 
 # put a spent/terminal session back to work with a fresh budget
 ccresu retry <id>
+
+# clear a permanently failed session: it becomes DISABLED and the error is gone
+ccresu reset <id>
 ```
 
 `recover` refuses when the session is not in a state that can be resumed, and
@@ -603,7 +607,8 @@ SESSION   STATE               NEXT ATTEMPT                    ENABLED  RECOVERAB
 7c1b2a44  PERMANENTLY_FAILED  none (attempt budget spent;...  yes      yes                     2026-11-05 03:28:24 +08  resume session 7c1b2a44-0000-4000-800...
 ```
 
-That is the point at which `ccresu retry <id>` (fresh budget) or
+That is the point at which `ccresu retry <id>` (fresh budget), `ccresu reset <id>`
+(the failure cleared, the session parked as `DISABLED`) or
 `ccresu recover <id> --force` (one more try now) is the right tool. Until then
 `retry` reports the terminal state rather than silently doing nothing:
 
@@ -611,6 +616,36 @@ That is the point at which `ccresu retry <id>` (fresh budget) or
 $ ccresu retry 7c1b2a44-0000-4000-8000-abcdefabcdef
 ccresu: retry 7c1b2a44-0000-4000-8000-abcdefabcdef: recovery: session 7c1b2a44-0000-4000-8000-abcdefabcdef ended in PERMANENTLY_FAILED: resume session 7c1b2a44-0000-4000-8000-abcdefabcdef: claude: malformed claude output: empty resume output
 ```
+
+`reset` is the way out that does not spend an attempt. It only accepts
+`PERMANENTLY_FAILED`; anything else is refused with exit code `4` and a message
+saying what to use instead:
+
+```console
+$ ccresu reset 7c1b2a44-0000-4000-8000-abcdefabcdef
+session:       7c1b2a44-0000-4000-8000-abcdefabcdef
+state:         DISABLED
+previous state: PERMANENTLY_FAILED
+error:         cleared
+attempts:      kept (use 'ccresu retry' to spend another)
+session 7c1b2a44-0000-4000-8000-abcdefabcdef: reset; run 'ccresu enable 7c1b2a44-0000-4000-8000-abcdefabcdef' to let ccresu recover it again
+```
+
+It never resumes and never refunds an attempt: `retry` gives the budget back,
+`reset` only forgets the failure. Running `ccresu enable <id>` afterwards makes it
+recoverable again with whatever budget it has left.
+
+One failure is not the session's fault at all: `claude -p --resume` refuses while
+the session is still attached to Claude Code's background agent
+(`That session is running in the background (837eaaea) …`). ccresu treats that as
+"busy", not "gone". In the same attempt it runs `claude stop <id>` and then
+repeats the *identical* resume once, so the session ends up `RESUMED` instead of
+`PERMANENTLY_FAILED` without you doing anything. The conversation is untouched —
+same session id, same transcript — and the stop appears in the log, not in the
+attempt row. If the stop fails, or the second resume refuses again, the original
+error is reported unchanged and the session lands in `PERMANENTLY_FAILED` as
+before, which is exactly where `retry`, `reset` and `recover --force` above come
+in.
 
 ### Step 12 — Turn on Telegram notifications (optional)
 
