@@ -300,8 +300,11 @@ type ResumeResult struct {
 
 // SessionProvider discovers and resumes Claude Code sessions.
 //
-// Implementations must never invent a command: every state-changing operation
-// uses `claude -p --resume <session-id> "<message>" --output-format json`.
+// Implementations must never invent a command: resuming uses
+// `claude -p --resume <session-id> "<message>" --output-format json` and, only
+// when the CLI refuses that because the session is still attached to a
+// background agent, the single `claude stop <session-id>` that clears the way
+// before the same resume is repeated.
 type SessionProvider interface {
 	// Discover lists known sessions, newest activity first.
 	Discover(ctx context.Context, filter DiscoverFilter) ([]Session, error)

@@ -88,6 +88,7 @@ func New(opts Options) (*Provider, error) {
 		ResumeTimeout:  opts.ResumeTimeout,
 		MaxOutputBytes: opts.MaxOutputBytes,
 		MinVersion:     opts.MinimumVersion,
+		Logger:         logger,
 	})
 	return &Provider{
 		cli:   cli,

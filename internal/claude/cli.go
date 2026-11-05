@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,6 +40,9 @@ type CLIOptions struct {
 	MaxOutputBytes int
 	// MinVersion overrides the supported-version floor.
 	MinVersion *Version
+	// Logger receives the recovery diagnostics for a resume that needed a
+	// `claude stop` first. Empty means slog.Default().
+	Logger *slog.Logger
 }
 
 // CLI is the version-aware adapter around the claude executable.
@@ -62,6 +66,7 @@ type CLI struct {
 	resumeTimeout  time.Duration
 	maxOutputBytes int
 	minVersion     Version
+	log            *slog.Logger
 
 	mu          sync.Mutex
 	version     Version
@@ -77,9 +82,13 @@ func NewCLI(opts CLIOptions) *CLI {
 		queryTimeout:   opts.QueryTimeout,
 		resumeTimeout:  opts.ResumeTimeout,
 		maxOutputBytes: opts.MaxOutputBytes,
+		log:            opts.Logger,
 	}
 	if c.bin == "" {
 		c.bin = DefaultExecutable
+	}
+	if c.log == nil {
+		c.log = slog.Default()
 	}
 	if c.exec == nil {
 		c.exec = OSExecer{}
@@ -208,9 +217,19 @@ func (c *CLI) Agents(ctx context.Context, query AgentsQuery) ([]AgentEntry, erro
 	return entries, nil
 }
 
-// Resume runs the single verified resume command:
+// Resume runs the verified resume command:
 //
 //	claude -p --resume <session-id> <message> --output-format json
+//
+// One situation needs a second command first. The CLI refuses to resume a
+// session that is still attached to a background agent ("That session is
+// running in the background"). Because `claude stop <id>` keeps both the
+// conversation and the session id, ccresu answers that refusal by stopping the
+// background agent and repeating the identical resume argument vector once.
+// Only that exact refusal is handled this way: every other failure, a stop that
+// itself fails, and a resume that still refuses after a successful stop are
+// returned unchanged, so the existing classification (permanent, no attempt
+// spent) is untouched.
 //
 // The session id is validated first so it can never be mistaken for a flag, and
 // the returned session id must equal the requested one; otherwise the call
@@ -235,6 +254,42 @@ func (c *CLI) Resume(ctx context.Context, sessionID, message string) (ResumeResu
 	}
 
 	args := ResumeArgs(sessionID, message)
+	result, resumeErr := c.resumeOnce(ctx, sessionID, args)
+	if resumeErr == nil || !IsSessionRunningInBackground(resumeErr) {
+		return result, resumeErr
+	}
+
+	// The refusal says the session is busy elsewhere, not that the conversation
+	// is gone. Stopping it is bookkeeping: the transcript and the session id
+	// survive, so the resume that follows is the same command with the same
+	// arguments. The stop is recorded in the log only; the attempt row keeps
+	// showing the one `claude -p --resume …` command.
+	c.log.Warn("claude refused the resume because the session is attached to a background agent; stopping it and resuming again",
+		"session", sessionID)
+	if stopErr := c.Stop(ctx, sessionID); stopErr != nil {
+		// Without the stop the session is still in the way, so the original
+		// refusal is the honest result. Returning it untouched keeps the
+		// existing permanent classification intact.
+		c.log.Warn("claude stop did not clear the background session; reporting the original resume failure",
+			"session", sessionID, "error", stopErr)
+		return result, resumeErr
+	}
+	c.log.Info("stopped the background session; repeating the identical resume", "session", sessionID)
+
+	retried, retryErr := c.resumeOnce(ctx, sessionID, args)
+	if retryErr != nil {
+		c.log.Warn("resume failed again after stopping the background session",
+			"session", sessionID, "error", retryErr)
+	}
+	return retried, retryErr
+}
+
+// resumeOnce runs one resume invocation and interprets its output.
+//
+// It exists so the background-session recovery repeats exactly the same command:
+// the argument vector is built once by the caller and handed in, never rebuilt
+// by a second, subtly different code path.
+func (c *CLI) resumeOnce(ctx context.Context, sessionID string, args []string) (ResumeResult, error) {
 	out, runErr := c.run(ctx, c.resumeTimeout, nil, args...)
 	result := ResumeResult{
 		RequestedSessionID: sessionID,
