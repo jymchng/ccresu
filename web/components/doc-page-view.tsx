@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { DocBlocks } from "@/components/doc-blocks";
+import { DocsMenu } from "@/components/docs-menu";
 import { DocsNav } from "@/components/docs-nav";
 import { docs, getDoc } from "@/lib/docs";
 
@@ -31,8 +32,11 @@ export function DocPageView({
         </div>
       </aside>
 
+      {/* Below `lg` the sidebar is gone, so the same list is one tap away here. */}
+      <DocsMenu activeSlug={slug} />
+
       <article className="min-w-0">
-        <nav aria-label="Breadcrumb" className="mb-4 flex items-center gap-1 text-xs text-muted-foreground">
+        <nav aria-label="Breadcrumb" className="mb-4 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
           <Link href="/docs/" className="hover:text-foreground">
             Docs
           </Link>

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import { DocsMenu } from "@/components/docs-menu";
 import { DocsNav } from "@/components/docs-nav";
 import { docs } from "@/lib/docs";
 import { repo } from "@/lib/site";
@@ -19,6 +20,9 @@ export default function DocsIndexPage() {
           <DocsNav activeSlug="" />
         </div>
       </aside>
+
+      {/* Below `lg` the sidebar is gone, so the index carries its own menu. */}
+      <DocsMenu activeSlug="" />
 
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Documentation</h1>
