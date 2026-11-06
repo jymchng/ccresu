@@ -9,22 +9,23 @@ All notable changes to ccresu are recorded here. The format follows
 ### Changed — breaking
 
 A resume is no longer a synchronous print-mode call. Old attempt rows keep their
-`session_id_verified` column and their recorded command; nothing is migrated, and
-`session_id_preserved` is gone from the API, replaced by `continuation_confirmed`.
+`session_id_verified` column and their recorded command; nothing is migrated.
 
 - **A resume is a background dispatch.** `claude.ResumeArgs` is now
   `claude --resume <session-id> --bg "<message>"` — no `-p`, no
-  `--output-format`. Print mode refuses `--bg` (`--bg and --print conflict:
-  --print never starts the interactive session that `claude agents` attaches
-  to`, exit 1, nothing on stdout), so the two forms are mutually exclusive and
-  only this one produces a job ccresu can follow. The dispatch returns at once
-  and prints `backgrounded · <job-id>`; that eight-hex name is what
-  `claude agents --all --json` and `claude stop` accept.
+  `--output-format`. Print mode refuses `--bg` outright — "`--bg` and `--print`
+  conflict: `--print` never starts the interactive session that `claude agents`
+  attaches to" — and exits 1 with nothing on stdout, so the two forms are
+  mutually exclusive and only this one produces a job ccresu can follow. The
+  dispatch returns at once and prints `backgrounded · <job-id>`; that eight-hex
+  name is what `claude agents --all --json` and `claude stop` accept.
 - **The continuation is what gets verified, not the id that was asked for.** A
-  background job continues the conversation under its own session id, so
-  `session_id_preserved` is gone; the attempt row records that id as the
-  *continuation* and verification requires the continuation's own transcript to
-  grow before it records `RESUMED`. The API reports `continuation_confirmed`.
+  background job continues the conversation under its own session id, so the
+  attempt row records that id as the *continuation* and verification requires the
+  continuation's own transcript to grow before it records `RESUMED`. The API key
+  `session_id_preserved` is gone; the same field is `continuation_confirmed`, and
+  `ccresu inspect` prints "proven: the job named its continuation and that
+  transcript grew".
 - **A dispatched turn has its own state.** While the job runs the session is
   `WORKING`, taken from the agents listing, and it stays there until the job
   reports something else.
@@ -37,7 +38,11 @@ A resume is no longer a synchronous print-mode call. Old attempt rows keep their
   the probe that settled this, the dispatch that replaced the print-mode call,
   and what a dispatched resume cannot report. `README.md`, `docs/cli.md`,
   `docs/architecture.md`, `docs/security.md`, `docs/tutorial.md`,
-  `docs/deployment.md` and `docs/delivery-report.md` say the same thing.
+  `docs/deployment.md`, `docs/troubleshooting.md`, `docs/delivery-report.md` and
+  the systemd unit say the same thing.
+- The website says it too, and its command-output figures were recaptured from
+  the binary: `web/lib/docs/*`, the landing page and the hero now name the
+  dispatch, and `make web-captures` regenerates the figures a reader sees.
 
 ## [0.4.1] - 2026-11-06
 
