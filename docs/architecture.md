@@ -98,12 +98,17 @@ Three independent guards, all in `internal/recovery`:
 
 - **Transition validation.** `CanTransition`/`ValidateTransition` reject any edge
 that is not in the state map, so a duplicate tick cannot move a session from
-`RESUMED` straight back into `RESUMING`.
+`WORKING` straight back into `RESUMING`.
 - **Per-session locking.** Two loops (daemon tick, manual `ccresu recover`) cannot
 work the same session at once.
-- **Settled states.** `RESUMED`, `COMPLETED`, `USER_TERMINATED`, `DISABLED` and
+- **Settled states.** `COMPLETED`, `USER_TERMINATED`, `DISABLED` and
 `UNRECOVERABLE` are settled: recovery refuses them, which is what prevents a
-finished conversation from being resumed again.
+finished conversation from being resumed again. `RESUMED` is deliberately not
+settled — a resume is the start of the next window, not the end of the
+conversation — so the daemon's rediscovery stage moves every `RESUMED` row back to
+`DISCOVERED` on its next pass and detection re-reads the continuation transcript.
+No migration is needed for rows already stored as `RESUMED`: the stage selects
+them by state.
 
 ## Concurrency and shutdown
 

@@ -6,6 +6,21 @@ All notable changes to ccresu are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **A resumed session starts the next cycle instead of ending the last one.** A
+  verified resume left the row `RESUMED` with nothing to move it again, so a
+  recovered conversation was reported as `none (already resumed)` and the loop ran
+  exactly once. `RESUMED` now has an edge back to `DISCOVERED`, the daemon's
+  rediscovery stage moves every `RESUMED` row there on its next pass with a
+  recorded reason, and detection re-reads the **continuation** transcript for the
+  next usage limit. `ccresu recover <id>` on a `RESUMED` session still refuses the
+  dispatch with exit code 4 — there is nothing to resume until the continuation
+  hits a limit — but it returns the row to `DISCOVERED` instead of leaving it
+  parked, and `NextAttempt` reports `due now` rather than nothing scheduled.
+  Nothing is migrated: no schema change is involved and rows already stored as
+  `RESUMED` are picked up by the first pass after an upgrade, with no manual step.
+
 ### Changed — breaking
 
 A resume is no longer a synchronous print-mode call. Old attempt rows keep their

@@ -25,7 +25,7 @@ journalctl --user -u ccresu.service -n 100 --no-pager
 | `ccresu: configuration ... is not readable` | No file at the resolved path. `ccresu config validate` prints the path it tried; run `ccresu config init` to write the shipped example there (or the installer, which does the same). |
 | `invalid configuration: <field>: <reason>` | Validation is strict and never silent. The message names the field — an unknown key, wrong type, negative duration, unparsable timezone, relative path where an absolute one is required, or out-of-range value. |
 | Exit `3` from `inspect`/`history` | Unknown session id (`recovery: session not found`). `ccresu sessions --all` lists what exists. |
-| Exit `4` from `recover` | The session is not eligible: settled (`RESUMED`, `COMPLETED`, `USER_TERMINATED`, `DISABLED`, `UNRECOVERABLE`), disabled, or out of attempts. `ccresu inspect <id>` shows the state and the last transition reason. |
+| Exit `4` from `recover` | The session is not eligible: settled (`COMPLETED`, `USER_TERMINATED`, `DISABLED`, `UNRECOVERABLE`), disabled, or out of attempts. A `RESUMED` session is refused for a different reason and is returned to `DISCOVERED`, because there is nothing to resume until the continuation transcript shows the next limit. `ccresu inspect <id>` shows the state and the last transition reason. |
 | `recovery: maximum attempts reached` | The budget for this discovery cycle (default 10) is spent. The session has been returned to `DISCOVERED`; the next discovery pass finds its reset time and tries again. `ccresu retry <id>` or `ccresu recover <id> --force` pushes it now. |
 | `recovery: usage limit is still in force` | The recheck found the limit still active. This is correct behaviour: the session goes back to `WAITING_FOR_RESET` and waits for a new reset time. |
 | `recovery: a recovery attempt is already running` | Per-session lock held by the daemon or another CLI invocation. Wait, or check for a stuck child with the identity recorded in the attempt. |
@@ -84,7 +84,7 @@ Details and the event table are in [telegram.md](telegram.md).
 | `connection refused` on `127.0.0.1:8787` | `server.enabled: false`, a different `server.port`, or a process that is not the daemon (the API runs inside `daemon`, and standalone with `serve`). |
 | `401 unauthorized` | Missing or wrong `Authorization: Bearer` header. The token is at `<configuration directory>/api-token` — beside the configuration file in use, so `/elsewhere/api-token` after `--config /elsewhere/config.yaml` — with mode `0600`; it is never accepted as a query parameter or cookie. |
 | `403 origin_not_allowed` | A browser caller whose Origin is not in `server.allowed_origins`. `curl` is unaffected. |
-| `409 not_eligible` | Same rule as exit code 4: the session is settled, disabled or unrecoverable. |
+| `409 not_eligible` | Same rule as exit code 4: the session is settled, disabled, unrecoverable, or already `RESUMED` — the last one is returned to `DISCOVERED` so the continuation transcript is read again. |
 | `413 payload_too_large` | Body above 1 MiB. |
 | `415 unsupported_media_type` | Missing or wrong `Content-Type` on a POST/PUT. |
 | `429 too_many_requests` | Above 50 requests/second (burst 100) from your address; the `Retry-After` header says how long. |

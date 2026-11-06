@@ -131,6 +131,15 @@ function StateMachine({ titleId, descriptionId, label, description }: DiagramPro
         );
       })}
 
+      {/* The next cycle: a verified resume is rediscovered, not parked. */}
+      <polyline
+        points={`${NODE.x},${CHIP_Y + CHIP_H / 2} 6,${CHIP_Y + CHIP_H / 2} 6,${chainY(0) + NODE.height / 2} ${NODE.x - 3},${chainY(0) + NODE.height / 2}`}
+        fill="none"
+        stroke="var(--muted-foreground)"
+        strokeWidth="1.25"
+        markerEnd={solid}
+      />
+
       {/* The retry loop: a failed attempt with budget left climbs back up. */}
       <polyline
         points={`${NODE.x + NODE.width},${resumingY + NODE.height / 2} 300,${resumingY + NODE.height / 2} 300,${checkingSessionY + NODE.height / 2} ${NODE.x + NODE.width + 3},${checkingSessionY + NODE.height / 2}`}

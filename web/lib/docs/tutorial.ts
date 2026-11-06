@@ -287,18 +287,18 @@ ccresu retry <id>`,
     },
     {
       kind: "p",
-      text: "`recover` refuses when the session cannot be resumed, and says why. Exit code 4 means not eligible; 3 means not found.",
+      text: "`recover` refuses when the session cannot be resumed, and says why. Exit code 4 means not eligible; 3 means not found. A resumed session is refused because there is nothing to resume until its continuation transcript shows the next usage limit \u2014 and rather than leaving the row parked, `recover` returns it to `DISCOVERED`, the same place the daemon puts it on its next pass.",
     },
     {
       kind: "code",
       label: "A refusal, verbatim",
       code: `$ ccresu recover 3f9d1c07-1111-4222-8333-444455556666
-ccresu: recover 3f9d1c07-1111-4222-8333-444455556666: recovery: session is not eligible for recovery: session 3f9d1c07-1111-4222-8333-444455556666 is RESUMED and cannot become CHECKING_SESSION
+ccresu: recover 3f9d1c07-1111-4222-8333-444455556666: recovery: session is not eligible for recovery: session 3f9d1c07-1111-4222-8333-444455556666 is RESUMED; it was returned to DISCOVERED so the next cycle reads the continuation transcript
 $ echo $?
 4
 
 $ ccresu recover e60a3100-123a-4deb-b146-54705ff80268
-ccresu: recover e60a3100-123a-4deb-b146-54705ff80268: recovery: invalid state transition: RESUMED -> CHECKING_SESSION (legal targets: COMPLETED, DISABLED, DISCOVERED, RUNNING, USAGE_LIMIT_DETECTED, USER_TERMINATED, WAITING_FOR_RESET)`,
+ccresu: recover e60a3100-123a-4deb-b146-54705ff80268: recovery: session is not eligible for recovery: session e60a3100-123a-4deb-b146-54705ff80268 is COMPLETED and cannot become CHECKING_SESSION`,
     },
     { kind: "h2", text: "Step 11 — When the resume fails" },
     {

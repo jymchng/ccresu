@@ -86,6 +86,19 @@ describe("content integrity", () => {
     expect(body).not.toContain("--pre-fix");
   });
 
+  it("documents that a resumed session starts the next cycle", () => {
+    const body = JSON.stringify(getDoc("recovery")?.blocks ?? []);
+
+    // A resume is the start of the next window, not the end of the
+    // conversation: the site must say the row is rediscovered, and that an
+    // upgrade needs no migration because the rediscovery selects rows by state.
+    expect(body).toContain("rediscovery stage");
+    expect(body).toContain("no migration is applied");
+    expect(body).toContain("due now");
+    // RESUMED is not advertised as a state recovery refuses to touch.
+    expect(body).toContain("RESUMED is not a finished conversation, so it is not settled either");
+  });
+
   it("keeps the site on the GitHub Pages base path", () => {
     expect(site.basePath).toBe("/ccresu");
     expect(site.url).toBe(`https://${repo.owner}.github.io/${repo.name}`);

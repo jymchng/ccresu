@@ -211,13 +211,26 @@ DISCOVERED → RUNNING → USAGE_LIMIT_DETECTED → WAITING_FOR_RESET → RESET_
                                                                  RESUMING
                                                                      ↓
                                                                   WORKING ──→ RESUMED
-                                                                     ↓
-                                                    RETRY_WAIT / DISCOVERED
+                                                                     ↓           │
+                                                    RETRY_WAIT / DISCOVERED ←────┘
 ```
 
-`DISCOVERED` is both the start and the retry state: a failed attempt, and a spent
-attempt budget, return the session there, and the next discovery pass reads its
-transcript again and schedules the next reset.
+`DISCOVERED` is both the start and the retry state: a failed attempt, a spent
+attempt budget and a finished resume all return the session there, and the next
+discovery pass reads its transcript again and schedules the next reset.
+
+A resume is not the end of a conversation, it is the start of the next window.
+The resumed conversation keeps running under the continuation session the job
+reported, and that session can hit a limit of its own, so `RESUMED` feeds back
+into `DISCOVERED` rather than parking the row. The daemon does that by itself: its
+rediscovery stage selects every `RESUMED` row on the next pass, records why, and
+moves it to `DISCOVERED`, which resets the attempt budget and makes the detect
+stage re-read the **continuation** transcript. Because nothing else would ever
+move a `RESUMED` row again, no migration is needed for sessions already stored as
+`RESUMED` — they are picked up by state on the first pass after an upgrade, with
+no manual step and no schema change. Until that pass, `ccresu sessions` and
+`ccresu inspect` show the next attempt as `due now`, because the daemon will act
+the moment it next looks.
 
 Legal edges are declared once, in `internal/recovery/state.go`, and any other
 edge is rejected with `ErrInvalidTransition`. The interesting ones:
@@ -232,15 +245,30 @@ edge is rejected with `ErrInvalidTransition`. The interesting ones:
 | `RESUMING` | `WORKING` (the dispatch answered with a job id), `RESUMED`, `RETRY_WAIT`, `DISCOVERED`, `UNRECOVERABLE` |
 | `WORKING` | `RESUMED`, `RETRY_WAIT`, `DISCOVERED`, `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED` — the job's outcome is only known once it stops |
 | `RETRY_WAIT` | `CHECKING_SESSION`, `WAITING_FOR_RESET`, `DISCOVERED` |
-| `RESUMED` | `RUNNING`, `COMPLETED`, `USER_TERMINATED`, `DISABLED` — never straight back to `RESUMING` |
+| `RESUMED` | `DISCOVERED` (the next cycle), `RUNNING`, `COMPLETED`, `USER_TERMINATED`, `DISABLED` — never straight back to `RESUMING`: the continuation has to show a limit of its own first, so the row is rediscovered and detection reads that transcript again |
 
 `COMPLETED`, `USER_TERMINATED` and `UNRECOVERABLE` are terminal. `WORKING`,
-`RESUMED`, `COMPLETED`, `USER_TERMINATED`, `DISABLED` and `UNRECOVERABLE` are
-**settled**, in the sense recovery refuses to touch them: a finished
-conversation is never resumed again by a stray tick. For `WORKING` the reason is
-different — the job is already working on the conversation, so a second resume
-would duplicate the work; it is the follow stage that polls that row, not the
-recovery engine, and a restarted daemon picks it back up from the database.
+`COMPLETED`, `USER_TERMINATED`, `DISABLED` and `UNRECOVERABLE` are **settled**, in
+the sense recovery refuses to touch them: a finished conversation is never
+resumed again by a stray tick. For `WORKING` the reason is different — the job is
+already working on the conversation, so a second resume would duplicate the work;
+it is the follow stage that polls that row, not the recovery engine, and a
+restarted daemon picks it back up from the database.
+
+`RESUMED` is deliberately **not** settled, and a `ccresu recover <id>` on such a
+row is answered rather than ignored: the dispatch is still refused with exit code
+`4` (there is nothing to resume until the continuation transcript shows the next
+limit), but the row is moved to `DISCOVERED` with a recorded reason, so the next
+discovery pass reads that transcript again. That is the manual equivalent of what
+the daemon does on its own, and it is what keeps a recovered session from sitting
+at "none (already resumed)" for ever:
+
+```console
+$ ccresu recover 3f9d1c07-1111-4222-8333-444455556666
+ccresu: recover 3f9d1c07-1111-4222-8333-444455556666: recovery: session is not eligible for recovery: session 3f9d1c07-1111-4222-8333-444455556666 is RESUMED; it was returned to DISCOVERED so the next cycle reads the continuation transcript
+$ echo $?
+4
+```
 
 `RETRY_WAIT` is "this might work on the same schedule": retryable failures wait
 with exponential backoff plus jitter (`initial_delay` 30s, ×2, capped at

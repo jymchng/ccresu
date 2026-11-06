@@ -102,7 +102,7 @@ An optional `details` array carries field-level messages.
 | 403 | `origin_not_allowed` | Origin not in `server.allowed_origins`. |
 | 404 | `not_found` | Unknown route, session or resource. |
 | 405 | `method_not_allowed` | Path exists, method does not. |
-| 409 | `not_eligible` | Session is settled, disabled or unrecoverable. |
+| 409 | `not_eligible` | Session is not eligible: settled, disabled, unrecoverable, or already `RESUMED` (a `RESUMED` row is returned to `DISCOVERED`, and the response says so). |
 | 413 | `payload_too_large` | Body above the limit (1 MiB by default). |
 | 415 | `unsupported_media_type` | Missing or wrong `Content-Type`. |
 | 429 | `too_many_requests` | Rate limited. |

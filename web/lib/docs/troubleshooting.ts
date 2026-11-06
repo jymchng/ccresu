@@ -35,7 +35,7 @@ export const troubleshootingDoc: DocPage = {
         ["Recovery ran but the transcript did not grow", "The resume process started and exited without producing work. The verifier refuses to record RESUMED; check the recorded error and the resumes' output in the logs."],
         ["Exit code 2", "Usage error: an unknown flag, or a flag that command does not define. Global flags work before or after the command name; `ccresu <command> --help` lists the command's flags."],
         ["Exit code 3", "No such session id. `ccresu sessions --all` lists every id ccresu knows."],
-        ["Exit code 4", "The session exists but is not eligible: it is disabled, already resumed, or its reset time has not arrived."],
+        ["Exit code 4", "The session exists but is not eligible: it is disabled, its reset time has not arrived, or it is already RESUMED \u2014 in which case ccresu returns it to DISCOVERED so the continuation transcript is read again for the next limit."],
         ["The API returns 401", "The request changes state and needs `Authorization: Bearer <token>`. Read the token from `~/.config/ccresu/api-token`; it is not the Telegram token."],
         ["The API returns 403", "The browser Origin is not in `server.allowed_origins`. Add it, or call the API from a script, which sends no Origin."],
         ["The API returns 429", "The rate limit was hit. Wait for the `Retry-After` seconds, or reduce the request rate."],

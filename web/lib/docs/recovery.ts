@@ -13,7 +13,7 @@ export const recoveryDoc: DocPage = {
     {
       kind: "code",
       label: "The happy path",
-      code: `DISCOVERED -> RUNNING -> USAGE_LIMIT_DETECTED -> WAITING_FOR_RESET\n  -> RESET_TIME_REACHED -> CHECKING_SESSION -> CHECKING_LIMIT\n  -> RESUMING -> WORKING -> RESUMED`,
+      code: `DISCOVERED -> RUNNING -> USAGE_LIMIT_DETECTED -> WAITING_FOR_RESET\n  -> RESET_TIME_REACHED -> CHECKING_SESSION -> CHECKING_LIMIT\n  -> RESUMING -> WORKING -> RESUMED\n  -> DISCOVERED            (the next cycle: read the continuation again)`,
     },
     {
       kind: "h2",
@@ -25,7 +25,7 @@ export const recoveryDoc: DocPage = {
       rows: [
         ["WORKING", "The dispatch was acknowledged with a job id and that job has not stopped working yet. The follow stage polls `claude agents --json`; RESUMED is written only if the job names its continuation and that continuation's transcript grew."],
         ["RETRY_WAIT", "An attempt failed and the budget still has room, or the pre-resume check failed and no attempt was spent; the loop returns to CHECKING_SESSION after a backoff."],
-        ["DISCOVERED", "The attempt budget is spent, or a resume attempt failed. The next discovery pass reads the transcript again and schedules the next reset, so this is a queue, not a verdict."],
+        ["DISCOVERED", "The attempt budget is spent, a resume attempt failed, or a resume was verified and the next window is about to start. The next discovery pass reads the transcript again and schedules the next reset, so this is a queue, not a verdict."],
         ["COMPLETED", "The session finished normally before the limit, so there is nothing to resume."],
         ["USER_TERMINATED", "The user cancelled the session."],
         ["DISABLED", "Recovery was switched off with `ccresu disable`."],
@@ -33,11 +33,19 @@ export const recoveryDoc: DocPage = {
       ],
     },
     {
+      kind: "h2",
+      text: "A resume starts the next window",
+    },
+    {
+      kind: "p",
+      text: "RESUMED is not a finished conversation, so it is not settled either. The resumed conversation keeps running under the continuation session the job reported, and that session can hit a limit of its own, so the daemon's rediscovery stage selects every RESUMED row on its next pass, records why, and moves it back to DISCOVERED. That resets the attempt budget and makes detection re-read the continuation transcript, which is how the next reset time is found without an operator doing anything. Because nothing else would ever move that row again, no migration is applied to sessions already stored as RESUMED: they are picked up by state on the first pass after an upgrade, with no schema change and no manual step. Until then `ccresu sessions` shows the next attempt as `due now`, and `ccresu recover <id>` on such a row answers with exit code 4 and returns it to DISCOVERED rather than reporting it as already done.",
+    },
+    {
       kind: "diagram",
       id: "state-machine",
-      label: "The chain, the retry loop and the two ways out",
+      label: "The chain, the retry loop, the next cycle and the two ways out",
       description:
-        "The solid line is the recorded chain: discovery, the detected limit, the wait, the reset instant, the session check, the limit check, the dispatch and the job that carries it. The dashed line is a failed attempt with budget left, which returns to the session check after a backoff. An attempt that fails with the budget spent, or with an error classed as non-retryable, ends in DISCOVERED; `ccresu retry <id>` is the only operator edge from there, and it lands in DISABLED.",
+        "The solid line is the recorded chain: discovery, the detected limit, the wait, the reset instant, the session check, the limit check, the dispatch and the job that carries it. The dashed line on the right is a failed attempt with budget left, which returns to the session check after a backoff. The solid line on the left is the next cycle: a verified resume is moved back to DISCOVERED on the daemon's next pass, which resets the attempt budget and re-reads the continuation transcript for the next limit. An attempt that fails with the budget spent, or with an error classed as non-retryable, ends in DISCOVERED too; `ccresu reset <id>` is the operator edge out of a session that cannot be recovered, and it lands in DISABLED.",
     },
     {
       kind: "h2",
@@ -227,6 +235,7 @@ export const recoveryDoc: DocPage = {
         "Sessions, schedules and attempts are persisted, so a restart or reboot resumes waiting with the original deadline.",
         "One recovery loop per session is enforced by a per-session lock, so two triggers cannot resume the same session twice.",
         "A `WORKING` row is left alone by the recovery engine \u2014 the job is already working on the conversation, so a second resume would duplicate the work. The follow stage polls it, and a restarted daemon picks it back up from the database.",
+        "A `RESUMED` row is not left alone: the next pass rediscovers it, so the continuation transcript is read again for the next limit. That is also why no migration is applied to sessions already stored as `RESUMED` \u2014 the rediscovery selects them by state.",
         "Transitions are idempotent: re-observing a state that is already recorded does not add a duplicate row.",
         "A crash mid-attempt leaves a stale attempt that the next pass reconciles before starting a new one.",
       ],

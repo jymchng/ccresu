@@ -562,18 +562,21 @@ says which states were legal:
 
 ```console
 $ ccresu recover 3f9d1c07-1111-4222-8333-444455556666
-ccresu: recover 3f9d1c07-1111-4222-8333-444455556666: recovery: session is not eligible for recovery: session 3f9d1c07-1111-4222-8333-444455556666 is RESUMED and cannot become CHECKING_SESSION
+ccresu: recover 3f9d1c07-1111-4222-8333-444455556666: recovery: session is not eligible for recovery: session 3f9d1c07-1111-4222-8333-444455556666 is RESUMED; it was returned to DISCOVERED so the next cycle reads the continuation transcript
 $ echo $?
 4
 ```
 
-Exit code `4` means "not eligible"; `3` means "not found". A whole `recover` on
-a session that never hit a limit is refused the same way, because there is
-nothing to recover:
+Exit code `4` means "not eligible"; `3` means "not found". A resumed session is
+refused for a specific reason: there is nothing to resume until its continuation
+transcript shows the next usage limit, so the row is returned to `DISCOVERED`
+instead, which is exactly what the daemon does on its next pass. A session that
+finished, was terminated or has no recoverable mode is refused without being
+moved:
 
 ```console
 $ ccresu recover e60a3100-123a-4deb-b146-54705ff80268
-ccresu: recover e60a3100-123a-4deb-b146-54705ff80268: recovery: invalid state transition: RESUMED -> CHECKING_SESSION (legal targets: COMPLETED, DISABLED, DISCOVERED, RUNNING, USAGE_LIMIT_DETECTED, USER_TERMINATED, WAITING_FOR_RESET)
+ccresu: recover e60a3100-123a-4deb-b146-54705ff80268: recovery: session is not eligible for recovery: session e60a3100-123a-4deb-b146-54705ff80268 is COMPLETED and cannot become CHECKING_SESSION
 ```
 
 ### Step 11 — When the resume fails
