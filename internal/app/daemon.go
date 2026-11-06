@@ -626,8 +626,15 @@ func (d *Daemon) recoverPending(ctx context.Context) error {
 		// WAITING_FOR_RESET belongs to the scheduler, and a session already being
 		// recovered holds its own lock; skipping both keeps this stage from
 		// fighting the one above it.
+		//
+		// WORKING belongs to the follow stage. The manager refuses such a row --
+		// WORKING is settled, so Recover answers ErrNotEligible and this stage
+		// ignores it -- but asking a question whose answer is always "no" hides who
+		// owns the row. The daemon polls the job until it stops and only then moves
+		// the session back to RESUMED, which is where a dispatch becomes legal
+		// again once the continuation transcript shows a limit of its own.
 		switch session.State {
-		case storage.StateWaitingForReset, storage.StateResuming, storage.StateCheckingSession, storage.StateCheckingLimit:
+		case storage.StateWaitingForReset, storage.StateResuming, storage.StateCheckingSession, storage.StateCheckingLimit, storage.StateWorking:
 			continue
 		}
 		if _, err := rt.Recovery.Recover(ctx, session.ID); err != nil &&

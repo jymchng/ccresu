@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -252,5 +254,93 @@ func TestTheDaemonKeepsAWorkingSessionWhenTheJobCannotBeRead(t *testing.T) {
 	// for a session whose job may still be working.
 	if got := countCalls(h.provider, "ResumeSession"); got != 0 {
 		t.Errorf("ResumeSession calls = %d, want 0: a working session must not be resumed again", got)
+	}
+}
+
+// recordingLog captures every record a daemon pass writes, so a test can assert
+// what the pass did *not* complain about.
+type recordingLog struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+// Enabled implements slog.Handler: everything is recorded and filtered later.
+func (r *recordingLog) Enabled(context.Context, slog.Level) bool { return true }
+
+// Handle implements slog.Handler.
+func (r *recordingLog) Handle(_ context.Context, record slog.Record) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.records = append(r.records, record.Clone())
+	return nil
+}
+
+// WithAttrs implements slog.Handler.
+func (r *recordingLog) WithAttrs([]slog.Attr) slog.Handler { return r }
+
+// WithGroup implements slog.Handler.
+func (r *recordingLog) WithGroup(string) slog.Handler { return r }
+
+// warnings returns the message of every record logged at WARN or above.
+func (r *recordingLog) warnings() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var messages []string
+	for _, record := range r.records {
+		if record.Level >= slog.LevelWarn {
+			messages = append(messages, record.Message)
+		}
+	}
+	return messages
+}
+
+// TestTheRecoverStageLeavesAWorkingSessionToTheFollowStage proves a WORKING row
+// has exactly one owner.
+//
+// WORKING is a pending state, so the recover stage selects it. The manager
+// refuses it -- the job is already working on the conversation, so a second
+// dispatch would duplicate the work -- and the refusal has to stay silent: it is
+// not a failure to report, it is a row the follow stage is holding. A pass must
+// therefore neither resume the session again nor log a complaint about it, and
+// the row must still be WORKING afterwards with its job id intact.
+func TestTheRecoverStageLeavesAWorkingSessionToTheFollowStage(t *testing.T) {
+	h := newHarness(t)
+	const jobID = "9f3a1b2c"
+	h.seedSession(t, canonicalSessionID, func(s *storage.Session) {
+		s.State = storage.StateWorking
+		s.JobID = jobID
+		s.ContinuationSessionID = continuationID
+		s.ContinuationTranscriptPath = continuationPath
+	})
+	h.provider.SetJob(dispatchJob(jobID, "working"))
+	log := &recordingLog{}
+	h.rt.Log = slog.New(log)
+
+	daemon := NewDaemon(h.rt, time.Minute)
+	if err := daemon.Step(context.Background()); err != nil {
+		t.Fatalf("step: %v", err)
+	}
+
+	stored, err := h.store.GetSession(context.Background(), canonicalSessionID)
+	if err != nil {
+		t.Fatalf("re-read session: %v", err)
+	}
+	if stored.State != storage.StateWorking {
+		t.Errorf("state = %q, want %q: the job is still working", stored.State, storage.StateWorking)
+	}
+	if stored.JobID != jobID {
+		t.Errorf("JobID = %q, want %q", stored.JobID, jobID)
+	}
+	if got := countCalls(h.provider, "ResumeSession"); got != 0 {
+		t.Errorf("ResumeSession calls = %d, want 0: a working session must not be resumed again", got)
+	}
+	// The daemon must not report a refusal it never needed to hear. Every warning
+	// this pass logs is a claim about work that failed.
+	if warnings := log.warnings(); len(warnings) != 0 {
+		t.Errorf("the pass logged %d warning(s): %v", len(warnings), warnings)
+	}
+	// The pass did follow the job: that is the stage that owns the row.
+	if got := countCalls(h.provider, "BackgroundJob"); got != 1 {
+		t.Errorf("BackgroundJob calls = %d, want 1: the follow stage polls the job", got)
 	}
 }
