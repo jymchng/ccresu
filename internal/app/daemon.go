@@ -135,6 +135,7 @@ func (d *Daemon) Step(ctx context.Context) error {
 		run  func(context.Context) error
 	}{
 		{"discover", d.discover},
+		{"rediscover", d.rediscover},
 		{"follow", d.followWorking},
 		{"detect", d.detect},
 		{"schedule", d.actOnSchedules},
@@ -207,6 +208,45 @@ func storageSession(session claude.Session) storage.Session {
 		TranscriptSize:  session.TranscriptSize,
 		TranscriptLines: session.TranscriptLines,
 	}
+}
+
+// rediscover returns resumed sessions to the top of the recovery cycle.
+//
+// A resume is not the end of a conversation, it is the start of the next
+// window: the resumed conversation keeps running under its continuation
+// session, and that session can hit a limit of its own. Nothing else would ever
+// move a RESUMED row again, so without this stage a recovered session is parked
+// for ever — `ccresu inspect` reports "none (already resumed)" and the loop the
+// operator asked for runs exactly once.
+//
+// The move is deliberate and recorded. DISCOVERED resets the attempt budget and
+// makes detection re-read the transcript (see detectIn, which skips the "already
+// seen this banner" comparison for a rediscovered row), so the next pass sees
+// the continuation transcript from the top of the cycle instead of a session
+// that has nothing left to do. Only the row changes here: the transcript is
+// read by the detect stage later in the same pass.
+func (d *Daemon) rediscover(ctx context.Context) error {
+	rt := d.runtime
+	if rt.Store == nil {
+		return nil
+	}
+	sessions, err := rt.Store.ListSessions(ctx, storage.SessionFilter{
+		States: []storage.State{storage.StateResumed},
+	})
+	if err != nil {
+		return fmt.Errorf("list resumed sessions: %w", err)
+	}
+	var errs []error
+	for _, session := range sessions {
+		reason := "revisited: a resumed session starts the next cycle, so its continuation transcript is read again"
+		if _, err := rt.Store.TransitionSession(ctx, session.ID, storage.StateDiscovered, reason, 0); err != nil {
+			errs = append(errs, fmt.Errorf("rediscover %s: %w", session.ID, err))
+			continue
+		}
+		rt.Log.Debug("resumed session revisited", "session", session.ID,
+			"continuation", session.ContinuationSessionID)
+	}
+	return errors.Join(errs...)
 }
 
 // followWorking polls the background job of every WORKING session and closes the
