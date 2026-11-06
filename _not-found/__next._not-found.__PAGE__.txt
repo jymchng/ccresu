@@ -1,0 +1,26 @@
+2:"$Sreact.fragment"
+3:"/ccresu/_next/static/chunks/0dw1mf90hcdh9.js"
+4:"/ccresu/_next/static/chunks/3qa2i2132mew8.js"
+5:I[39756,["$3","$4"],"default"]
+6:I[37457,["$3","$4"],"default"]
+b:I[22016,["$3","$4"],""]
+c:I[97367,["$3","$4"],"OutletBoundary"]
+d:"$Sreact.suspense"
+10:"ViewportBoundary"
+11:I[97367,["$3","$4"],"$10"]
+12:"MetadataBoundary"
+13:I[97367,["$3","$4"],"$12"]
+8:X
+8:C
+9:X
+a:[["children",{"s":"__PAGE__","h":160,"d":{"r":["$","$2","c",{"children":[["$","div",null,{"className":"mx-auto flex w-full max-w-2xl flex-col items-start gap-4 px-4 py-24 sm:px-6","children":[["$","p",null,{"className":"text-sm font-semibold text-primary","children":"404"}],["$","h1",null,{"className":"text-3xl font-bold tracking-tight","children":"That page does not exist"}],["$","p",null,{"className":"text-sm leading-relaxed text-muted-foreground","children":"The documentation has nine pages and the landing page is one more. If you followed a link from somewhere else, it is out of date — the table of contents below is the whole site."}],["$","div",null,{"className":"flex flex-wrap gap-3","children":[["$","$Lb",null,{"href":"/","children":"Back to the landing page","data-slot":"button","className":"inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm h-11 px-4 py-2","ref":null}],["$","$Lb",null,{"href":"/docs/","children":"Browse the documentation","data-slot":"button","className":"inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0 border border-border bg-background hover:bg-accent hover:text-accent-foreground h-11 px-4 py-2","ref":null}]]}]]}],null,["$","$Lc",null,{"children":["$","$d",null,{"name":"Next.MetadataOutlet","children":"$@e"}]}]]}],"p":"$@f","v":null,"s":"$9"}}]]
+1:[["children",{"s":"/_not-found","h":64,"d":{"r":["$","$2","c",{"children":[null,["$","$L5",null,{"parallelRouterKey":"children","template":["$","$L6",null,{}]}]]}],"p":"$@7","v":"$8","s":"$9"},"c":"$Qa"}]]
+0:{"t":{"t":{"s":"","h":16,"c":"$Q1"},"h":{"r":["$","$2","h",{"children":[["$","meta",null,{"name":"robots","content":"noindex"}],["$","$L11",null,{"children":[["$","meta","0",{"charSet":"utf-8"}],["$","meta","1",{"name":"viewport","content":"width=device-width, initial-scale=1"}]]}],["$","$L13",null,{"children":[["$","div",null,{"hidden":true,"children":["$","$d",null,{"name":"Next.Metadata","children":[["$","title","0",{"children":"ccresu — Resume Claude Code sessions after a usage limit resets"}],["$","meta","1",{"name":"description","content":"ccresu detects Claude Code usage-limit interruptions, waits for the real reset time, resumes the same session and verifies that the conversation actually continued."}],["$","meta","2",{"name":"application-name","content":"ccresu"}],["$","link","3",{"rel":"author","href":"https://github.com/jymchng/ccresu"}],["$","meta","4",{"name":"author","content":"jymchng"}],["$","meta","5",{"name":"keywords","content":"Claude Code,usage limit,session resume,developer tooling,ccresu"}],["$","meta","6",{"name":"referrer","content":"strict-origin-when-cross-origin"}],["$","meta","7",{"name":"creator","content":"jymchng"}],["$","meta","8",{"name":"robots","content":"index, follow"}],["$","meta","9",{"name":"format-detection","content":"telephone=no, address=no, email=no"}],["$","meta","10",{"property":"og:title","content":"ccresu — Resume Claude Code sessions after a usage limit resets"}],["$","meta","11",{"property":"og:description","content":"ccresu detects Claude Code usage-limit interruptions, waits for the real reset time, resumes the same session and verifies that the conversation actually continued."}],["$","meta","12",{"property":"og:url","content":"https://jymchng.github.io/ccresu/"}],["$","meta","13",{"property":"og:site_name","content":"ccresu"}],["$","meta","14",{"property":"og:locale","content":"en"}],["$","meta","15",{"property":"og:type","content":"website"}],["$","meta","16",{"name":"twitter:card","content":"summary"}],["$","meta","17",{"name":"twitter:title","content":"ccresu — Resume Claude Code sessions after a usage limit resets"}],["$","meta","18",{"name":"twitter:description","content":"ccresu detects Claude Code usage-limit interruptions, waits for the real reset time, resumes the same session and verifies that the conversation actually continued."}]]}]}],null]}],null]}],"p":"$@14","v":null,"s":"$9"}},"a":"$@15","u":"$@16","b":"8OXjlb6Z2brfleIU7NTdm"}
+e:null
+16:true
+9:300
+9:C
+15:0
+7:"$undefined"
+14:"$undefined"
+f:"$undefined"
