@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -174,6 +175,12 @@ type harness struct {
 	stdout syncBuffer
 	stderr syncBuffer
 
+	// terminal is what IsTerminal reports, so a test can put `sessions` in front
+	// of an interactive stdout without owning a real terminal; keys is the
+	// keystroke stream the browser reads instead of os.Stdin.
+	terminal bool
+	keys     string
+
 	buildErr  error
 	loadErr   error
 	server    Server
@@ -291,7 +298,24 @@ func (h *harness) deps() Deps {
 			}
 			return h.server, nil
 		},
+		// The real isTerminalWriter stats an *os.File, which a test buffer is
+		// not; the harness answers for it so both the table and the browser paths
+		// are reachable without a terminal.
+		IsTerminal: func(io.Writer) bool { return h.terminal },
+		TUIInput:   stringReader(h.keys),
 	}
+}
+
+// stringReader returns a reader over s, re-reading the harness keystrokes for
+// each invocation because a reader is consumed once.
+func stringReader(s string) io.Reader { return strings.NewReader(s) }
+
+// runWithKeys executes one CLI invocation with a keystroke stream, which is how a
+// test drives the interactive sessions browser.
+func (h *harness) runWithKeys(keys string, args ...string) int {
+	h.terminal = true
+	h.keys = keys
+	return h.run(args...)
 }
 
 // run executes one CLI invocation and returns its exit code.

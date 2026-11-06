@@ -389,6 +389,44 @@ Flags: `--all`, `--state STATE` (repeatable), `--limit N` (0 means all). A
 `--limit` that actually truncates the list says so, so a full page never looks
 like the whole table.
 
+On a terminal, `ccresu sessions` opens an interactive browser instead of printing
+the table: same rows, same filters, plus the actions `ccresu` already has, without
+copying a session id out of the listing first. Piping or redirecting it, or asking
+for `--json`, prints exactly the table above — a script never sees the browser —
+and `--no-tui` / `--tui` are the explicit overrides.
+
+```console
+ccresu sessions — 3 shown (enabled only; 'a' shows all)
+  SESSION   NAME   STATE              NEXT ATTEMPT  ENABLED  PROJECT        LAST SEEN                NOTE
+> 3f9d1c07  -      WAITING_FOR_RESET  in 1m20s      yes      /work/project  2026-11-05 03:43:40 UTC  -
+
+? help  / filter  i inspect  e enable  d disable  r retry  R recover  x delete  a all  q quit
+```
+
+| Key | What it does |
+| --- | --- |
+| `j` / `down` | next session |
+| `k` / `up` | previous session |
+| `g` / `home` | first session |
+| `G` / `end` | last session |
+| `/` | filter by text (`enter` applies, `esc` cancels) |
+| `c` | clear the filter |
+| `a` | toggle `--all` (disabled and settled sessions) |
+| `i` / `enter` | inspect the selected session |
+| `e` | enable the selected session |
+| `d` | disable the selected session |
+| `r` | retry the selected session |
+| `R` | recover the selected session now |
+| `x` | delete the selected session (asks `y`/`N`) |
+| `?` | this key map |
+| `q` / `ctrl-c` | quit |
+
+The browser is a view over ccresu's own rows, not a second implementation: `i`
+shows the same page as `ccresu inspect`, and every action is the call the matching
+command makes. It never creates a session, and `x` forgets ccresu's row only — the
+conversation under `~/.claude` stays where it is, and `ccresu enable <id>` brings
+the row back.
+
 ### Step 6 — Allow recovery of a session
 
 Recovery is opt-in per session: discovery records everything, but ccresu only
