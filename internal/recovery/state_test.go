@@ -17,6 +17,7 @@ func allStates() []State {
 		StateCheckingSession,
 		StateCheckingLimit,
 		StateResuming,
+		StateWorking,
 		StateResumed,
 		StateRetryWait,
 		StateCompleted,
@@ -63,23 +64,58 @@ func TestHappyPathEdgesAreLegal(t *testing.T) {
 }
 
 func TestDiscoveryIsReachableFromEveryLiveState(t *testing.T) {
-	// A failed attempt and a spent attempt budget both return the session to
-	// DISCOVERED, and the budget guard runs before any check, so it can find the
-	// session in any state that still permits automatic work. Every one of those
-	// needs the edge, otherwise the session is stranded: the error is reported
-	// but the state it asks for cannot be written.
-	live := append([]State{StateDiscovered, StateRunning}, PendingStates()...)
-	for _, from := range live {
+	// A failed attempt, a spent attempt budget and a completed recovery all
+	// return the session to DISCOVERED, and the budget guard runs before any
+	// check, so it can find the session in any state that still permits
+	// automatic work. Every non-terminal state needs the edge, otherwise the
+	// session is stranded: the error is reported but the state it asks for
+	// cannot be written.
+	for _, from := range allStates() {
+		if Terminal(from) {
+			continue
+		}
 		if !CanTransition(from, StateDiscovered) {
 			t.Errorf("%s has no edge to DISCOVERED; a failure there cannot be recorded", from)
 		}
 	}
-	// Settled and terminal states keep their edges: recovery never runs on them,
-	// so nothing may claim a rediscovery from there.
-	for _, from := range []State{StateResumed, StateCompleted, StateUserTerminated, StateUnrecoverable} {
+	// Terminal states keep their finality: recovery never runs on them, so
+	// nothing may claim a rediscovery from there.
+	for _, from := range []State{StateCompleted, StateUserTerminated, StateUnrecoverable} {
 		if CanTransition(from, StateDiscovered) {
 			t.Errorf("%s must not reach DISCOVERED", from)
 		}
+	}
+}
+
+func TestResumedCanBeRediscovered(t *testing.T) {
+	// A resumed conversation keeps running under its continuation session. The
+	// loop can only run a second time if the discovery pass may move RESUMED
+	// back to DISCOVERED; this is the edge that replaced "a second recovery is
+	// never straight from RESUMED".
+	if !CanTransition(StateResumed, StateDiscovered) {
+		t.Fatal("RESUMED must reach DISCOVERED so the cycle can repeat")
+	}
+	if err := ValidateTransition(StateResumed, StateDiscovered); err != nil {
+		t.Errorf("ValidateTransition(RESUMED, DISCOVERED) = %v, want nil", err)
+	}
+	// The rediscovery edge is added to RESUMED's existing targets, not swapped
+	// in for them.
+	for _, to := range []State{
+		StateRunning,
+		StateUsageLimitDetected,
+		StateWaitingForReset,
+		StateCompleted,
+		StateUserTerminated,
+		StateDisabled,
+	} {
+		if !CanTransition(StateResumed, to) {
+			t.Errorf("RESUMED -> %s was lost", to)
+		}
+	}
+	// RESUMED is reachable from the resume paths, so a fresh cycle must be
+	// reachable from the state the resume actually leaves behind.
+	if !CanTransition(StateResuming, StateResumed) || !CanTransition(StateWorking, StateResumed) {
+		t.Error("RESUMED must stay reachable from RESUMING and WORKING")
 	}
 }
 

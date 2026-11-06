@@ -573,7 +573,7 @@ nothing to recover:
 
 ```console
 $ ccresu recover e60a3100-123a-4deb-b146-54705ff80268
-ccresu: recover e60a3100-123a-4deb-b146-54705ff80268: recovery: invalid state transition: RESUMED -> CHECKING_SESSION (legal targets: COMPLETED, DISABLED, RUNNING, USER_TERMINATED)
+ccresu: recover e60a3100-123a-4deb-b146-54705ff80268: recovery: invalid state transition: RESUMED -> CHECKING_SESSION (legal targets: COMPLETED, DISABLED, DISCOVERED, RUNNING, USAGE_LIMIT_DETECTED, USER_TERMINATED, WAITING_FOR_RESET)
 ```
 
 ### Step 11 — When the resume fails

@@ -56,8 +56,10 @@ var ErrInvalidTransition = errors.New("recovery: invalid state transition")
 // There is no terminal failure state. A session that cannot be resumed is not
 // broken for ever: the daemon rediscovers it, reads its transcript again, and
 // finds its next reset time. Every state that permits automatic work therefore
-// has an edge back to DISCOVERED, and that is what a failed attempt or an
-// exhausted attempt budget produces. DISCOVERED is the start of a new cycle, not
+// has an edge back to DISCOVERED — RESUMED included, because a resumed
+// conversation is revisited on the next discovery pass, not treated as the end
+// of the line — and that is what a failed attempt or an exhausted attempt budget
+// produces. DISCOVERED is the start of a new cycle, not
 // the absence of one: entering it resets the attempt budget, so a session is
 // retried as often as its transcript still shows a usage limit, without an
 // operator running `ccresu reset`.
@@ -152,9 +154,13 @@ var transitions = map[State]map[State]struct{}{
 		StateUserTerminated:  {},
 		StateDisabled:        {},
 	},
-	// RESUMED is not strictly terminal — a resumed session can hit its limit
-	// again — but a second recovery is only legal after the session has been
-	// observed running and hit a new limit, never straight from RESUMED.
+	// RESUMED records that a recovery completed, not that the conversation is
+	// over. The resumed conversation keeps running under its continuation
+	// session, so a second recovery is legal straight from RESUMED: the discovery
+	// pass revisits a resumed session, reads its transcript again, and either
+	// finds the next usage limit (a new wait) or parks it with a next-attempt
+	// instant. Nothing has to observe the session running first — ccresu is not
+	// attached to it and cannot.
 	StateResumed: {
 		StateRunning: {},
 		// The cycle repeats: a resumed conversation keeps running under the
@@ -163,9 +169,13 @@ var transitions = map[State]map[State]struct{}{
 		// stop after one recovery.
 		StateUsageLimitDetected: {},
 		StateWaitingForReset:    {},
-		StateCompleted:          {},
-		StateUserTerminated:     {},
-		StateDisabled:           {},
+		// The rediscovery edge. A RESUMED session is re-examined from the top of
+		// the cycle with a fresh attempt budget, which is the only way the loop
+		// can run a second time without an operator running `ccresu recover`.
+		StateDiscovered:     {},
+		StateCompleted:      {},
+		StateUserTerminated: {},
+		StateDisabled:       {},
 	},
 	StateCompleted:      {},
 	StateUserTerminated: {},
@@ -229,6 +239,11 @@ func Terminal(s State) bool {
 // was terminated, was disabled or proved unrecoverable. Recovery refuses to
 // touch a settled session, which is what stops a completed conversation from
 // being resumed again.
+//
+// RESUMED is settled for the recovery engine — it has already dispatched and
+// verified that resume, and issuing another would duplicate it — but it is not
+// the end of the cycle: the discovery pass revisits it (RESUMED has an edge to
+// DISCOVERED) and starts the next cycle under the continuation session.
 func Settled(s State) bool {
 	switch s {
 	// WORKING is not settled in the sense of "finished", but it is settled in the
