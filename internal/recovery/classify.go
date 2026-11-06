@@ -80,7 +80,6 @@ var nonRetryable = []error{
 	claude.ErrInvalidSessionID,
 	claude.ErrEmptyMessage,
 	claude.ErrMessageTooLong,
-	claude.ErrSessionNotPreserved,
 }
 
 // permanentMarkers are text fragments that identify an authentication or

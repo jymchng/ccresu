@@ -35,6 +35,9 @@ type Store interface {
 	SetSessionError(ctx context.Context, id, message string) error
 	SetSessionRetryAt(ctx context.Context, id string, at time.Time) error
 	SetSessionTranscriptMetrics(ctx context.Context, id, path string, size, lines int64) error
+	// SetSessionContinuation records the session id a background job continued
+	// the conversation under, so the row says where the conversation went.
+	SetSessionContinuation(ctx context.Context, id, continuationID string) error
 	StartAttempt(ctx context.Context, sessionID string, usageLimitID int64, command string) (storage.RecoveryAttempt, error)
 	FinishAttempt(ctx context.Context, attemptID int64, result storage.AttemptResult) (storage.RecoveryAttempt, error)
 	CountAttempts(ctx context.Context, sessionID string) (int, error)
@@ -461,12 +464,13 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 	}
 
 	finished, err := m.store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
-		State:             StateResumed,
-		Success:           true,
-		Output:            truncate(summaryOf(result, verification)),
-		SessionIDVerified: boolPtr(verification.ContinuationConfirmed),
-		TranscriptGrew:    boolPtr(true),
-		FinishedAt:        m.now(),
+		State:                 StateResumed,
+		Success:               true,
+		Output:                truncate(summaryOf(result, verification)),
+		SessionIDVerified:     boolPtr(verification.ContinuationConfirmed),
+		TranscriptGrew:        boolPtr(true),
+		ContinuationSessionID: verification.ContinuationSessionID,
+		FinishedAt:            m.now(),
 	})
 	if err != nil {
 		return Outcome{SessionID: sessionID, State: state.current}, fmt.Errorf("finish attempt: %w", err)
@@ -474,10 +478,15 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 	outcome.Attempt = finished
 	outcome.Verification = verification
 
-	if err := m.store.SetSessionTranscriptMetrics(ctx, sessionID, baseline.TranscriptPath,
-		verification.SizeAfter, verification.LinesAfter); err != nil {
-		m.log.Warn("record transcript metrics", "session", sessionID, "error", err)
+	// The conversation now lives under the id the job reported. Recording it on
+	// the session is what lets the next cycle (and the operator, through
+	// `inspect` and `sessions`) find the right transcript: the id ccresu tracks
+	// is the one that was resumed, and it will never answer again.
+	if err := m.store.SetSessionContinuation(ctx, sessionID,
+		verification.ContinuationSessionID); err != nil {
+		m.log.Warn("record continuation session", "session", sessionID, "error", err)
 	}
+	m.recordTranscriptMetrics(ctx, sessionID, baseline, verification)
 	if err := m.store.SetSessionError(ctx, sessionID, ""); err != nil {
 		m.log.Warn("clear session error", "session", sessionID, "error", err)
 	}
@@ -487,6 +496,37 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 	outcome.State = state.current
 	outcome.Resumed = true
 	return outcome, nil
+}
+
+// recordTranscriptMetrics stores the measurement a resume produced, against the
+// row whose transcript it was actually measured on.
+//
+// Verification.SizeAfter/LinesAfter always come from the *continuation*
+// session's transcript. Writing them onto the resumed row would leave it claiming
+// a line count its own file does not have, and the next cycle would read that
+// poisoned snapshot back as its baseline. So the numbers are recorded when the
+// continuation is this session (the job kept the id, or both readings name the
+// same file) and skipped, with a log line naming where they do belong, when the
+// conversation moved to a session of its own.
+//
+// The measurement is not thrown away: it is already in the attempt summary, the
+// verification notes and the continuation session's own row, which discovery
+// records when that session appears.
+func (m *Manager) recordTranscriptMetrics(ctx context.Context, sessionID string, baseline Baseline, verification Verification) {
+	path := strings.TrimSpace(verification.ContinuationTranscriptPath)
+	if path == "" {
+		path = baseline.TranscriptPath
+	}
+	sameSession := verification.ContinuationSessionID == "" || verification.ContinuationSessionID == sessionID
+	if !sameSession && path != baseline.TranscriptPath {
+		m.log.Info("the conversation continues in another session, so its transcript metrics are not recorded on the resumed row",
+			"session", sessionID, "continuation", verification.ContinuationSessionID, "transcript", path)
+		return
+	}
+	if err := m.store.SetSessionTranscriptMetrics(ctx, sessionID, path,
+		verification.SizeAfter, verification.LinesAfter); err != nil {
+		m.log.Warn("record transcript metrics", "session", sessionID, "error", err)
+	}
 }
 
 // fail records a failed attempt and moves the session along the retry path.
@@ -526,12 +566,13 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 
 	if !preResume {
 		if _, err := m.store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
-			State:             target,
-			Success:           false,
-			Error:             truncate(cause.Error()),
-			SessionIDVerified: boolPtr(verification.ContinuationConfirmed),
-			TranscriptGrew:    boolPtr(verification.TranscriptGrew),
-			FinishedAt:        m.now(),
+			State:                 target,
+			Success:               false,
+			Error:                 truncate(cause.Error()),
+			SessionIDVerified:     boolPtr(verification.ContinuationConfirmed),
+			TranscriptGrew:        boolPtr(verification.TranscriptGrew),
+			ContinuationSessionID: verification.ContinuationSessionID,
+			FinishedAt:            m.now(),
 		}); err != nil {
 			m.log.Warn("record failed attempt", "session", outcome.SessionID, "error", err)
 		}

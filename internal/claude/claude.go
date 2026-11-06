@@ -86,9 +86,6 @@ var (
 	// it ccresu cannot prove the original conversation was continued, so the
 	// attempt is treated as failed rather than assumed successful.
 	ErrNoSessionIDReported = errors.New("claude: resume output reported no session id")
-	// ErrSessionNotPreserved reports a resume that produced a different session
-	// id, i.e. a new conversation instead of the original one.
-	ErrSessionNotPreserved = errors.New("claude: resumed session id did not match the requested session")
 	// ErrResumeFailed reports a resume whose JSON output carried is_error.
 	ErrResumeFailed = errors.New("claude: resume reported an error")
 	// ErrSessionRunningInBackground reports the CLI refusing to resume a

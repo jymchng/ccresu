@@ -283,6 +283,19 @@ func (a *App) cmdSessions(ctx context.Context, args []string) error {
 		return nil
 	}
 	loc := a.displayLocation(rt)
+	// The CONTINUATION column is shown only when some visible row has one, so a
+	// listing of never-resumed sessions keeps the columns it has always had.
+	showContinuation := false
+	for _, session := range sessions {
+		if session.ContinuationSessionID != "" {
+			showContinuation = true
+			break
+		}
+	}
+	headers := []string{"SESSION", "STATE", "NEXT ATTEMPT", "ENABLED", "RECOVERABLE", "PROJECT", "LAST SEEN", "NOTE"}
+	if showContinuation {
+		headers = []string{"SESSION", "STATE", "NEXT ATTEMPT", "CONTINUATION", "ENABLED", "RECOVERABLE", "PROJECT", "LAST SEEN", "NOTE"}
+	}
 	rows := make([][]string, 0, len(sessions))
 	for _, session := range sessions {
 		note := session.Reason
@@ -290,18 +303,24 @@ func (a *App) cmdSessions(ctx context.Context, args []string) error {
 			note = session.LastError
 		}
 		next := nextAttemptCell(recovery.NextAttemptFor(session, schedulePtr(scheduleBySession, session.ID), now), now)
-		rows = append(rows, []string{
+		row := []string{
 			shortID(session.ID),
 			string(session.State),
 			next,
+		}
+		if showContinuation {
+			row = append(row, emptyDash(shortID(session.ContinuationSessionID)))
+		}
+		row = append(row,
 			yesNo(session.Enabled),
 			yesNo(session.Recoverable),
 			truncateText(session.ProjectPath, 40),
 			formatTime(session.LastSeenAt, loc),
 			truncateText(note, 40),
-		})
+		)
+		rows = append(rows, row)
 	}
-	a.table(a.stdout, []string{"SESSION", "STATE", "NEXT ATTEMPT", "ENABLED", "RECOVERABLE", "PROJECT", "LAST SEEN", "NOTE"}, rows)
+	a.table(a.stdout, headers, rows)
 	fmt.Fprintln(a.stdout)
 	fmt.Fprint(a.stdout, sessionsFootnote(len(sessions), matching, *all, *limit))
 	return nil
@@ -462,6 +481,11 @@ func (a *App) inspectSession(ctx context.Context, command string, args []string)
 	}
 	a.field(a.stdout, "project", emptyDash(session.ProjectPath))
 	a.field(a.stdout, "transcript", emptyDash(session.TranscriptPath))
+	if session.ContinuationSessionID != "" {
+		// The conversation moved: the id ccresu tracks is the one that was
+		// resumed, and this is the session that is actually answering now.
+		a.field(a.stdout, "continuation", session.ContinuationSessionID)
+	}
 	a.field(a.stdout, "type", session.Type)
 	a.field(a.stdout, "last seen", formatTime(session.LastSeenAt, loc))
 
@@ -693,7 +717,6 @@ func (a *App) reportAlreadyDeleted(id string, tombstone storage.DeletedSession) 
 		id, formatTime(tombstone.DeletedAt, time.UTC), id)
 	return nil
 }
-
 
 // nextAttemptReport is the JSON form of a resolved next attempt. It carries both
 // the machine-readable instant and the humanised countdown, so a script needs no
@@ -955,7 +978,6 @@ func (a *App) cmdEnable(ctx context.Context, args []string) error {
 func (a *App) cmdDisable(ctx context.Context, args []string) error {
 	return a.setEnabled(ctx, args, false)
 }
-
 
 // setEnabled implements enable and disable.
 func (a *App) setEnabled(ctx context.Context, args []string, enabled bool) error {

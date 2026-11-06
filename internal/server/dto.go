@@ -71,45 +71,50 @@ func (s *Server) decodeJSON(r *http.Request, dst any, allowEmpty bool) *apiError
 
 // sessionDTO is the wire form of a session.
 type sessionDTO struct {
-	ID              string    `json:"id"`
-	ProjectPath     string    `json:"project_path,omitempty"`
-	TranscriptPath  string    `json:"transcript_path,omitempty"`
-	Provider        string    `json:"provider,omitempty"`
-	Type            string    `json:"type"`
-	PID             int       `json:"pid,omitempty"`
-	PPID            int       `json:"ppid,omitempty"`
-	State           string    `json:"state"`
-	Enabled         bool      `json:"enabled"`
-	Recoverable     bool      `json:"recoverable"`
-	Reason          string    `json:"reason,omitempty"`
-	LastError       string    `json:"last_error,omitempty"`
-	TranscriptSize  int64     `json:"transcript_size"`
-	TranscriptLines int64     `json:"transcript_lines"`
-	DiscoveredAt    time.Time `json:"discovered_at"`
-	LastSeenAt      time.Time `json:"last_seen_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID             string `json:"id"`
+	ProjectPath    string `json:"project_path,omitempty"`
+	TranscriptPath string `json:"transcript_path,omitempty"`
+	// ContinuationSessionID is the session id the resumed conversation continued
+	// under, when a background job reported one. It is normally a different id
+	// from ID: the dispatch does not keep the id it was given.
+	ContinuationSessionID string    `json:"continuation_session_id,omitempty"`
+	Provider              string    `json:"provider,omitempty"`
+	Type                  string    `json:"type"`
+	PID                   int       `json:"pid,omitempty"`
+	PPID                  int       `json:"ppid,omitempty"`
+	State                 string    `json:"state"`
+	Enabled               bool      `json:"enabled"`
+	Recoverable           bool      `json:"recoverable"`
+	Reason                string    `json:"reason,omitempty"`
+	LastError             string    `json:"last_error,omitempty"`
+	TranscriptSize        int64     `json:"transcript_size"`
+	TranscriptLines       int64     `json:"transcript_lines"`
+	DiscoveredAt          time.Time `json:"discovered_at"`
+	LastSeenAt            time.Time `json:"last_seen_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
 }
 
 // toSessionDTO converts a stored session.
 func toSessionDTO(session storage.Session) sessionDTO {
 	return sessionDTO{
-		ID:              session.ID,
-		ProjectPath:     session.ProjectPath,
-		TranscriptPath:  session.TranscriptPath,
-		Provider:        session.Provider,
-		Type:            string(session.Type),
-		PID:             session.PID,
-		PPID:            session.PPID,
-		State:           string(session.State),
-		Enabled:         session.Enabled,
-		Recoverable:     session.Recoverable,
-		Reason:          session.Reason,
-		LastError:       session.LastError,
-		TranscriptSize:  session.TranscriptSize,
-		TranscriptLines: session.TranscriptLines,
-		DiscoveredAt:    session.DiscoveredAt,
-		LastSeenAt:      session.LastSeenAt,
-		UpdatedAt:       session.UpdatedAt,
+		ID:                    session.ID,
+		ProjectPath:           session.ProjectPath,
+		TranscriptPath:        session.TranscriptPath,
+		ContinuationSessionID: session.ContinuationSessionID,
+		Provider:              session.Provider,
+		Type:                  string(session.Type),
+		PID:                   session.PID,
+		PPID:                  session.PPID,
+		State:                 string(session.State),
+		Enabled:               session.Enabled,
+		Recoverable:           session.Recoverable,
+		Reason:                session.Reason,
+		LastError:             session.LastError,
+		TranscriptSize:        session.TranscriptSize,
+		TranscriptLines:       session.TranscriptLines,
+		DiscoveredAt:          session.DiscoveredAt,
+		LastSeenAt:            session.LastSeenAt,
+		UpdatedAt:             session.UpdatedAt,
 	}
 }
 
@@ -182,33 +187,40 @@ func toScheduleDTO(schedule storage.Schedule) scheduleDTO {
 
 // attemptDTO is the wire form of one recovery attempt.
 type attemptDTO struct {
-	ID                int64     `json:"id"`
-	SessionID         string    `json:"session_id"`
-	AttemptNumber     int       `json:"attempt_number"`
-	State             string    `json:"state"`
-	Command           string    `json:"command,omitempty"`
-	StartedAt         time.Time `json:"started_at"`
-	FinishedAt        time.Time `json:"finished_at,omitempty"`
-	Success           *bool     `json:"success,omitempty"`
-	SessionIDVerified *bool     `json:"session_id_verified,omitempty"`
-	TranscriptGrew    *bool     `json:"transcript_grew,omitempty"`
-	Error             string    `json:"error,omitempty"`
+	ID            int64     `json:"id"`
+	SessionID     string    `json:"session_id"`
+	AttemptNumber int       `json:"attempt_number"`
+	State         string    `json:"state"`
+	Command       string    `json:"command,omitempty"`
+	StartedAt     time.Time `json:"started_at"`
+	FinishedAt    time.Time `json:"finished_at,omitempty"`
+	Success       *bool     `json:"success,omitempty"`
+	// ContinuationConfirmed reports whether the dispatch reported a continuation
+	// session at all. The column behind it is still called session_id_verified,
+	// which is historical: a background dispatch does not preserve the id it was
+	// given, so the verdict cannot be "the id was verified".
+	ContinuationConfirmed bool  `json:"continuation_confirmed,omitempty"`
+	TranscriptGrew        *bool `json:"transcript_grew,omitempty"`
+	// ContinuationSessionID is the session id the job reported, when it did.
+	ContinuationSessionID string `json:"continuation_session_id,omitempty"`
+	Error                 string `json:"error,omitempty"`
 }
 
 // toAttemptDTO converts a stored attempt.
 func toAttemptDTO(attempt storage.RecoveryAttempt) attemptDTO {
 	return attemptDTO{
-		ID:                attempt.ID,
-		SessionID:         attempt.SessionID,
-		AttemptNumber:     attempt.AttemptNumber,
-		State:             string(attempt.State),
-		Command:           attempt.Command,
-		StartedAt:         attempt.StartedAt,
-		FinishedAt:        attempt.FinishedAt,
-		Success:           attempt.Success,
-		SessionIDVerified: attempt.SessionIDVerified,
-		TranscriptGrew:    attempt.TranscriptGrew,
-		Error:             attempt.Error,
+		ID:                    attempt.ID,
+		SessionID:             attempt.SessionID,
+		AttemptNumber:         attempt.AttemptNumber,
+		State:                 string(attempt.State),
+		Command:               attempt.Command,
+		StartedAt:             attempt.StartedAt,
+		FinishedAt:            attempt.FinishedAt,
+		Success:               attempt.Success,
+		ContinuationConfirmed: attempt.SessionIDVerified != nil && *attempt.SessionIDVerified,
+		TranscriptGrew:        attempt.TranscriptGrew,
+		ContinuationSessionID: attempt.ContinuationSessionID,
+		Error:                 attempt.Error,
 	}
 }
 
@@ -271,29 +283,37 @@ func toNotificationDTO(notification storage.Notification) notificationDTO {
 // transcript grew. The key is renamed rather than deprecated because nothing
 // reads it but ccresu's own tests.
 type verificationDTO struct {
-	ContinuationConfirmed bool     `json:"continuation_confirmed"`
-	TranscriptGrew        bool     `json:"transcript_grew"`
-	Proven                bool     `json:"proven"`
-	LinesBefore           int64    `json:"lines_before"`
-	LinesAfter            int64    `json:"lines_after"`
-	SizeBefore            int64    `json:"size_before"`
-	SizeAfter             int64    `json:"size_after"`
-	Running               bool     `json:"running"`
-	Notes                 []string `json:"notes,omitempty"`
+	// ContinuationSessionID is the session id the job reported, and
+	// ContinuationTranscriptPath is the file its growth was measured on. They
+	// differ from the requested id: a background agent continues the
+	// conversation under its own.
+	ContinuationSessionID      string   `json:"continuation_session_id,omitempty"`
+	ContinuationTranscriptPath string   `json:"continuation_transcript_path,omitempty"`
+	ContinuationConfirmed      bool     `json:"continuation_confirmed"`
+	TranscriptGrew             bool     `json:"transcript_grew"`
+	Proven                     bool     `json:"proven"`
+	LinesBefore                int64    `json:"lines_before"`
+	LinesAfter                 int64    `json:"lines_after"`
+	SizeBefore                 int64    `json:"size_before"`
+	SizeAfter                  int64    `json:"size_after"`
+	Running                    bool     `json:"running"`
+	Notes                      []string `json:"notes,omitempty"`
 }
 
 // toVerificationDTO converts a verification result.
 func toVerificationDTO(verification recovery.Verification) verificationDTO {
 	return verificationDTO{
-		ContinuationConfirmed: verification.ContinuationConfirmed,
-		TranscriptGrew:        verification.TranscriptGrew,
-		Proven:                verification.Proven,
-		LinesBefore:           verification.LinesBefore,
-		LinesAfter:            verification.LinesAfter,
-		SizeBefore:            verification.SizeBefore,
-		SizeAfter:             verification.SizeAfter,
-		Running:               verification.Running,
-		Notes:                 verification.Notes,
+		ContinuationSessionID:      verification.ContinuationSessionID,
+		ContinuationTranscriptPath: verification.ContinuationTranscriptPath,
+		ContinuationConfirmed:      verification.ContinuationConfirmed,
+		TranscriptGrew:             verification.TranscriptGrew,
+		Proven:                     verification.Proven,
+		LinesBefore:                verification.LinesBefore,
+		LinesAfter:                 verification.LinesAfter,
+		SizeBefore:                 verification.SizeBefore,
+		SizeAfter:                  verification.SizeAfter,
+		Running:                    verification.Running,
+		Notes:                      verification.Notes,
 	}
 }
 

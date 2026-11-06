@@ -149,11 +149,12 @@ func (s *Store) FinishAttempt(ctx context.Context, attemptID int64, result Attem
 		update, err := tx.ExecContext(ctx, `
 			UPDATE recovery_attempts SET
 				state = ?, finished_at = ?, success = ?, output = ?, error = ?,
-				session_id_verified = ?, transcript_grew = ?
+				session_id_verified = ?, transcript_grew = ?, continuation_session_id = ?
 			WHERE id = ?`,
 			string(result.State), timeToDB(finishedAt), boolToInt(result.Success),
 			result.Output, result.Error, nullableBool(result.SessionIDVerified),
-			nullableBool(result.TranscriptGrew), attemptID)
+			nullableBool(result.TranscriptGrew), strings.TrimSpace(result.ContinuationSessionID),
+			attemptID)
 		if err != nil {
 			return fmt.Errorf("finish attempt %d: %w", attemptID, err)
 		}

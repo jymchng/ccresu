@@ -69,6 +69,15 @@ func BaselineFromStatus(status claude.SessionStatus) Baseline {
 // both independent checks passed: the dispatched background job reported the
 // session id that continues the conversation, and that session's transcript
 // grew.
+//
+// A verification carries no turn result, by design. The command a resume runs is
+// `claude --resume <id> --bg <message>`, which answers with a job id and nothing
+// else: it prints no JSON envelope, so total_cost_usd, num_turns, duration_ms,
+// subtype and is_error are empty here and in the attempt row that records the
+// outcome. Leaving them empty is the honest representation of "the dispatch
+// cannot report them"; filling them with zeroes would claim a free, instant,
+// successful turn that never happened. summaryOf renders the substitute: the job
+// plus the continuation it reported.
 type Verification struct {
 	// JobID is the background job the dispatch created.
 	JobID string
@@ -79,6 +88,12 @@ type Verification struct {
 	// agent continues the conversation under its own session id, so this is
 	// normally a new id rather than the one that was resumed.
 	ContinuationSessionID string
+	// ContinuationTranscriptPath is where the continuation session's transcript
+	// was read, as the session status reported it. It is empty when no status was
+	// read. Callers record transcript metrics against *this* path: the numbers in
+	// SizeAfter/LinesAfter were measured on it, and they say nothing about the
+	// transcript of the session that was resumed.
+	ContinuationTranscriptPath string
 	// ContinuationConfirmed reports that the job reported a continuation session
 	// id, i.e. that there is a conversation to measure. It replaces the old
 	// "the reported id equals the requested id" check, which print mode made
@@ -256,6 +271,7 @@ func (v Verifier) awaitGrowth(ctx context.Context, continuationID string, baseli
 		last = status
 		verification.LinesAfter = status.Transcript.Lines
 		verification.SizeAfter = status.Transcript.Size
+		verification.ContinuationTranscriptPath = transcriptPathOf(status)
 		if measureGrowth(continuationID, baseline, status, verification) {
 			verification.TranscriptGrew = true
 			return last, nil
@@ -312,6 +328,18 @@ func orUnknown(state string) string {
 		return "unknown"
 	}
 	return state
+}
+
+// transcriptPathOf reports where a status reading took its transcript from.
+//
+// The transcript info carries the path when the file was found; the session's own
+// copy is the fallback, because a status that could not read the file still knows
+// where it would have been read.
+func transcriptPathOf(status claude.SessionStatus) string {
+	if path := strings.TrimSpace(status.Transcript.Path); path != "" {
+		return path
+	}
+	return strings.TrimSpace(status.Session.TranscriptPath)
 }
 
 // measureGrowth records whether the conversation advanced and explains why not.

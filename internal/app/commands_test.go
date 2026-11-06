@@ -274,6 +274,88 @@ func TestSessionsFiltersAndFormats(t *testing.T) {
 	}
 }
 
+// continuationSessionID is the session a dispatched resume continued the
+// conversation under, which is never the id ccresu tracks.
+const continuationSessionID = "22222222-2222-4222-8222-222222222222"
+
+func TestSessionsShowsAContinuationColumnOnlyWhenOneExists(t *testing.T) {
+	h := newHarness(t)
+	h.seedSession(t, continuationSessionID, nil)
+	h.seedSession(t, canonicalSessionID, nil)
+
+	code, stdout, stderr := h.exec(t, "sessions")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (stderr %q)", code, stderr)
+	}
+	if strings.Contains(stdout, "CONTINUATION") {
+		t.Errorf("the listing grew a CONTINUATION column with nothing to show:\n%s", stdout)
+	}
+
+	if err := h.store.SetSessionContinuation(context.Background(),
+		canonicalSessionID, continuationSessionID); err != nil {
+		t.Fatalf("SetSessionContinuation: %v", err)
+	}
+
+	code, stdout, _ = h.exec(t, "sessions")
+	if code != ExitOK {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stdout, "CONTINUATION") {
+		t.Errorf("the listing does not name the continuation session:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, continuationSessionID[:8]) {
+		t.Errorf("the continuation id is missing from the listing:\n%s", stdout)
+	}
+
+	code, stdout, _ = h.exec(t, "--json", "sessions")
+	if code != ExitOK {
+		t.Fatalf("json exit = %d", code)
+	}
+	var sessions []storage.Session
+	if err := json.Unmarshal([]byte(stdout), &sessions); err != nil {
+		t.Fatalf("sessions --json: %v", err)
+	}
+	found := false
+	for _, session := range sessions {
+		if session.ID == canonicalSessionID {
+			found = true
+			if session.ContinuationSessionID != continuationSessionID {
+				t.Errorf("json continuation = %q, want %q",
+					session.ContinuationSessionID, continuationSessionID)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("the resumed session is missing from the json listing: %s", stdout)
+	}
+}
+
+func TestInspectNamesTheContinuationSession(t *testing.T) {
+	h := newHarness(t)
+	h.seedSession(t, canonicalSessionID, nil)
+
+	code, stdout, stderr := h.exec(t, "inspect", canonicalSessionID)
+	if code != ExitOK {
+		t.Fatalf("exit = %d (stderr %q)", code, stderr)
+	}
+	if strings.Contains(stdout, "continuation") {
+		t.Errorf("inspect claims a continuation before one was recorded:\n%s", stdout)
+	}
+
+	if err := h.store.SetSessionContinuation(context.Background(),
+		canonicalSessionID, continuationSessionID); err != nil {
+		t.Fatalf("SetSessionContinuation: %v", err)
+	}
+
+	code, stdout, _ = h.exec(t, "inspect", canonicalSessionID)
+	if code != ExitOK {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stdout, "continuation") || !strings.Contains(stdout, continuationSessionID) {
+		t.Errorf("inspect does not say where the conversation went:\n%s", stdout)
+	}
+}
+
 func TestSessionsReportsAnEmptyStore(t *testing.T) {
 	h := newHarness(t)
 	code, stdout, _ := h.exec(t, "sessions")

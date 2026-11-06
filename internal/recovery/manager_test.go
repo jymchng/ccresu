@@ -420,8 +420,24 @@ func TestRecoverResumesAndProvesTheConversationContinued(t *testing.T) {
 	if stored.LastError != "" {
 		t.Errorf("LastError = %q, want it cleared after success", stored.LastError)
 	}
-	if stored.TranscriptLines != 12 {
-		t.Errorf("TranscriptLines = %d, want the post-resume measurement", stored.TranscriptLines)
+	if stored.ContinuationSessionID != sessionB {
+		t.Errorf("ContinuationSessionID = %q, want %q: the job continues the conversation under its own id",
+			stored.ContinuationSessionID, sessionB)
+	}
+	// The measurement the verifier took belongs to the continuation transcript,
+	// so it is recorded there -- not on the row that was resumed, whose own file
+	// still holds the pre-resume snapshot. Writing it here would poison the next
+	// baseline.
+	if stored.TranscriptLines != 10 || stored.TranscriptSize != 200 {
+		t.Errorf("TranscriptLines/Size = %d/%d, want the untouched 10/200 snapshot",
+			stored.TranscriptLines, stored.TranscriptSize)
+	}
+	if stored.TranscriptPath != "/home/u/.claude/projects/p/"+sessionA+".jsonl" {
+		t.Errorf("TranscriptPath = %q, want the resumed session's own transcript", stored.TranscriptPath)
+	}
+	if outcome.Attempt.ContinuationSessionID != sessionB {
+		t.Errorf("attempt ContinuationSessionID = %q, want %q",
+			outcome.Attempt.ContinuationSessionID, sessionB)
 	}
 
 	history, err := manager.History(context.Background(), sessionA)

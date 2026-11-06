@@ -56,7 +56,6 @@ func TestClassify(t *testing.T) {
 		{"invalid session id", claude.ErrInvalidSessionID, ClassPermanent},
 		{"empty message", claude.ErrEmptyMessage, ClassPermanent},
 		{"message too long", claude.ErrMessageTooLong, ClassPermanent},
-		{"session not preserved", claude.ErrSessionNotPreserved, ClassPermanent},
 		{"session not found", claude.ErrSessionNotFound, ClassPermanent},
 		{"store not found", storage.ErrNotFound, ClassPermanent},
 		{"wrapped sentinel", fmt.Errorf("resume: %w", claude.ErrCLIUnavailable), ClassPermanent},
