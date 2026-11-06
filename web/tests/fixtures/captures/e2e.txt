@@ -18,6 +18,8 @@ ok    recover B is refused (exit 1)
 ok    session B ends PERMANENTLY_FAILED
 ok    the resume ran exactly twice for A
 ok    one stop call cleared the background agent
+ok    the stop named the eight-hex job, not the session
+ok    the session UUID was never passed to claude stop
 ok    both resumes used byte-identical arguments
 ok    the calls run resume, stop, resume
 ok    history records the stop-then-resume success
@@ -27,7 +29,7 @@ ok    the transcript grew
 
 == the stub claude call log (A only)
 CALL-p--resumeaaaaaaaa-1111-4111-8111-aaaaaaaaaaaa--output-formatjsonContinue working on the existing active goal from where execution was interrupted by the usage limit. Review the current state, avoid repeating completed work, and continue until the goal is completed.
-CALLstopaaaaaaaa-1111-4111-8111-aaaaaaaaaaaa
+CALLstopaaaaaaaa
 CALL-p--resumeaaaaaaaa-1111-4111-8111-aaaaaaaaaaaa--output-formatjsonContinue working on the existing active goal from where execution was interrupted by the usage limit. Review the current state, avoid repeating completed work, and continue until the goal is completed.
 
 == pass 2: ccresu reset on the permanently failed session

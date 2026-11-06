@@ -403,7 +403,7 @@ func (a *App) commands() []commandSpec {
 		},
 		{
 			name:    "sessions",
-			summary: "list, inspect or delete sessions",
+			summary: "list, inspect, delete or clear sessions",
 			usage:   sessionsUsage,
 			run:     (*App).cmdSessions,
 		},

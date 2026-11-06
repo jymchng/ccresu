@@ -270,3 +270,139 @@ func TestListDeletedSessionsNewestFirst(t *testing.T) {
 		}
 	}
 }
+
+// TestForgetSessionsInStateForgetsOnlyThatState is the bulk form's contract: the
+// state filter is the whole safety story, so a row in any other state must
+// survive untouched.
+func TestForgetSessionsInStateForgetsOnlyThatState(t *testing.T) {
+	store := newStore(t)
+	ctx := context.Background()
+	const (
+		failed   = "55555555-5555-4555-8555-555555555555"
+		failed2  = "66666666-6666-4666-8666-666666666666"
+		disabled = "77777777-7777-4777-8777-777777777777"
+	)
+	seedPopulatedSession(t, store, failed)
+	seedPopulatedSession(t, store, failed2)
+	// seedPopulatedSession records a transition, which leaves the row RUNNING;
+	// put both back in the state the bulk forget is asked about.
+	for _, id := range []string{failed, failed2} {
+		if _, err := store.TransitionSession(ctx, id, storage.StatePermanentlyFailed, "seeded failure", 0); err != nil {
+			t.Fatalf("seed failed state for %s: %v", id, err)
+		}
+	}
+	now := time.Date(2026, 11, 5, 13, 0, 0, 0, time.UTC)
+	if _, err := store.UpsertSession(ctx, storage.Session{
+		ID:           disabled,
+		ProjectPath:  "/work/other",
+		State:        storage.StateDisabled,
+		DiscoveredAt: now,
+		LastSeenAt:   now,
+	}); err != nil {
+		t.Fatalf("seed disabled session: %v", err)
+	}
+
+	results, err := store.ForgetSessionsInState(ctx, storage.StatePermanentlyFailed)
+	if err != nil {
+		t.Fatalf("ForgetSessionsInState: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %d, want 2: %+v", len(results), results)
+	}
+	seen := map[string]storage.ForgetResult{}
+	for _, result := range results {
+		seen[result.ID] = result
+	}
+	for _, id := range []string{failed, failed2} {
+		result, ok := seen[id]
+		if !ok {
+			t.Fatalf("result set does not name %s: %+v", id, seen)
+		}
+		if result.State != storage.StatePermanentlyFailed {
+			t.Errorf("%s: tombstoned state = %q, want %q", id, result.State, storage.StatePermanentlyFailed)
+		}
+		if result.ProjectPath == "" || result.TranscriptPath == "" {
+			t.Errorf("%s: tombstone lost the paths, so the delete could not be undone: %+v", id, result)
+		}
+		// The counts are the same facts one delete reports; a bulk clear that
+		// reported nothing would hide the history it removed.
+		if result.Removed.Attempts != 1 || result.Removed.Transitions == 0 {
+			t.Errorf("%s: removed = %+v, want the attempt and transition counts", id, result.Removed)
+		}
+		if !result.Removed.Scheduled {
+			t.Errorf("%s: pending wait was not reported as removed", id)
+		}
+		if _, err := store.GetSession(ctx, id); !errors.Is(err, storage.ErrNotFound) {
+			t.Errorf("%s survived the bulk forget: %v", id, err)
+		}
+	}
+
+	if _, err := store.GetSession(ctx, disabled); err != nil {
+		t.Errorf("the disabled session was removed: %v", err)
+	}
+	tombstones, err := store.ListDeletedSessions(ctx)
+	if err != nil {
+		t.Fatalf("ListDeletedSessions: %v", err)
+	}
+	if len(tombstones) != 2 {
+		t.Errorf("tombstones = %d, want 2: %+v", len(tombstones), tombstones)
+	}
+
+	// Nothing left to forget is not an error: `sessions clear` is idempotent.
+	results, err = store.ForgetSessionsInState(ctx, storage.StatePermanentlyFailed)
+	if err != nil {
+		t.Fatalf("second ForgetSessionsInState: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("second run forgot %d sessions, want 0", len(results))
+	}
+}
+
+func TestForgetSessionsInStateGuardsItsArguments(t *testing.T) {
+	store := newStore(t)
+	ctx := context.Background()
+
+	if _, err := store.ForgetSessionsInState(ctx, storage.State("NOT_A_STATE")); !errors.Is(err, storage.ErrInvalid) {
+		t.Fatalf("unknown state = %v, want ErrInvalid", err)
+	}
+	// The empty state is not "all": a caller that lost its filter must not wipe
+	// the database.
+	if _, err := store.ForgetSessionsInState(ctx, storage.State("")); !errors.Is(err, storage.ErrInvalid) {
+		t.Fatalf("empty state = %v, want ErrInvalid", err)
+	}
+	var nilStore *storage.Store
+	if _, err := nilStore.ForgetSessionsInState(ctx, storage.StatePermanentlyFailed); !errors.Is(err, storage.ErrClosed) {
+		t.Fatalf("nil store = %v, want ErrClosed", err)
+	}
+}
+
+// TestCountForgetHistoryReportsWithoutDeleting backs the `--dry-run` preview: it
+// asks what a forget would take and must change nothing.
+func TestCountForgetHistoryReportsWithoutDeleting(t *testing.T) {
+	store := newStore(t)
+	ctx := context.Background()
+	const id = "88888888-1111-4111-8111-888888888888"
+	seedPopulatedSession(t, store, id)
+
+	counts, err := store.CountForgetHistory(ctx, id)
+	if err != nil {
+		t.Fatalf("CountForgetHistory: %v", err)
+	}
+	if counts.Attempts != 1 || counts.Transitions == 0 || counts.UsageLimits != 1 || counts.Notifications != 1 {
+		t.Errorf("counts = %+v, want the seeded attempt, transitions, usage limit and notification", counts)
+	}
+	if !counts.Scheduled {
+		t.Error("counts.Scheduled = false, want true: a pending wait was seeded")
+	}
+	if _, err := store.GetSession(ctx, id); err != nil {
+		t.Fatalf("the session was removed by counting it: %v", err)
+	}
+
+	if _, err := store.CountForgetHistory(ctx, "  "); !errors.Is(err, storage.ErrInvalid) {
+		t.Errorf("empty id = %v, want ErrInvalid", err)
+	}
+	var nilStore *storage.Store
+	if _, err := nilStore.CountForgetHistory(ctx, id); !errors.Is(err, storage.ErrClosed) {
+		t.Errorf("nil store = %v, want ErrClosed", err)
+	}
+}

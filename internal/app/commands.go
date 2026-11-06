@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -211,6 +212,8 @@ func (a *App) cmdSessions(ctx context.Context, args []string) error {
 			return a.inspectSession(ctx, "sessions status", rest)
 		case subcommandDelete:
 			return a.cmdSessionsDelete(ctx, rest)
+		case subcommandClear:
+			return a.cmdSessionsClear(ctx, rest)
 		}
 	}
 
@@ -538,10 +541,11 @@ func (a *App) inspectSession(ctx context.Context, command string, args []string)
 const (
 	subcommandStatus = "status"
 	subcommandDelete = "delete"
+	subcommandClear  = "clear"
 )
 
 // sessionsUsage is the documented form of the sessions command.
-const sessionsUsage = "sessions [--all] [--state STATE]... [--limit N] | sessions status <session-id> | sessions delete <session-id>"
+const sessionsUsage = "sessions [--all] [--state STATE]... [--limit N] | sessions status <session-id> | sessions delete <session-id> | sessions clear [--dry-run]"
 
 // sessionsSubcommand finds the subcommand in a `ccresu sessions` argument list.
 //
@@ -593,7 +597,7 @@ func withoutWord(args []string, index int) []string {
 
 // isSessionsSubcommand reports whether word names a `ccresu sessions` subcommand.
 func isSessionsSubcommand(word string) bool {
-	return word == subcommandStatus || word == subcommandDelete
+	return word == subcommandStatus || word == subcommandDelete || word == subcommandClear
 }
 
 // sessionsFlagTakesValue reports whether a flag argument consumes the next
@@ -691,6 +695,145 @@ func (a *App) reportAlreadyDeleted(id string, tombstone storage.DeletedSession) 
 	}
 	fmt.Fprintf(a.stdout, "session %s: already deleted at %s; nothing to do (undo with 'ccresu enable %s')\n",
 		id, formatTime(tombstone.DeletedAt, time.UTC), id)
+	return nil
+}
+
+// cmdSessionsClear forgets every PERMANENTLY_FAILED session at once.
+//
+// It exists because a permanently failed session stays enabled: it gave up, but
+// nothing switched it off, so it keeps appearing in a bare `ccresu` listing with
+// nothing an operator can do to it except reset or delete it one at a time. A
+// sweep of them is therefore the same operation `sessions delete` performs,
+// applied to every session in that one state, with the same tombstone so
+// discovery cannot bring them back.
+//
+// It is deliberately not generalised over states: PERMANENTLY_FAILED is the only
+// state that is terminal, enabled, and impossible for the daemon to act on, so it
+// is the only one where "clear them all" cannot throw away work in progress.
+func (a *App) cmdSessionsClear(ctx context.Context, args []string) error {
+	const command = "sessions clear"
+	fs := a.flags(command, command+" [--dry-run]")
+	dryRun := fs.Bool("dry-run", false, "report what would be cleared without deleting anything")
+	if err := a.parseFlags(fs, args); err != nil {
+		return err
+	}
+	if rest := fs.Args(); len(rest) > 0 {
+		return usagef("%s takes no arguments, got %q (use 'sessions delete <session-id>' to remove one session)", command, rest[0])
+	}
+
+	rt, release, err := a.openRuntime(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	var cleared []storage.ForgetResult
+	if *dryRun {
+		sessions, err := rt.Store.ListSessions(ctx, storage.SessionFilter{
+			States: []storage.State{storage.StatePermanentlyFailed},
+		})
+		if err != nil {
+			return fmt.Errorf("%s: list %s sessions: %w", command, storage.StatePermanentlyFailed, err)
+		}
+		for _, session := range sessions {
+			// The dry run reports the session, not a deletion: DeletedAt is left
+			// zero so nothing downstream can claim it happened.
+			preview := storage.ForgetResult{DeletedSession: storage.DeletedSession{
+				ID:             session.ID,
+				ProjectPath:    session.ProjectPath,
+				TranscriptPath: session.TranscriptPath,
+				State:          session.State,
+			}}
+			// The counts are what the sweep would take, asked for rather than
+			// assumed: a preview of zeroes would understate the decision.
+			counts, countErr := rt.Store.CountForgetHistory(ctx, session.ID)
+			if countErr != nil {
+				return fmt.Errorf("%s: count the history of %s: %w", command, session.ID, countErr)
+			}
+			preview.Removed = counts
+			cleared = append(cleared, preview)
+		}
+	} else {
+		cleared, err = rt.Store.ForgetSessionsInState(ctx, storage.StatePermanentlyFailed)
+		if err != nil {
+			return fmt.Errorf("%s: %w", command, err)
+		}
+	}
+
+	totals := storage.ForgetCounts{}
+	pendingWait := false
+	for _, result := range cleared {
+		totals.Attempts += result.Removed.Attempts
+		totals.Transitions += result.Removed.Transitions
+		totals.UsageLimits += result.Removed.UsageLimits
+		totals.Notifications += result.Removed.Notifications
+		pendingWait = pendingWait || result.Removed.Scheduled
+	}
+
+	if a.json {
+		sessions := make([]map[string]any, 0, len(cleared))
+		for _, result := range cleared {
+			entry := map[string]any{
+				"session_id": result.ID,
+				"project":    result.ProjectPath,
+				"transcript": result.TranscriptPath,
+				"state":      string(result.State),
+				"removed":    result.Removed,
+			}
+			if !*dryRun {
+				entry["deleted_at"] = result.DeletedAt.UTC().Format(time.RFC3339Nano)
+			}
+			sessions = append(sessions, entry)
+		}
+		return a.writeJSON(a.stdout, map[string]any{
+			"state":           string(storage.StatePermanentlyFailed),
+			"dry_run":         *dryRun,
+			"cleared":         len(cleared),
+			"sessions":        sessions,
+			"removed":         totals,
+			"pending_wait":    pendingWait,
+			"restore":         "ccresu enable <session-id>",
+			"transcript_kept": true,
+		})
+	}
+
+	if len(cleared) == 0 {
+		if *dryRun {
+			fmt.Fprintf(a.stdout, "no %s sessions to clear; nothing would be deleted\n", storage.StatePermanentlyFailed)
+			return nil
+		}
+		fmt.Fprintf(a.stdout, "no %s sessions to clear\n", storage.StatePermanentlyFailed)
+		return nil
+	}
+
+	if *dryRun {
+		fmt.Fprintf(a.stdout, "%d %s session(s) would be cleared\n", len(cleared), storage.StatePermanentlyFailed)
+	} else {
+		fmt.Fprintf(a.stdout, "%d %s session(s) cleared\n", len(cleared), storage.StatePermanentlyFailed)
+	}
+	rows := make([][]string, 0, len(cleared))
+	for _, result := range cleared {
+		rows = append(rows, []string{
+			shortID(result.ID),
+			truncateText(emptyDash(result.ProjectPath), 40),
+			strconv.Itoa(result.Removed.Attempts),
+			strconv.Itoa(result.Removed.Transitions),
+			strconv.Itoa(result.Removed.UsageLimits),
+			yesNo(result.Removed.Scheduled),
+		})
+	}
+	a.table(a.stdout, []string{"SESSION", "PROJECT", "ATTEMPTS", "TRANSITIONS", "USAGE LIMITS", "PENDING WAIT"}, rows)
+	fmt.Fprintln(a.stdout)
+	a.field(a.stdout, "attempts removed", totals.Attempts)
+	a.field(a.stdout, "transitions removed", totals.Transitions)
+	a.field(a.stdout, "usage limits removed", totals.UsageLimits)
+	a.field(a.stdout, "notifications removed", totals.Notifications)
+	a.field(a.stdout, "conversation", "kept: nothing under ~/.claude is touched")
+	if *dryRun {
+		fmt.Fprintln(a.stdout, "dry run: nothing was deleted; run 'ccresu sessions clear' to remove these sessions")
+		return nil
+	}
+	fmt.Fprintln(a.stdout, "discovery will skip them; undo one with 'ccresu enable <session-id>'")
 	return nil
 }
 

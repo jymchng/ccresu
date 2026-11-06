@@ -271,6 +271,15 @@ deliberately narrow:
   `ccresu enable <id>` makes the session recoverable again with whatever budget
   it has left.
 
+These sessions accumulate: the state is terminal, but the session stays enabled,
+so it keeps appearing in a bare `ccresu` listing with nothing the daemon will ever
+do to it. `ccresu sessions clear` is the sweep for that — it forgets every
+`PERMANENTLY_FAILED` session in one transaction, with a tombstone each, exactly as
+`ccresu sessions delete <id>` forgets one. It removes ccresu's records only; the
+conversations are never touched, and `ccresu enable <id>` undoes it one session at a
+time. `ccresu sessions clear --dry-run` prints the same report without deleting
+anything. See [the CLI reference](cli.md#clearing-every-permanently-failed-session).
+
 ## Proving it end to end
 
 This is not only asserted against fakes. `make e2e` runs

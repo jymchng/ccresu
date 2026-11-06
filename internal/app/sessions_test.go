@@ -342,3 +342,246 @@ func TestDiscoverySkipsADeletedSession(t *testing.T) {
 		t.Errorf("discovery resurrected the deleted session: %v", err)
 	}
 }
+
+// clearFixture seeds three sessions: two that gave up and one that is merely
+// disabled, so a clear that ignores its state filter is caught.
+func clearFixture(t *testing.T, h *harness) (failed [2]string, other string) {
+	t.Helper()
+	failed = [2]string{
+		"22222222-2222-4222-8222-222222222222",
+		"33333333-3333-4333-8333-333333333333",
+	}
+	for _, id := range failed {
+		seedFailedSession(t, h, id)
+	}
+	other = "44444444-4444-4444-8444-444444444444"
+	h.seedSession(t, other, func(s *storage.Session) {
+		s.State = storage.StateDisabled
+		s.Enabled = false
+	})
+	return failed, other
+}
+
+// TestSessionsClearRemovesEveryPermanentlyFailedSession is the point of the
+// command: the sessions that gave up stop appearing, and only those.
+func TestSessionsClearRemovesEveryPermanentlyFailedSession(t *testing.T) {
+	h := newHarness(t)
+	failed, other := clearFixture(t, h)
+	ctx := context.Background()
+
+	code, stdout, stderr := h.exec(t, "sessions", "clear")
+	if code != ExitOK {
+		t.Fatalf("sessions clear exit = %d, want %d (stderr %q)", code, ExitOK, stderr)
+	}
+	for _, want := range []string{
+		"2 " + string(storage.StatePermanentlyFailed) + " session(s) cleared",
+		"attempts removed",
+		"conversation",
+		"nothing under ~/.claude is touched",
+		"ccresu enable",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("stdout %q does not mention %q", stdout, want)
+		}
+	}
+
+	for _, id := range failed {
+		if _, err := h.store.GetSession(ctx, id); !errors.Is(err, storage.ErrNotFound) {
+			t.Errorf("session %s survived the clear: %v", id, err)
+		}
+		if attempts, err := h.store.ListAttempts(ctx, id, 0); err != nil || len(attempts) != 0 {
+			t.Errorf("attempts for %s survived the clear: %v, %v", id, attempts, err)
+		}
+	}
+	// The tombstone is what makes the clear stick: without it discovery would
+	// upsert every one of these sessions straight back.
+	tombstones, err := h.store.DeletedSessionIDs(ctx)
+	if err != nil {
+		t.Fatalf("DeletedSessionIDs: %v", err)
+	}
+	for _, id := range failed {
+		if _, gone := tombstones[id]; !gone {
+			t.Errorf("session %s was cleared without a tombstone", id)
+		}
+	}
+
+	// A session in another state is not the operator's target and must survive.
+	if _, err := h.store.GetSession(ctx, other); err != nil {
+		t.Errorf("clear removed the disabled session %s: %v", other, err)
+	}
+
+	code, _, stderr = h.exec(t, "sessions", "--all")
+	if code != ExitOK {
+		t.Fatalf("sessions --all exit = %d, want %d (stderr %q)", code, ExitOK, stderr)
+	}
+	for _, id := range failed {
+		if strings.Contains(h.stdout.String(), shortID(id)) {
+			t.Errorf("the cleared session %s is still listed: %q", id, h.stdout.String())
+		}
+	}
+}
+
+// TestSessionsClearWithNothingToClear succeeds and says so, so a cron entry or a
+// script does not have to treat "nothing to do" as a failure.
+func TestSessionsClearWithNothingToClear(t *testing.T) {
+	h := newHarness(t)
+	h.seedSession(t, canonicalSessionID, nil)
+
+	code, stdout, stderr := h.exec(t, "sessions", "clear")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want %d (stderr %q)", code, ExitOK, stderr)
+	}
+	if !strings.Contains(stdout, "no "+string(storage.StatePermanentlyFailed)+" sessions to clear") {
+		t.Errorf("stdout = %q, want it to say there was nothing to clear", stdout)
+	}
+	if _, err := h.store.GetSession(context.Background(), canonicalSessionID); err != nil {
+		t.Errorf("a non-failed session was removed: %v", err)
+	}
+}
+
+// TestSessionsClearDryRunDeletesNothing: the flag exists so the destructive path
+// can be looked at before it is taken.
+func TestSessionsClearDryRunDeletesNothing(t *testing.T) {
+	h := newHarness(t)
+	failed, _ := clearFixture(t, h)
+	ctx := context.Background()
+
+	code, stdout, stderr := h.exec(t, "sessions", "clear", "--dry-run")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want %d (stderr %q)", code, ExitOK, stderr)
+	}
+	if !strings.Contains(stdout, "would be cleared") {
+		t.Errorf("stdout = %q, want it to describe the sessions it would clear", stdout)
+	}
+	// The preview has to carry the real counts: a dry run that said "0 attempts"
+	// would understate what the sweep destroys.
+	if !strings.Contains(stdout, "attempts removed: 2") {
+		t.Errorf("stdout = %q, want the preview to count the two attempts", stdout)
+	}
+	for _, id := range failed {
+		if !strings.Contains(stdout, shortID(id)) {
+			t.Errorf("stdout = %q, want it to list %s", stdout, shortID(id))
+		}
+		if _, err := h.store.GetSession(ctx, id); err != nil {
+			t.Errorf("dry run removed session %s: %v", id, err)
+		}
+	}
+	tombstones, err := h.store.DeletedSessionIDs(ctx)
+	if err != nil {
+		t.Fatalf("DeletedSessionIDs: %v", err)
+	}
+	if len(tombstones) != 0 {
+		t.Errorf("dry run wrote tombstones: %v", tombstones)
+	}
+}
+
+func TestSessionsClearJSON(t *testing.T) {
+	h := newHarness(t)
+	failed, _ := clearFixture(t, h)
+
+	code, stdout, stderr := h.exec(t, "--json", "sessions", "clear")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want %d (stderr %q)", code, ExitOK, stderr)
+	}
+	var report map[string]any
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+		t.Fatalf("stdout is not JSON: %v (%q)", err, stdout)
+	}
+	if report["cleared"] != float64(2) {
+		t.Errorf("cleared = %v, want 2", report["cleared"])
+	}
+	if report["state"] != string(storage.StatePermanentlyFailed) {
+		t.Errorf("state = %v, want %q", report["state"], storage.StatePermanentlyFailed)
+	}
+	if report["transcript_kept"] != true {
+		t.Errorf("transcript_kept = %v, want true: the conversation is never touched", report["transcript_kept"])
+	}
+	sessions, ok := report["sessions"].([]any)
+	if !ok || len(sessions) != 2 {
+		t.Fatalf("sessions = %v, want two entries", report["sessions"])
+	}
+	seen := map[string]bool{}
+	for _, entry := range sessions {
+		record, ok := entry.(map[string]any)
+		if !ok {
+			t.Fatalf("session entry is not an object: %v", entry)
+		}
+		id, _ := record["session_id"].(string)
+		seen[id] = true
+		if _, ok := record["deleted_at"]; !ok {
+			t.Errorf("session entry has no deleted_at: %v", record)
+		}
+		removed, ok := record["removed"].(map[string]any)
+		if !ok {
+			t.Fatalf("removed is not an object: %v", record)
+		}
+		if removed["attempts"] != float64(1) {
+			t.Errorf("removed.attempts = %v, want 1", removed["attempts"])
+		}
+	}
+	for _, id := range failed {
+		if !seen[id] {
+			t.Errorf("report does not name the cleared session %s: %v", id, seen)
+		}
+	}
+	// The totals are the sum of the per-session counts, so a script can report
+	// both without adding anything up itself.
+	removed, ok := report["removed"].(map[string]any)
+	if !ok {
+		t.Fatalf("removed total is not an object: %v", report)
+	}
+	if removed["attempts"] != float64(2) {
+		t.Errorf("removed.attempts = %v, want 2", removed["attempts"])
+	}
+}
+
+// TestSessionsClearIsIdempotent: the second run finds nothing, which is a
+// success.
+func TestSessionsClearIsIdempotent(t *testing.T) {
+	h := newHarness(t)
+	clearFixture(t, h)
+
+	if code, _, stderr := h.exec(t, "sessions", "clear"); code != ExitOK {
+		t.Fatalf("first clear exit = %d (stderr %q)", code, stderr)
+	}
+	code, stdout, stderr := h.exec(t, "sessions", "clear")
+	if code != ExitOK {
+		t.Fatalf("second clear exit = %d, want %d (stderr %q)", code, ExitOK, stderr)
+	}
+	if !strings.Contains(stdout, "no "+string(storage.StatePermanentlyFailed)+" sessions to clear") {
+		t.Errorf("stdout = %q, want it to say there was nothing left to clear", stdout)
+	}
+}
+
+// TestSessionsClearUsage keeps a stray argument a usage error rather than a
+// silently different operation: `clear <id>` is not `delete <id>`.
+func TestSessionsClearUsage(t *testing.T) {
+	h := newHarness(t)
+	seedFailedSession(t, h, canonicalSessionID)
+
+	code, _, stderr := h.exec(t, "sessions", "clear", canonicalSessionID)
+	if code != ExitUsage {
+		t.Fatalf("sessions clear <id> exit = %d, want %d (stderr %q)", code, ExitUsage, stderr)
+	}
+	if !strings.Contains(stderr, "takes no arguments") {
+		t.Errorf("stderr = %q, want the no-arguments usage error", stderr)
+	}
+	if _, err := h.store.GetSession(context.Background(), canonicalSessionID); err != nil {
+		t.Errorf("a usage error removed the session anyway: %v", err)
+	}
+}
+
+// TestSessionsClearAcceptsFlagsBeforeTheSubcommand keeps `--json` usable where
+// people type it, exactly like the other sessions subcommands.
+func TestSessionsClearAcceptsFlagsBeforeTheSubcommand(t *testing.T) {
+	h := newHarness(t)
+	seedFailedSession(t, h, canonicalSessionID)
+
+	code, stdout, stderr := h.exec(t, "sessions", "--json", "clear")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want %d (stderr %q)", code, ExitOK, stderr)
+	}
+	if !json.Valid([]byte(stdout)) {
+		t.Errorf("stdout is not JSON: %q", stdout)
+	}
+}

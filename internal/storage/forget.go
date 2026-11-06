@@ -72,66 +72,181 @@ func (s *Store) ForgetSession(ctx context.Context, id string) (DeletedSession, F
 		return DeletedSession{}, ForgetCounts{}, fmt.Errorf("%w: session id is required", ErrInvalid)
 	}
 
-	deleted := DeletedSession{ID: id, DeletedAt: s.now().UTC()}
+	var deleted DeletedSession
 	var counts ForgetCounts
 	err := s.InTx(ctx, func(tx *sql.Tx) error {
-		row := tx.QueryRowContext(ctx, `
-			SELECT project_path, transcript_path, state FROM sessions WHERE id = ?`, id)
-		var state string
-		if err := row.Scan(&deleted.ProjectPath, &deleted.TranscriptPath, &state); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("%w: session %s", ErrNotFound, id)
+		var err error
+		deleted, counts, err = forgetSessionTx(ctx, tx, id, s.now().UTC())
+		return err
+	})
+	if err != nil {
+		return DeletedSession{}, ForgetCounts{}, err
+	}
+	return deleted, counts, nil
+}
+
+// ForgetResult is one session removed by a bulk clear: the tombstone that keeps
+// it gone plus the history that cascaded with it.
+type ForgetResult struct {
+	DeletedSession
+	// Removed is what the cascade took, so a bulk clear can report the same
+	// facts one delete reports instead of a bare count of sessions.
+	Removed ForgetCounts `json:"removed"`
+}
+
+// ForgetSessionsInState forgets every session currently in state, and records a
+// tombstone for each.
+//
+// It is the bulk form of ForgetSession and shares its transaction shape on
+// purpose: `ccresu sessions clear` and `ccresu sessions delete <id>` must not be
+// able to disagree about what "forgotten" means. One transaction covers the whole
+// set, so a failure halfway through leaves every session as it was rather than
+// clearing some of them and reporting an error for the rest.
+//
+// The state is checked here as well as in the CLI because this is the last place
+// that can see which rows it is about to delete: a caller that passed a live
+// state would silently remove sessions the daemon is still working on.
+func (s *Store) ForgetSessionsInState(ctx context.Context, state State) ([]ForgetResult, error) {
+	if s == nil || s.db == nil {
+		return nil, ErrClosed
+	}
+	if !state.Valid() {
+		return nil, fmt.Errorf("%w: unknown session state %q", ErrInvalid, state)
+	}
+
+	var results []ForgetResult
+	err := s.InTx(ctx, func(tx *sql.Tx) error {
+		// The ids are read first and the rows closed before anything is deleted:
+		// SQLite allows only one live statement per connection, and deleting while
+		// iterating the cursor that chose the victims would skip rows.
+		rows, err := tx.QueryContext(ctx, `SELECT id FROM sessions WHERE state = ? ORDER BY id`, string(state))
+		if err != nil {
+			return fmt.Errorf("list %s sessions: %w", state, err)
+		}
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return fmt.Errorf("scan %s session: %w", state, err)
 			}
-			return fmt.Errorf("read session %s: %w", id, err)
+			ids = append(ids, id)
 		}
-		deleted.State = State(state)
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("list %s sessions: %w", state, err)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("list %s sessions: %w", state, err)
+		}
 
-		// Count before the cascade, because afterwards there is nothing to count.
-		counts.Scheduled = true
-		for _, child := range []struct {
-			table string
-			into  *int
-		}{
-			{"recovery_attempts", &counts.Attempts},
-			{"state_transitions", &counts.Transitions},
-			{"usage_limits", &counts.UsageLimits},
-			{"notifications", &counts.Notifications},
-		} {
-			var n int
-			query := "SELECT COUNT(*) FROM " + child.table + " WHERE session_id = ?"
-			if err := tx.QueryRowContext(ctx, query, id).Scan(&n); err != nil {
-				return fmt.Errorf("count %s for %s: %w", child.table, id, err)
+		now := s.now().UTC()
+		for _, id := range ids {
+			deleted, counts, err := forgetSessionTx(ctx, tx, id, now)
+			if err != nil {
+				return err
 			}
-			*child.into = n
-		}
-		var schedules int
-		if err := tx.QueryRowContext(ctx,
-			"SELECT COUNT(*) FROM schedules WHERE session_id = ?", id).Scan(&schedules); err != nil {
-			return fmt.Errorf("count schedules for %s: %w", id, err)
-		}
-		counts.Scheduled = schedules > 0
-
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO deleted_sessions (id, project_path, transcript_path, state, deleted_at)
-			VALUES (?, ?, ?, ?, ?)
-			ON CONFLICT (id) DO UPDATE SET
-				project_path = excluded.project_path,
-				transcript_path = excluded.transcript_path,
-				state = excluded.state,
-				deleted_at = excluded.deleted_at`,
-			deleted.ID, deleted.ProjectPath, deleted.TranscriptPath, string(deleted.State),
-			timeToDB(deleted.DeletedAt),
-		); err != nil {
-			return fmt.Errorf("record the deletion of %s: %w", id, err)
-		}
-
-		if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, id); err != nil {
-			return fmt.Errorf("delete session %s: %w", id, err)
+			results = append(results, ForgetResult{DeletedSession: deleted, Removed: counts})
 		}
 		return nil
 	})
 	if err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+// CountForgetHistory reports what forgetting id would remove, without removing
+// it.
+//
+// `ccresu sessions clear --dry-run` uses it so the preview carries the same
+// numbers the real sweep will report; a preview that said "0 attempts" because it
+// never counted would be worse than no preview at all.
+func (s *Store) CountForgetHistory(ctx context.Context, id string) (ForgetCounts, error) {
+	if s == nil || s.db == nil {
+		return ForgetCounts{}, ErrClosed
+	}
+	if strings.TrimSpace(id) == "" {
+		return ForgetCounts{}, fmt.Errorf("%w: session id is required", ErrInvalid)
+	}
+	return countForgetHistory(ctx, s.db, id)
+}
+
+// rowQuerier is satisfied by both *sql.DB and *sql.Tx, so the counting that
+// belongs to a forget is written once and used from both.
+type rowQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// countForgetHistory counts the rows a forget would cascade over. It must run
+// before the delete: afterwards there is nothing left to count.
+func countForgetHistory(ctx context.Context, q rowQuerier, id string) (ForgetCounts, error) {
+	var counts ForgetCounts
+	for _, child := range []struct {
+		table string
+		into  *int
+	}{
+		{"recovery_attempts", &counts.Attempts},
+		{"state_transitions", &counts.Transitions},
+		{"usage_limits", &counts.UsageLimits},
+		{"notifications", &counts.Notifications},
+	} {
+		var n int
+		query := "SELECT COUNT(*) FROM " + child.table + " WHERE session_id = ?"
+		if err := q.QueryRowContext(ctx, query, id).Scan(&n); err != nil {
+			return ForgetCounts{}, fmt.Errorf("count %s for %s: %w", child.table, id, err)
+		}
+		*child.into = n
+	}
+	var schedules int
+	if err := q.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM schedules WHERE session_id = ?", id).Scan(&schedules); err != nil {
+		return ForgetCounts{}, fmt.Errorf("count schedules for %s: %w", id, err)
+	}
+	counts.Scheduled = schedules > 0
+	return counts, nil
+}
+
+// forgetSessionTx is the body of a forget: read the row, count what will
+// cascade, write the tombstone and delete the session. Every caller runs it
+// inside a transaction, so the tombstone and the deletion are always one step.
+func forgetSessionTx(ctx context.Context, tx *sql.Tx, id string, at time.Time) (DeletedSession, ForgetCounts, error) {
+	deleted := DeletedSession{ID: id, DeletedAt: at}
+	var counts ForgetCounts
+
+	row := tx.QueryRowContext(ctx, `
+		SELECT project_path, transcript_path, state FROM sessions WHERE id = ?`, id)
+	var state string
+	if err := row.Scan(&deleted.ProjectPath, &deleted.TranscriptPath, &state); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return DeletedSession{}, ForgetCounts{}, fmt.Errorf("%w: session %s", ErrNotFound, id)
+		}
+		return DeletedSession{}, ForgetCounts{}, fmt.Errorf("read session %s: %w", id, err)
+	}
+	deleted.State = State(state)
+
+	// Count before the cascade, because afterwards there is nothing to count.
+	counts, err := countForgetHistory(ctx, tx, id)
+	if err != nil {
 		return DeletedSession{}, ForgetCounts{}, err
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO deleted_sessions (id, project_path, transcript_path, state, deleted_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO UPDATE SET
+			project_path = excluded.project_path,
+			transcript_path = excluded.transcript_path,
+			state = excluded.state,
+			deleted_at = excluded.deleted_at`,
+		deleted.ID, deleted.ProjectPath, deleted.TranscriptPath, string(deleted.State),
+		timeToDB(deleted.DeletedAt),
+	); err != nil {
+		return DeletedSession{}, ForgetCounts{}, fmt.Errorf("record the deletion of %s: %w", id, err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, id); err != nil {
+		return DeletedSession{}, ForgetCounts{}, fmt.Errorf("delete session %s: %w", id, err)
 	}
 	return deleted, counts, nil
 }
