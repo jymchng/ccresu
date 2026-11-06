@@ -263,30 +263,37 @@ func toNotificationDTO(notification storage.Notification) notificationDTO {
 }
 
 // verificationDTO is the wire form of the resume proof.
+//
+// The field used to be called session_id_preserved, and it was a lie twice over
+// once resumes became background dispatches: the id is not preserved (a
+// background agent continues the conversation under its own id) and what the
+// verifier actually proves is that the job reported a continuation whose
+// transcript grew. The key is renamed rather than deprecated because nothing
+// reads it but ccresu's own tests.
 type verificationDTO struct {
-	SessionIDPreserved bool     `json:"session_id_preserved"`
-	TranscriptGrew     bool     `json:"transcript_grew"`
-	Proven             bool     `json:"proven"`
-	LinesBefore        int64    `json:"lines_before"`
-	LinesAfter         int64    `json:"lines_after"`
-	SizeBefore         int64    `json:"size_before"`
-	SizeAfter          int64    `json:"size_after"`
-	Running            bool     `json:"running"`
-	Notes              []string `json:"notes,omitempty"`
+	ContinuationConfirmed bool     `json:"continuation_confirmed"`
+	TranscriptGrew        bool     `json:"transcript_grew"`
+	Proven                bool     `json:"proven"`
+	LinesBefore           int64    `json:"lines_before"`
+	LinesAfter            int64    `json:"lines_after"`
+	SizeBefore            int64    `json:"size_before"`
+	SizeAfter             int64    `json:"size_after"`
+	Running               bool     `json:"running"`
+	Notes                 []string `json:"notes,omitempty"`
 }
 
 // toVerificationDTO converts a verification result.
 func toVerificationDTO(verification recovery.Verification) verificationDTO {
 	return verificationDTO{
-		SessionIDPreserved: verification.ContinuationConfirmed,
-		TranscriptGrew:     verification.TranscriptGrew,
-		Proven:             verification.Proven,
-		LinesBefore:        verification.LinesBefore,
-		LinesAfter:         verification.LinesAfter,
-		SizeBefore:         verification.SizeBefore,
-		SizeAfter:          verification.SizeAfter,
-		Running:            verification.Running,
-		Notes:              verification.Notes,
+		ContinuationConfirmed: verification.ContinuationConfirmed,
+		TranscriptGrew:        verification.TranscriptGrew,
+		Proven:                verification.Proven,
+		LinesBefore:           verification.LinesBefore,
+		LinesAfter:            verification.LinesAfter,
+		SizeBefore:            verification.SizeBefore,
+		SizeAfter:             verification.SizeAfter,
+		Running:               verification.Running,
+		Notes:                 verification.Notes,
 	}
 }
 

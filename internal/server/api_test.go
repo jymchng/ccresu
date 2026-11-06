@@ -284,7 +284,7 @@ func TestRecoverEndpoint(t *testing.T) {
 	if !body.Resumed {
 		t.Errorf("resumed = false: %+v", body)
 	}
-	if !body.Verification.Proven || !body.Verification.SessionIDPreserved || !body.Verification.TranscriptGrew {
+	if !body.Verification.Proven || !body.Verification.ContinuationConfirmed || !body.Verification.TranscriptGrew {
 		t.Errorf("verification = %+v", body.Verification)
 	}
 	if body.State != string(storage.StateResumed) {
@@ -307,6 +307,26 @@ func TestRecoverEndpoint(t *testing.T) {
 	}
 	if resumes != 1 {
 		t.Errorf("resume calls = %d, want 1", resumes)
+	}
+}
+
+// TestRecoverWireNamesTheContinuationNotTheSessionID pins the renamed proof key.
+//
+// Verification used to report session_id_preserved. That name stopped being true
+// when a resume became a background dispatch -- the conversation continues under
+// the job's own session id -- so the key is continuation_confirmed and the old
+// name must not come back.
+func TestRecoverWireNamesTheContinuationNotTheSessionID(t *testing.T) {
+	h := newHarness(t)
+	h.makeRecoverable(sessionID)
+
+	reply := h.do(http.MethodPost, "/sessions/"+sessionID+"/recover", nil).expect(http.StatusOK)
+	raw := string(reply.body)
+	if !strings.Contains(raw, `"continuation_confirmed":true`) {
+		t.Errorf("the proof is not reported as continuation_confirmed: %s", raw)
+	}
+	if strings.Contains(raw, "session_id_preserved") {
+		t.Errorf("the retired session_id_preserved key is still on the wire: %s", raw)
 	}
 }
 
