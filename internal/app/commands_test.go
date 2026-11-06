@@ -292,7 +292,8 @@ func TestSessionsShowsAContinuationColumnOnlyWhenOneExists(t *testing.T) {
 	}
 
 	if err := h.store.SetSessionContinuation(context.Background(),
-		canonicalSessionID, continuationSessionID); err != nil {
+		canonicalSessionID, continuationSessionID,
+		"/home/u/.claude/projects/-work-project/"+continuationSessionID+".jsonl"); err != nil {
 		t.Fatalf("SetSessionContinuation: %v", err)
 	}
 
@@ -343,7 +344,8 @@ func TestInspectNamesTheContinuationSession(t *testing.T) {
 	}
 
 	if err := h.store.SetSessionContinuation(context.Background(),
-		canonicalSessionID, continuationSessionID); err != nil {
+		canonicalSessionID, continuationSessionID,
+		"/home/u/.claude/projects/-work-project/"+continuationSessionID+".jsonl"); err != nil {
 		t.Fatalf("SetSessionContinuation: %v", err)
 	}
 

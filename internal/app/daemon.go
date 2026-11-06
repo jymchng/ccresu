@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -134,6 +135,7 @@ func (d *Daemon) Step(ctx context.Context) error {
 		run  func(context.Context) error
 	}{
 		{"discover", d.discover},
+		{"follow", d.followWorking},
 		{"detect", d.detect},
 		{"schedule", d.actOnSchedules},
 		{"recover", d.recoverPending},
@@ -199,11 +201,124 @@ func storageSession(session claude.Session) storage.Session {
 		Provider:        "claude",
 		Type:            kind,
 		PID:             session.PID,
+		Name:            session.Name,
 		Recoverable:     session.Recoverable,
 		Reason:          session.Reason,
 		TranscriptSize:  session.TranscriptSize,
 		TranscriptLines: session.TranscriptLines,
 	}
+}
+
+// followWorking polls the background job of every WORKING session and closes the
+// state out when the job is no longer working.
+//
+// This is the second half of a dispatched resume. The manager proves the
+// continuation and leaves the row WORKING while the job is still running; from
+// then on the question "is it still working?" is answered by the job itself,
+// read through `claude agents --json`. Keeping the poll here rather than in the
+// resume path means a daemon restart resumes following a job it never dispatched:
+// the job id is on the row.
+func (d *Daemon) followWorking(ctx context.Context) error {
+	rt := d.runtime
+	if rt.Provider == nil || rt.Store == nil {
+		return nil
+	}
+	sessions, err := rt.Store.ListSessions(ctx, storage.SessionFilter{
+		States: []storage.State{storage.StateWorking},
+	})
+	if err != nil {
+		return fmt.Errorf("list working sessions: %w", err)
+	}
+	var errs []error
+	for _, session := range sessions {
+		if err := d.followOne(ctx, session); err != nil {
+			errs = append(errs, fmt.Errorf("follow %s: %w", session.ID, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// followOne reads one session's job and records what it says.
+//
+// A job that is still working keeps the row WORKING and refreshes the session
+// name from the agents entry; a job that has stopped (or that the CLI no longer
+// lists, which means it will never report again) moves the row to RESUMED, which
+// is where detection picks the continuation transcript up for the next reset.
+func (d *Daemon) followOne(ctx context.Context, session storage.Session) error {
+	rt := d.runtime
+	jobID := strings.TrimSpace(session.JobID)
+	if jobID == "" {
+		// Nothing to poll. Saying so and closing the state is honest; leaving the
+		// row WORKING would promise polling that can never happen.
+		_, err := rt.Store.TransitionSession(ctx, session.ID, storage.StateResumed,
+			"the session is WORKING but no background job was recorded, so there is nothing to poll", 0)
+		return err
+	}
+
+	entry, jobErr := rt.Provider.BackgroundJob(ctx, jobID)
+	missing := errors.Is(jobErr, claude.ErrSessionNotFound)
+	if jobErr != nil && !missing {
+		return jobErr
+	}
+	if name := strings.TrimSpace(entry.Name); name != "" && name != session.Name {
+		if err := rt.Store.SetSessionName(ctx, session.ID, name); err != nil {
+			return err
+		}
+	}
+	if !missing && agentEntryWorking(entry) {
+		return nil
+	}
+
+	// The job has stopped working. Take the continuation id and its transcript
+	// from the entry once more: the daemon may have restarted after the dispatch,
+	// and this is the only moment the two facts are both available.
+	if err := d.recordContinuation(ctx, session, entry); err != nil {
+		return err
+	}
+	reason := fmt.Sprintf("the background job %s stopped working (state %s)", jobID, orUnknown(entry.State))
+	if missing {
+		reason = fmt.Sprintf("the background job %s is no longer listed, so it will not work again", jobID)
+	}
+	_, err := rt.Store.TransitionSession(ctx, session.ID, storage.StateResumed, reason, 0)
+	return err
+}
+
+// recordContinuation stores the session id and transcript the job continued the
+// conversation under, leaving the original transcript and its snapshot alone.
+func (d *Daemon) recordContinuation(ctx context.Context, session storage.Session, entry claude.AgentEntry) error {
+	continuationID := strings.TrimSpace(entry.SessionID)
+	if continuationID == "" {
+		return nil
+	}
+	path := session.ContinuationTranscriptPath
+	if continuationID != session.ContinuationSessionID || path == "" {
+		if status, err := d.runtime.Provider.GetSessionStatus(ctx, continuationID); err == nil {
+			if transcript := strings.TrimSpace(status.Transcript.Path); transcript != "" {
+				path = transcript
+			}
+		}
+	}
+	if continuationID == session.ContinuationSessionID && strings.TrimSpace(path) == strings.TrimSpace(session.ContinuationTranscriptPath) {
+		return nil
+	}
+	return d.runtime.Store.SetSessionContinuation(ctx, session.ID, continuationID, path)
+}
+
+// agentEntryWorking reports whether an agents entry says the job is still busy.
+//
+// "working" is the only state that means busy in the CLI's vocabulary; any other
+// value -- done, failed, stopped, or an unknown one from a newer CLI -- means the
+// job will not work again, and polling it further would only delay detection.
+func agentEntryWorking(entry claude.AgentEntry) bool {
+	return strings.EqualFold(strings.TrimSpace(entry.State), "working")
+}
+
+// orUnknown renders an empty job state honestly.
+func orUnknown(state string) string {
+	if strings.TrimSpace(state) == "" {
+		return "unknown"
+	}
+	return state
 }
 
 // detect scans transcripts for a usage limit and, on the first sighting, records
@@ -222,10 +337,14 @@ func (d *Daemon) detect(ctx context.Context) error {
 	}
 
 	enabled := true
+	// RESUMED is scanned too: after a resume the conversation continues in the
+	// continuation session, whose transcript may already hold the next usage
+	// limit. Skipping RESUMED would park that conversation until an operator
+	// intervened, which is exactly what this loop exists to avoid.
 	sessions, err := rt.Store.ListSessions(ctx, storage.SessionFilter{
 		Enabled:     &enabled,
 		Recoverable: &enabled,
-		States:      []storage.State{storage.StateDiscovered, storage.StateRunning},
+		States:      []storage.State{storage.StateDiscovered, storage.StateRunning, storage.StateResumed},
 	})
 	if err != nil {
 		return fmt.Errorf("list monitorable sessions: %w", err)
@@ -242,10 +361,18 @@ func (d *Daemon) detect(ctx context.Context) error {
 // detectIn inspects one session transcript.
 func (d *Daemon) detectIn(ctx context.Context, session storage.Session) error {
 	rt := d.runtime
-	if session.TranscriptPath == "" {
+	// A dispatched resume moves the conversation into a new session, whose
+	// transcript is a different file. That file is where the next reset time
+	// will be written, so it is read when it is known; the original transcript
+	// keeps the snapshot that proves growth and stays where it was.
+	path := strings.TrimSpace(session.ContinuationTranscriptPath)
+	if path == "" {
+		path = session.TranscriptPath
+	}
+	if path == "" {
 		return nil
 	}
-	entries, err := rt.Transcripts.TailEntries(session.TranscriptPath, d.tail)
+	entries, err := rt.Transcripts.TailEntries(path, d.tail)
 	if err != nil {
 		// A transcript that vanished is normal: Claude Code rewrites them. It is
 		// not a reason to stop looking at every other session.

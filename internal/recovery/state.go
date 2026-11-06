@@ -27,6 +27,7 @@ const (
 	StateCheckingSession    = storage.StateCheckingSession
 	StateCheckingLimit      = storage.StateCheckingLimit
 	StateResuming           = storage.StateResuming
+	StateWorking            = storage.StateWorking
 	StateResumed            = storage.StateResumed
 	StateRetryWait          = storage.StateRetryWait
 	StateCompleted          = storage.StateCompleted
@@ -66,11 +67,11 @@ var ErrInvalidTransition = errors.New("recovery: invalid state transition")
 // continue the conversation. That is a fact about the session, not a budget.
 var transitions = map[State]map[State]struct{}{
 	StateDiscovered: {
-		StateRunning:           {},
-		StateCheckingSession:   {}, // recover and retry start by checking the session
-		StateDisabled:          {},
-		StateUnrecoverable:     {},
-		StateDiscovered:        {}, // a fresh cycle for a budget spent before discovery
+		StateRunning:         {},
+		StateCheckingSession: {}, // recover and retry start by checking the session
+		StateDisabled:        {},
+		StateUnrecoverable:   {},
+		StateDiscovered:      {}, // a fresh cycle for a budget spent before discovery
 	},
 	StateRunning: {
 		StateUsageLimitDetected: {},
@@ -80,70 +81,91 @@ var transitions = map[State]map[State]struct{}{
 		StateDiscovered:         {},
 	},
 	StateUsageLimitDetected: {
-		StateWaitingForReset:   {},
-		StateUnrecoverable:     {},
-		StateUserTerminated:    {},
-		StateDisabled:          {},
-		StateDiscovered:        {},
+		StateWaitingForReset: {},
+		StateUnrecoverable:   {},
+		StateUserTerminated:  {},
+		StateDisabled:        {},
+		StateDiscovered:      {},
 	},
 	StateWaitingForReset: {
 		// A repeat entry is legal: an unknown-reset session re-enters the
 		// waiting state after every poll, and a restart re-observes the wait.
-		StateWaitingForReset:   {},
-		StateResetTimeReached:  {},
-		StateUnrecoverable:     {},
-		StateUserTerminated:    {},
-		StateDisabled:          {},
-		StateDiscovered:        {},
+		StateWaitingForReset:  {},
+		StateResetTimeReached: {},
+		StateUnrecoverable:    {},
+		StateUserTerminated:   {},
+		StateDisabled:         {},
+		StateDiscovered:       {},
 	},
 	StateResetTimeReached: {
-		StateCheckingSession:   {},
-		StateUnrecoverable:     {},
-		StateUserTerminated:    {},
-		StateDisabled:          {},
-		StateDiscovered:        {},
+		StateCheckingSession: {},
+		StateUnrecoverable:   {},
+		StateUserTerminated:  {},
+		StateDisabled:        {},
+		StateDiscovered:      {},
 	},
 	StateCheckingSession: {
-		StateCheckingLimit:     {},
-		StateResumed:           {}, // it resumed on its own; nothing to do
-		StateRetryWait:         {}, // the status check itself failed
-		StateUnrecoverable:     {},
-		StateUserTerminated:    {},
-		StateDisabled:          {},
-		StateDiscovered:        {},
+		StateCheckingLimit:  {},
+		StateResumed:        {}, // it resumed on its own; nothing to do
+		StateRetryWait:      {}, // the status check itself failed
+		StateUnrecoverable:  {},
+		StateUserTerminated: {},
+		StateDisabled:       {},
+		StateDiscovered:     {},
 	},
 	StateCheckingLimit: {
-		StateResuming:          {},
-		StateRetryWait:         {},
-		StateWaitingForReset:   {}, // the limit is still in force
-		StateUnrecoverable:     {},
-		StateUserTerminated:    {},
-		StateDisabled:          {},
-		StateDiscovered:        {},
+		StateResuming:        {},
+		StateRetryWait:       {},
+		StateWaitingForReset: {}, // the limit is still in force
+		StateUnrecoverable:   {},
+		StateUserTerminated:  {},
+		StateDisabled:        {},
+		StateDiscovered:      {},
 	},
 	StateResuming: {
-		StateResumed:           {},
-		StateRetryWait:         {},
-		StateDiscovered:        {},
-		StateUnrecoverable:     {},
-		StateUserTerminated:    {},
-		StateDisabled:          {},
+		// The dispatch answered with a job id, and that job is still working.
+		// WORKING is where the row waits for it: the job is real work in
+		// progress, which is neither "resumed" nor a failure.
+		StateWorking:        {},
+		StateResumed:        {},
+		StateRetryWait:      {},
+		StateDiscovered:     {},
+		StateUnrecoverable:  {},
+		StateUserTerminated: {},
+		StateDisabled:       {},
+	},
+	// WORKING is the state of a session whose background job has not stopped
+	// working yet. Everything a resume could end in is reachable from it,
+	// because the job's outcome is only known once it stops.
+	StateWorking: {
+		StateResumed:        {},
+		StateRetryWait:      {},
+		StateDiscovered:     {},
+		StateUnrecoverable:  {},
+		StateUserTerminated: {},
+		StateDisabled:       {},
 	},
 	StateRetryWait: {
-		StateCheckingSession:   {},
-		StateWaitingForReset:   {},
-		StateDiscovered:        {},
-		StateUserTerminated:    {},
-		StateDisabled:          {},
+		StateCheckingSession: {},
+		StateWaitingForReset: {},
+		StateDiscovered:      {},
+		StateUserTerminated:  {},
+		StateDisabled:        {},
 	},
 	// RESUMED is not strictly terminal — a resumed session can hit its limit
 	// again — but a second recovery is only legal after the session has been
 	// observed running and hit a new limit, never straight from RESUMED.
 	StateResumed: {
-		StateRunning:        {},
-		StateCompleted:      {},
-		StateUserTerminated: {},
-		StateDisabled:       {},
+		StateRunning: {},
+		// The cycle repeats: a resumed conversation keeps running under the
+		// continuation session, its transcript is read again, and the next usage
+		// limit it hits starts a new wait. Without these edges the loop would
+		// stop after one recovery.
+		StateUsageLimitDetected: {},
+		StateWaitingForReset:    {},
+		StateCompleted:          {},
+		StateUserTerminated:     {},
+		StateDisabled:           {},
 	},
 	StateCompleted:      {},
 	StateUserTerminated: {},
@@ -209,7 +231,11 @@ func Terminal(s State) bool {
 // being resumed again.
 func Settled(s State) bool {
 	switch s {
-	case StateResumed, StateCompleted, StateUserTerminated, StateDisabled, StateUnrecoverable:
+	// WORKING is not settled in the sense of "finished", but it is settled in the
+	// sense this function reports: automatic recovery must not touch it. The job
+	// is already working on the conversation, so issuing another resume would
+	// duplicate the work. The follow stage polls it, not the recovery engine.
+	case StateWorking, StateResumed, StateCompleted, StateUserTerminated, StateDisabled, StateUnrecoverable:
 		return true
 	default:
 		return false
@@ -222,7 +248,8 @@ func Settled(s State) bool {
 func Pending(s State) bool {
 	switch s {
 	case StateUsageLimitDetected, StateWaitingForReset, StateResetTimeReached,
-		StateCheckingSession, StateCheckingLimit, StateResuming, StateRetryWait:
+		StateCheckingSession, StateCheckingLimit, StateResuming, StateWorking,
+		StateRetryWait:
 		return true
 	default:
 		return false
@@ -238,6 +265,7 @@ func PendingStates() []State {
 		StateCheckingSession,
 		StateCheckingLimit,
 		StateResuming,
+		StateWorking,
 		StateRetryWait,
 	}
 }

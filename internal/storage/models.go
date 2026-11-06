@@ -19,12 +19,17 @@ const (
 	StateCheckingSession    State = "CHECKING_SESSION"
 	StateCheckingLimit      State = "CHECKING_LIMIT"
 	StateResuming           State = "RESUMING"
-	StateResumed            State = "RESUMED"
-	StateRetryWait          State = "RETRY_WAIT"
-	StateCompleted          State = "COMPLETED"
-	StateUserTerminated     State = "USER_TERMINATED"
-	StateDisabled           State = "DISABLED"
-	StateUnrecoverable      State = "UNRECOVERABLE"
+	// StateWorking is a session whose dispatched background job is still
+	// working. It exists so "the job is running" is a fact the database holds
+	// rather than something a goroutine remembers: a restarted daemon can poll a
+	// WORKING row until its job stops working, and an operator can see it.
+	StateWorking        State = "WORKING"
+	StateResumed        State = "RESUMED"
+	StateRetryWait      State = "RETRY_WAIT"
+	StateCompleted      State = "COMPLETED"
+	StateUserTerminated State = "USER_TERMINATED"
+	StateDisabled       State = "DISABLED"
+	StateUnrecoverable  State = "UNRECOVERABLE"
 )
 
 // allStates is the closed set of states accepted by the database. Validation in
@@ -38,6 +43,7 @@ var allStates = map[State]struct{}{
 	StateCheckingSession:    {},
 	StateCheckingLimit:      {},
 	StateResuming:           {},
+	StateWorking:            {},
 	StateResumed:            {},
 	StateRetryWait:          {},
 	StateCompleted:          {},
@@ -176,12 +182,27 @@ type Session struct {
 	// session was last seen, so a later resume can prove the conversation grew.
 	TranscriptSize  int64
 	TranscriptLines int64
+	// Name is the (sanitised) session name `claude agents --all --json` reports,
+	// so `ccresu sessions` can show what the operator calls the conversation
+	// instead of a UUID prefix. Empty means the CLI reported none or the session
+	// was only ever seen on disk.
+	Name string
 	// ContinuationSessionID is the session id the background job reported after
 	// the most recent proved resume. A dispatched resume continues the
 	// conversation under the job's own id, so this is normally a different id
 	// from ID and is where the conversation now lives. Empty means no
 	// continuation has been recorded.
 	ContinuationSessionID string
+	// ContinuationTranscriptPath is the transcript of that continuation session.
+	// It is where the conversation keeps growing, so detection reads it when it
+	// is set; TranscriptPath and the size/line snapshot stay on the original
+	// file, which is the one they measure. Empty means no continuation
+	// transcript is known.
+	ContinuationTranscriptPath string
+	// JobID is the background job the most recent resume created. It is the
+	// eight-hex handle `claude agents --json` resolves, kept so a WORKING session
+	// can be polled until its job stops working, even across a daemon restart.
+	JobID string
 	// RetryAt is the instant the wait ends for a session in RETRY_WAIT: the
 	// backoff ccresu computed when the attempt failed, written down rather than
 	// re-derived. Leaving RETRY_WAIT clears it, so a stale wait is never reported

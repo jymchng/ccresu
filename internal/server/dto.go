@@ -74,47 +74,59 @@ type sessionDTO struct {
 	ID             string `json:"id"`
 	ProjectPath    string `json:"project_path,omitempty"`
 	TranscriptPath string `json:"transcript_path,omitempty"`
+	// Name is the session name `claude agents --all --json` reports, empty when
+	// the CLI reported none.
+	Name string `json:"name,omitempty"`
 	// ContinuationSessionID is the session id the resumed conversation continued
 	// under, when a background job reported one. It is normally a different id
 	// from ID: the dispatch does not keep the id it was given.
-	ContinuationSessionID string    `json:"continuation_session_id,omitempty"`
-	Provider              string    `json:"provider,omitempty"`
-	Type                  string    `json:"type"`
-	PID                   int       `json:"pid,omitempty"`
-	PPID                  int       `json:"ppid,omitempty"`
-	State                 string    `json:"state"`
-	Enabled               bool      `json:"enabled"`
-	Recoverable           bool      `json:"recoverable"`
-	Reason                string    `json:"reason,omitempty"`
-	LastError             string    `json:"last_error,omitempty"`
-	TranscriptSize        int64     `json:"transcript_size"`
-	TranscriptLines       int64     `json:"transcript_lines"`
-	DiscoveredAt          time.Time `json:"discovered_at"`
-	LastSeenAt            time.Time `json:"last_seen_at"`
-	UpdatedAt             time.Time `json:"updated_at"`
+	ContinuationSessionID string `json:"continuation_session_id,omitempty"`
+	// ContinuationTranscriptPath is the transcript that continuation keeps
+	// growing, which is the file detection reads for the next reset time.
+	ContinuationTranscriptPath string `json:"continuation_transcript_path,omitempty"`
+	// JobID is the background job the most recent resume created, and the handle
+	// a WORKING session is polled by.
+	JobID           string    `json:"job_id,omitempty"`
+	Provider        string    `json:"provider,omitempty"`
+	Type            string    `json:"type"`
+	PID             int       `json:"pid,omitempty"`
+	PPID            int       `json:"ppid,omitempty"`
+	State           string    `json:"state"`
+	Enabled         bool      `json:"enabled"`
+	Recoverable     bool      `json:"recoverable"`
+	Reason          string    `json:"reason,omitempty"`
+	LastError       string    `json:"last_error,omitempty"`
+	TranscriptSize  int64     `json:"transcript_size"`
+	TranscriptLines int64     `json:"transcript_lines"`
+	DiscoveredAt    time.Time `json:"discovered_at"`
+	LastSeenAt      time.Time `json:"last_seen_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // toSessionDTO converts a stored session.
 func toSessionDTO(session storage.Session) sessionDTO {
 	return sessionDTO{
-		ID:                    session.ID,
-		ProjectPath:           session.ProjectPath,
-		TranscriptPath:        session.TranscriptPath,
-		ContinuationSessionID: session.ContinuationSessionID,
-		Provider:              session.Provider,
-		Type:                  string(session.Type),
-		PID:                   session.PID,
-		PPID:                  session.PPID,
-		State:                 string(session.State),
-		Enabled:               session.Enabled,
-		Recoverable:           session.Recoverable,
-		Reason:                session.Reason,
-		LastError:             session.LastError,
-		TranscriptSize:        session.TranscriptSize,
-		TranscriptLines:       session.TranscriptLines,
-		DiscoveredAt:          session.DiscoveredAt,
-		LastSeenAt:            session.LastSeenAt,
-		UpdatedAt:             session.UpdatedAt,
+		ID:                         session.ID,
+		ProjectPath:                session.ProjectPath,
+		TranscriptPath:             session.TranscriptPath,
+		Name:                       session.Name,
+		ContinuationSessionID:      session.ContinuationSessionID,
+		ContinuationTranscriptPath: session.ContinuationTranscriptPath,
+		JobID:                      session.JobID,
+		Provider:                   session.Provider,
+		Type:                       string(session.Type),
+		PID:                        session.PID,
+		PPID:                       session.PPID,
+		State:                      string(session.State),
+		Enabled:                    session.Enabled,
+		Recoverable:                session.Recoverable,
+		Reason:                     session.Reason,
+		LastError:                  session.LastError,
+		TranscriptSize:             session.TranscriptSize,
+		TranscriptLines:            session.TranscriptLines,
+		DiscoveredAt:               session.DiscoveredAt,
+		LastSeenAt:                 session.LastSeenAt,
+		UpdatedAt:                  session.UpdatedAt,
 	}
 }
 

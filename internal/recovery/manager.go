@@ -36,8 +36,12 @@ type Store interface {
 	SetSessionRetryAt(ctx context.Context, id string, at time.Time) error
 	SetSessionTranscriptMetrics(ctx context.Context, id, path string, size, lines int64) error
 	// SetSessionContinuation records the session id a background job continued
-	// the conversation under, so the row says where the conversation went.
-	SetSessionContinuation(ctx context.Context, id, continuationID string) error
+	// the conversation under, together with that continuation's transcript, so
+	// the row says where the conversation went.
+	SetSessionContinuation(ctx context.Context, id, continuationID, transcriptPath string) error
+	// SetSessionJob records the background job a resume created, so a WORKING
+	// session can be polled -- including after a restart.
+	SetSessionJob(ctx context.Context, id, jobID string) error
 	StartAttempt(ctx context.Context, sessionID string, usageLimitID int64, command string) (storage.RecoveryAttempt, error)
 	FinishAttempt(ctx context.Context, attemptID int64, result storage.AttemptResult) (storage.RecoveryAttempt, error)
 	CountAttempts(ctx context.Context, sessionID string) (int, error)
@@ -463,8 +467,19 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 			VerificationFailedError(sessionID, verification))
 	}
 
+	// A job that is still working when the verifier's patience runs out is not a
+	// failed resume: the dispatch is real and the conversation is being continued
+	// right now. The row enters WORKING, where the daemon polls the job until it
+	// stops, instead of claiming RESUMED for work that has not finished.
+	finalState := StateResumed
+	finalReason := "the original session resumed and the conversation grew"
+	if strings.EqualFold(strings.TrimSpace(verification.JobState), "working") {
+		finalState = StateWorking
+		finalReason = fmt.Sprintf("the background job %s is still working on the continuation", result.JobID)
+	}
+
 	finished, err := m.store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
-		State:                 StateResumed,
+		State:                 finalState,
 		Success:               true,
 		Output:                truncate(summaryOf(result, verification)),
 		SessionIDVerified:     boolPtr(verification.ContinuationConfirmed),
@@ -478,19 +493,25 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 	outcome.Attempt = finished
 	outcome.Verification = verification
 
-	// The conversation now lives under the id the job reported. Recording it on
-	// the session is what lets the next cycle (and the operator, through
-	// `inspect` and `sessions`) find the right transcript: the id ccresu tracks
-	// is the one that was resumed, and it will never answer again.
+	// The job id is the handle `claude agents --json` resolves, so it is what a
+	// later pass polls when the row is WORKING.
+	if err := m.store.SetSessionJob(ctx, sessionID, result.JobID); err != nil {
+		m.log.Warn("record background job", "session", sessionID, "error", err)
+	}
+	// The conversation now lives under the id the job reported, in its own
+	// transcript. Recording both is what lets the next cycle (detection) and the
+	// operator (through `inspect` and `sessions`) find the conversation that is
+	// actually growing: the id ccresu tracks is the one that was resumed, and it
+	// will never answer again.
 	if err := m.store.SetSessionContinuation(ctx, sessionID,
-		verification.ContinuationSessionID); err != nil {
+		verification.ContinuationSessionID, verification.ContinuationTranscriptPath); err != nil {
 		m.log.Warn("record continuation session", "session", sessionID, "error", err)
 	}
 	m.recordTranscriptMetrics(ctx, sessionID, baseline, verification)
 	if err := m.store.SetSessionError(ctx, sessionID, ""); err != nil {
 		m.log.Warn("clear session error", "session", sessionID, "error", err)
 	}
-	if err := state.move(StateResumed, "the original session resumed and the conversation grew", attempt.ID); err != nil {
+	if err := state.move(finalState, finalReason, attempt.ID); err != nil {
 		return Outcome{SessionID: sessionID, State: state.current}, err
 	}
 	outcome.State = state.current

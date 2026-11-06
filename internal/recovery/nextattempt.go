@@ -46,6 +46,11 @@ const (
 	ReasonTerminated = "session was terminated"
 	// ReasonInFlight is reported while a recovery is actually running.
 	ReasonInFlight = "recovery in progress"
+	// ReasonWorking is reported while the dispatched background job is still
+	// working on the continuation. No instant is promised because none is
+	// computed: the daemon re-reads the job on every pass and stops polling as
+	// soon as it is no longer working.
+	ReasonWorking = "the background job is still working; the daemon checks it every pass"
 	// ReasonNoSchedule is reported when a session is waiting but the row that
 	// holds the instant is missing, which means the store lost it.
 	ReasonNoSchedule = "waiting for the reset but no schedule is stored"
@@ -91,6 +96,8 @@ func NextAttemptFor(session storage.Session, sched *storage.Schedule, now time.T
 		return NextAttempt{Reason: ReasonRediscovered}
 	case storage.StateUnrecoverable:
 		return NextAttempt{Reason: ReasonUnrecoverable}
+	case storage.StateWorking:
+		return NextAttempt{Reason: ReasonWorking}
 	case storage.StateResumed:
 		return NextAttempt{Reason: ReasonResumed}
 	case storage.StateCompleted:

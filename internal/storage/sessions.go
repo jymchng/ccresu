@@ -14,7 +14,7 @@ import (
 const sessionColumns = `id, project_path, transcript_path, provider, session_type,
 	pid, ppid, process_start_time, state, enabled, recoverable, reason, last_error,
 	transcript_size, transcript_lines, retry_at, discovered_at, last_seen_at, updated_at,
-	continuation_session_id`
+	continuation_session_id, name, continuation_transcript_path, job_id`
 
 // SessionFilter narrows a session query. Zero values mean "no constraint".
 type SessionFilter struct {
@@ -74,7 +74,7 @@ func (s *Store) UpsertSession(ctx context.Context, session Session) (bool, error
 	err := s.InTx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `
 			INSERT INTO sessions (`+sessionColumns+`)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (id) DO NOTHING`,
 			session.ID, session.ProjectPath, session.TranscriptPath, session.Provider,
 			string(session.Type), session.PID, session.PPID, int64(session.ProcessStartTime),
@@ -82,7 +82,8 @@ func (s *Store) UpsertSession(ctx context.Context, session Session) (bool, error
 			session.Reason, session.LastError, session.TranscriptSize, session.TranscriptLines,
 			timePtrToDB(session.RetryAt), timeToDB(session.DiscoveredAt),
 			timeToDB(session.LastSeenAt), timeToDB(session.UpdatedAt),
-			session.ContinuationSessionID,
+			session.ContinuationSessionID, session.Name, session.ContinuationTranscriptPath,
+			session.JobID,
 		)
 		if err != nil {
 			return fmt.Errorf("insert session %s: %w", session.ID, err)
@@ -102,12 +103,14 @@ func (s *Store) UpsertSession(ctx context.Context, session Session) (bool, error
 				pid = ?, ppid = ?, process_start_time = ?,
 				recoverable = ?, reason = ?,
 				transcript_size = ?, transcript_lines = ?,
+				name = ?,
 				last_seen_at = ?, updated_at = ?
 			WHERE id = ?`,
 			session.ProjectPath, session.TranscriptPath, session.Provider, string(session.Type),
 			session.PID, session.PPID, int64(session.ProcessStartTime),
 			boolToInt(session.Recoverable), session.Reason,
 			session.TranscriptSize, session.TranscriptLines,
+			session.Name,
 			timeToDB(session.LastSeenAt), timeToDB(session.UpdatedAt), session.ID)
 		if err != nil {
 			return fmt.Errorf("update session %s: %w", session.ID, err)
@@ -417,19 +420,74 @@ func (s *Store) SetSessionTranscriptMetrics(ctx context.Context, id, path string
 // went, and what lets the next discovery pass read the right transcript instead
 // of the abandoned one. An empty id clears the record, which is what a probe that
 // found no continuation should do rather than leaving a stale id behind.
-func (s *Store) SetSessionContinuation(ctx context.Context, id, continuationID string) error {
+func (s *Store) SetSessionContinuation(ctx context.Context, id, continuationID, transcriptPath string) error {
 	if s == nil || s.db == nil {
 		return ErrClosed
 	}
 	result, err := s.db.ExecContext(ctx,
-		`UPDATE sessions SET continuation_session_id = ?, updated_at = ? WHERE id = ?`,
-		strings.TrimSpace(continuationID), timeToDB(s.now().UTC()), id)
+		`UPDATE sessions SET continuation_session_id = ?, continuation_transcript_path = ?, updated_at = ?
+		WHERE id = ?`,
+		strings.TrimSpace(continuationID), strings.TrimSpace(transcriptPath),
+		timeToDB(s.now().UTC()), id)
 	if err != nil {
 		return fmt.Errorf("set session %s continuation: %w", id, err)
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("set session %s continuation: %w", id, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("%w: session %s", ErrNotFound, id)
+	}
+	return nil
+}
+
+// SetSessionJob records the background job a resume created.
+//
+// The job id is what `claude agents --json` resolves, so it is the handle the
+// daemon uses to poll a WORKING session until its job stops working. It is kept
+// on the row rather than in memory because a restart must not orphan a job that
+// is still running: the next pass picks the session up from WORKING and reads the
+// job again. An empty id clears the handle, which is what a resume that never
+// returned one should leave behind.
+func (s *Store) SetSessionJob(ctx context.Context, id, jobID string) error {
+	if s == nil || s.db == nil {
+		return ErrClosed
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET job_id = ?, updated_at = ? WHERE id = ?`,
+		strings.TrimSpace(jobID), timeToDB(s.now().UTC()), id)
+	if err != nil {
+		return fmt.Errorf("set session %s job: %w", id, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set session %s job: %w", id, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("%w: session %s", ErrNotFound, id)
+	}
+	return nil
+}
+
+// SetSessionName records the name `claude agents --all --json` reports.
+//
+// The name is display data, so an empty value is an instruction to forget it
+// rather than an error: a session that no longer appears in the agents listing
+// must not keep a name that describes a conversation that has moved on.
+func (s *Store) SetSessionName(ctx context.Context, id, name string) error {
+	if s == nil || s.db == nil {
+		return ErrClosed
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET name = ?, updated_at = ? WHERE id = ?`,
+		strings.TrimSpace(name), timeToDB(s.now().UTC()), id)
+	if err != nil {
+		return fmt.Errorf("set session %s name: %w", id, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set session %s name: %w", id, err)
 	}
 	if affected == 0 {
 		return fmt.Errorf("%w: session %s", ErrNotFound, id)
@@ -498,6 +556,7 @@ func scanSession(row scanner) (Session, error) {
 		&state, &enabled, &recoverable, &session.Reason, &session.LastError,
 		&session.TranscriptSize, &session.TranscriptLines, &retryAt,
 		&discoveredAt, &lastSeenAt, &updatedAt, &session.ContinuationSessionID,
+		&session.Name, &session.ContinuationTranscriptPath, &session.JobID,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

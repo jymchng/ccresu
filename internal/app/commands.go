@@ -283,19 +283,27 @@ func (a *App) cmdSessions(ctx context.Context, args []string) error {
 		return nil
 	}
 	loc := a.displayLocation(rt)
-	// The CONTINUATION column is shown only when some visible row has one, so a
-	// listing of never-resumed sessions keeps the columns it has always had.
-	showContinuation := false
+	// NAME and CONTINUATION are shown only when some visible row has one, so a
+	// listing of unnamed, never-resumed sessions keeps the columns it has always
+	// had.
+	showName, showContinuation := false, false
 	for _, session := range sessions {
+		if strings.TrimSpace(session.Name) != "" {
+			showName = true
+		}
 		if session.ContinuationSessionID != "" {
 			showContinuation = true
-			break
 		}
 	}
-	headers := []string{"SESSION", "STATE", "NEXT ATTEMPT", "ENABLED", "RECOVERABLE", "PROJECT", "LAST SEEN", "NOTE"}
-	if showContinuation {
-		headers = []string{"SESSION", "STATE", "NEXT ATTEMPT", "CONTINUATION", "ENABLED", "RECOVERABLE", "PROJECT", "LAST SEEN", "NOTE"}
+	headers := []string{"SESSION"}
+	if showName {
+		headers = append(headers, "NAME")
 	}
+	headers = append(headers, "STATE", "NEXT ATTEMPT")
+	if showContinuation {
+		headers = append(headers, "CONTINUATION")
+	}
+	headers = append(headers, "ENABLED", "RECOVERABLE", "PROJECT", "LAST SEEN", "NOTE")
 	rows := make([][]string, 0, len(sessions))
 	for _, session := range sessions {
 		note := session.Reason
@@ -303,11 +311,14 @@ func (a *App) cmdSessions(ctx context.Context, args []string) error {
 			note = session.LastError
 		}
 		next := nextAttemptCell(recovery.NextAttemptFor(session, schedulePtr(scheduleBySession, session.ID), now), now)
-		row := []string{
-			shortID(session.ID),
+		row := []string{shortID(session.ID)}
+		if showName {
+			row = append(row, emptyDash(truncateText(session.Name, 32)))
+		}
+		row = append(row,
 			string(session.State),
 			next,
-		}
+		)
 		if showContinuation {
 			row = append(row, emptyDash(shortID(session.ContinuationSessionID)))
 		}
@@ -480,11 +491,20 @@ func (a *App) inspectSession(ctx context.Context, command string, args []string)
 		a.field(a.stdout, "last error", session.LastError)
 	}
 	a.field(a.stdout, "project", emptyDash(session.ProjectPath))
+	a.field(a.stdout, "name", emptyDash(session.Name))
 	a.field(a.stdout, "transcript", emptyDash(session.TranscriptPath))
+	if session.JobID != "" {
+		a.field(a.stdout, "job", session.JobID)
+	}
 	if session.ContinuationSessionID != "" {
 		// The conversation moved: the id ccresu tracks is the one that was
 		// resumed, and this is the session that is actually answering now.
 		a.field(a.stdout, "continuation", session.ContinuationSessionID)
+	}
+	if session.ContinuationTranscriptPath != "" {
+		// Detection reads this file for the next reset time, so an operator
+		// looking at "why has this session not moved" needs to see it.
+		a.field(a.stdout, "continuation transcript", session.ContinuationTranscriptPath)
 	}
 	a.field(a.stdout, "type", session.Type)
 	a.field(a.stdout, "last seen", formatTime(session.LastSeenAt, loc))
