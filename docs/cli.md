@@ -176,14 +176,20 @@ Code's background agent
 (`That session is running in the background (837eaaea) …`). ccresu treats that as
 "the conversation is busy", not as "the conversation is gone": inside the same
 attempt it runs `claude stop <job-id>`, then repeats the *identical*
-`claude -p --resume <session-id> …` once. `<job-id>` is the eight lower-case
-hex job name the refusal itself prints (`837eaaea`), not the session UUID:
-`claude stop` resolves job names only, and answers a UUID with
-`No job matching` and exit 1. The stop keeps the conversation — same
-session id, same transcript — and it goes to the log rather than to the attempt
-row, so `ccresu history` still shows one resume command. If the stop fails or the
-second resume refuses again, the original error is reported unchanged, exactly as
-before. See [recovery.md](recovery.md).
+`claude --resume <session-id> --bg …` dispatch once. `<job-id>` is the eight
+lower-case hex job name the refusal itself prints (`837eaaea`), not the session
+UUID: `claude stop` resolves job names only, and answers a UUID with
+`No job matching` and exit 1. The stop keeps the conversation, and it goes to the
+log rather than to the attempt row, so `ccresu history` still shows one dispatch
+command. If the stop fails or the second dispatch refuses again, the original
+error is reported unchanged, exactly as before.
+
+A dispatch succeeds by acknowledging, not by answering: `claude --resume <id> --bg`
+prints `backgrounded · <job-id>` and returns immediately. ccresu follows that job
+through `claude agents --all --json` until it stops working, records the session
+id the job continues as the row's **continuation**, and proves the resume by that
+continuation's transcript growth. Cost, turns and duration are not reported — the
+dispatch cannot report them. See [recovery.md](recovery.md).
 
 ### Stop a session from being resumed
 
@@ -198,8 +204,8 @@ $ ccresu enable  4d1f9c2a-...
 $ ccresu history 4d1f9c2a-... --limit 20
 ```
 
-Attempts come with the two proofs (session id preserved, transcript grew) and
-the transitions come with their recorded reason.
+Attempts come with the two proofs (`continuation_confirmed`, `transcript_grew`)
+and the transitions come with their recorded reason.
 
 ### Machine-readable output
 

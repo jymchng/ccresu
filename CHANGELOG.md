@@ -4,6 +4,37 @@ All notable changes to ccresu are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **A resume is a background dispatch.** `claude.ResumeArgs` is now
+  `claude --resume <session-id> --bg "<message>"` — no `-p`, no
+  `--output-format`. Print mode refuses `--bg` (`--bg and --print conflict:
+  --print never starts the interactive session that `claude agents` attaches
+  to`, exit 1, nothing on stdout), so the two forms are mutually exclusive and
+  only this one produces a job ccresu can follow. The dispatch returns at once
+  and prints `backgrounded · <job-id>`; that eight-hex name is what
+  `claude agents --all --json` and `claude stop` accept.
+- **The continuation is what gets verified, not the id that was asked for.** A
+  background job continues the conversation under its own session id, so
+  `session_id_preserved` is gone; the attempt row records that id as the
+  *continuation* and verification requires the continuation's own transcript to
+  grow before it records `RESUMED`. The API reports `continuation_confirmed`.
+- **A dispatched turn has its own state.** While the job runs the session is
+  `WORKING`, taken from the agents listing, and it stays there until the job
+  reports something else.
+- Cost, turns and duration are no longer recorded. `--output-format json` only
+  exists in print mode, and they are left empty rather than reported as zero.
+
+### Documented
+
+- [docs/recovery.md](docs/recovery.md#why-the-resume-no-longer-passes--p) carries
+  the probe that settled this, the dispatch that replaced the print-mode call,
+  and what a dispatched resume cannot report. `README.md`, `docs/cli.md`,
+  `docs/architecture.md`, `docs/security.md`, `docs/tutorial.md`,
+  `docs/deployment.md` and `docs/delivery-report.md` say the same thing.
+
 ## [0.4.1] - 2026-11-06
 
 ### Documented
@@ -17,7 +48,7 @@ All notable changes to ccresu are recorded here. The format follows
   `--output-format json`, the JSON result, the cost, and the proof that the same
   session id continued: the background job reports a **new** session id. Both
   transcripts, probed against Claude Code 2.1.223, are in
-  [docs/recovery.md](docs/recovery.md#why-the-resume-never-passes---bg), and the
+  [docs/recovery.md](docs/recovery.md#why-the-resume-no-longer-passes--p), and the
   refusal is also a row in [docs/troubleshooting.md](docs/troubleshooting.md).
 - `TestResumeArgsNeverPassBackground` pins the decision, so a background flag
   added to `claude.ResumeArgs` fails a test instead of failing the field, and the

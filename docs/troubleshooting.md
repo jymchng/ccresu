@@ -41,7 +41,7 @@ journalctl --user -u ccresu.service -n 100 --no-pager
 | `claude: unsupported claude code version` | The CLI is older than 2.0.0 (`claude.MinimumVersion`). Upgrade Claude Code. |
 | `claude: unrecognized claude code version` | `claude --version` printed something the parser does not know. Run it and compare with `2.1.223 (Claude Code)`. |
 | State `UNRECOVERABLE` with a session type in the reason | `claude agents --json` reported a type ccresu does not know how to resume. It is reported, never invented into a command. |
-| `--bg and --print conflict` in your shell | You combined `--bg` with `-p`. The CLI forbids it: `--print` never starts the session `claude agents` attaches to. ccresu never passes `--bg` for exactly this reason — drop `-p` if you want a background agent by hand, and expect a *new* session id and no JSON result. |
+| `--bg and --print conflict` in your shell | You combined `--bg` with `-p`. The CLI forbids it: `--print` never starts the session `claude agents` attaches to. ccresu passes `--bg` and never `-p`, for exactly this reason — drop `-p` if you want a background agent by hand, and expect a *new* session id for the continuation and no JSON result. |
 
 ## Detection and waiting
 
@@ -52,7 +52,7 @@ journalctl --user -u ccresu.service -n 100 --no-pager
 | An auth error, network error or cancellation was resumed | It cannot be: those are explicit non-classifications, and `COMPLETED`/`USER_TERMINATED` are settled. If you believe otherwise, check `ccresu history <id>` for what was actually classified. |
 | Reset time looks wrong | The stored instant is the phrase's own zone, not the host's. `ccresu inspect` prints the resolved instant, the zone and the original phrase. A message with no reset time uses the re-poll backoff (5m doubling to 30m), so the resume is later than the banner suggests — by design. |
 | Resume never happens, state stuck at `WAITING_FOR_RESET` | The schedule row is in the future, or `monitoring.enabled`/`claude.resume_enabled` is off. `ccresu status` prints the next due time. Restarting is safe: the wait is in the database. |
-| Resume happened but the state did not move to `RESUMED` | One of the two proofs failed. `ccresu history <id>` shows `session_id_verified` and `transcript_grew` per attempt: a mangled id is `claude: resumed session id did not match the requested session`; a silent transcript is `recovery: resume could not be verified`. |
+| Resume happened but the state did not move to `RESUMED` | One of the proofs failed. `ccresu history <id>` shows `continuation_confirmed` and `transcript_grew` per attempt, and the reason names which one broke: `the background job reported no continuation session id`, `the background job <job> is still working on the continuation` when the job never left `working`, or `the continuation transcript did not grow`. The attempt is reported as unverified, never as a success. |
 
 ## Notifications
 

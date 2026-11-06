@@ -15,13 +15,13 @@ exactly five interfaces:
 | Discover sessions | `claude agents --json`, with `--all` and `--cwd <path>` |
 | Session transcript | `~/.claude/projects/<slugified-cwd>/<session-id>.jsonl` |
 | Per-session environment | `~/.claude/session-env/<session-id>/` |
-| Resume the original session | `claude -p --resume <session-id> --output-format json "<message>"` |
+| Resume the original session | `claude --resume <session-id> --bg "<message>"`, dispatched into a background job |
 | Release a session still attached to a background agent | `claude stop <job-id>` (the eight-hex job name the refusal prints) |
 
 The resume vector is built in one place, `claude.ResumeArgs`, and is:
 
 ```go
-[]string{"-p", "--resume", sessionID, "--output-format", "json", message}
+[]string{"--resume", sessionID, "--bg", message}
 ```
 
 The stop vector is built in one place too, `claude.StopArgs`, and is:
@@ -52,12 +52,14 @@ already been refused because the session is still attached to a background agent
 (see [When the session is still attached to a background
 agent](#when-the-session-is-still-attached-to-a-background-agent)), it takes the
 job name and nothing else, and it is bounded by the query timeout rather than
-the resume timeout. The conversation survives it — the transcript, the session id
-and the project directory are untouched — so the resume that follows is the same
-`-p --resume` command with the same arguments.
+the resume timeout. The conversation survives it — the transcript and the project
+directory are untouched — so the resume that follows is the same
+`--resume <id> --bg <message>` dispatch with the same arguments.
 
-There is still no `--fork-session`, no new session id, no TTY, no keystroke
-injection into your terminal, and no other undocumented subcommand. The
+There is still no `--fork-session`, no TTY, no keystroke injection into your
+terminal, and no other undocumented subcommand. A dispatch does create a session
+id of its own for the continuation — a background agent always does — but that is
+the conversation continuing, recorded on the row, not a copy of it. The
 `--fork-session` prohibition is the reason `stop` was chosen at all: the CLI's own
 refusal offers `claude attach …`, `claude stop …` and `--fork-session`, and only
 `stop` keeps the promise that the *original* conversation continues. `attach`
@@ -67,10 +69,9 @@ never do. The message is limited to 8 KiB, must be non-empty, the session id of
 a resume is validated before anything is executed, and a `claude stop` target
 must be an eight-hex job name, so neither can be read as a flag or a path.
 
-### Why the resume never passes `--bg`
+### Why the resume no longer passes `-p`
 
-The interactive CLI can resume straight into a background agent. From your own
-shell that is a perfectly good thing to do:
+A resume is a **dispatch**, not a synchronous turn. ccresu runs
 
 ```console
 $ claude --resume 044e2a0a-b53b-471b-a24f-bf123bd7c3c7 --bg 'say OK'
@@ -81,8 +82,14 @@ backgrounded · d48ecad8
   claude stop d48ecad8      stop this session
 ```
 
-ccresu never does, and the reason is not taste: the CLI forbids the combination.
-`--bg` and `-p` are mutually exclusive (probed against Claude Code 2.1.223):
+and the process returns at once. The only thing it prints on stdout is the
+acknowledgement `backgrounded · <job-id>`, which is what `claude.Resume` parses;
+the job itself keeps running, and that eight-hex name is the handle ccresu
+follows.
+
+Print mode, the form that used to run the turn synchronously, cannot dispatch a
+job at all. `--bg` and `-p` are mutually exclusive (probed against Claude Code
+2.1.223):
 
 ```console
 $ claude -p --resume 044e2a0a-b53b-471b-a24f-bf123bd7c3c7 \
@@ -94,57 +101,39 @@ $ echo $?
 1
 ```
 
-Exit code 1, nothing on stdout. Adding `--bg` to `claude.ResumeArgs` would
-therefore turn every resume into a failure — and, because `describeRunError`
-reports a non-zero exit as `ErrCLIUnavailable`, into the kind of failure that is
-never retried.
+Exit code 1, nothing on stdout. `-p` is therefore gone, and with it the JSON
+result that used to carry the turn's outcome. Two things a dispatched resume
+**cannot** report:
 
-Dropping `-p` to satisfy the flag does not fix that; it trades the contract for
-it. The same probe, in the form the CLI suggests:
+- **Cost, turns and duration.** Without `--output-format json` there is no
+  `total_cost_usd`, no `num_turns`, no `duration_ms`, no `subtype` and no
+  `is_error`. They stay empty on the attempt row, deliberately: a zero would be a
+  measurement, and there was none.
+- **The id that answered being the id that was asked for.** The job continues the
+  conversation under an id of its own — the resume of `044e2a0a-…` above
+  produced `d48ecad8-ae57-413b-ba19-f9beac9062d4` — so that comparison cannot
+  even be evaluated. `ErrSessionNotPreserved` no longer applies on this path.
 
-```console
-$ claude --resume 044e2a0a-b53b-471b-a24f-bf123bd7c3c7 --bg 'say OK'
-$ claude agents --json
-[{"id":"d48ecad8","cwd":"/tmp/probe","kind":"background","startedAt":1793979825419,
-  "sessionId":"d48ecad8-ae57-413b-ba19-f9beac9062d4","name":"say OK","state":"working"}]
-```
-
-The job reports **`d48ecad8-ae57-413b-ba19-f9beac9062d4`**, not the
-`044e2a0a-…` that was resumed. Three things a recovery depends on are gone at
-once:
-
-- **No JSON result.** Without `--output-format json` there is no `result`, no
-  `is_error`, no `subtype`, no `duration_ms` and no `total_cost_usd`, so
-  `ParseResumeJSON` has nothing to map and the attempt can never be recorded as
-  verified.
-- **No proof the same conversation continued.** The dispatch answers with a new
-  session id, so the first half of the verification (the id that was asked for is
-  the id that answered) cannot even be evaluated. `ErrSessionNotPreserved` would
-  fire on every dispatch, and any transcript following would watch the wrong file.
-- **No outcome.** The process exits 0 before the turn runs. Whatever happens next
-  is only visible through `claude agents --json` and `claude logs`, after the
-  fact, and would have to be reconciled against the persisted state machine by a
-  poller.
-
-A resume is a synchronous, verified turn or it is not a resume, so the vector
-stays `-p … --output-format json`. `TestResumeArgsNeverPassBackground` pins that
-decision, so the absence of `--bg` is a tested fact rather than something a later
-reader has to infer. The background form is useful in your terminal — where you
-can watch the job and attach to it — not in a recovery the daemon owns and has to
-prove.
+What replaced them is stronger than a JSON blob: the job id is a handle ccresu
+can follow. `claude agents --all --json` reports the job, the session id it
+continues and its `state` — `working` while it runs, something else when it
+stops — and the continuation's own transcript grows as the turn produces work.
+Verification rests on those three facts, not on the exit code; see
+[Verification](#verification-proof-not-optimism). `TestResumeArgsExact` pins the
+exact vector, so the retired flag cannot quietly come back.
 
 ### Why the message is the last argument
 
 The prompt is a **positional** argument: no flag introduces it. Position is
 therefore the only thing that says which invocation it belongs to, and the
-documented form is `claude -p --resume <session-id> <prompt>` — the prompt comes
-after the session it is being said to. ccresu keeps it last, after the two flags
-that qualify the invocation, and builds the vector in exactly one place:
+documented form is `claude --resume <session-id> --bg <message>` — the message
+comes after the session it is being said to, and after the flag that says how the
+turn runs. ccresu keeps it last and builds the vector in exactly one place:
 
 ```go
 // internal/claude/cli.go
 func ResumeArgs(sessionID, message string) []string {
-	return []string{"-p", "--resume", sessionID, "--output-format", "json", message}
+	return []string{"--resume", sessionID, "--bg", message}
 }
 ```
 
@@ -157,7 +146,7 @@ The audit trail has to describe the same command. The attempt row's `command`
 column is rendered by `commandPreview` in `internal/recovery/manager.go`:
 
 ```text
-claude -p --resume <session-id> --output-format json <N-byte continuation message>
+claude --resume <session-id> --bg <N-byte continuation message>
 ```
 
 The placeholder `<message>` sits where the real message sits — last. It used to
@@ -219,8 +208,10 @@ DISCOVERED → RUNNING → USAGE_LIMIT_DETECTED → WAITING_FOR_RESET → RESET_
                                                                     ↓
                                                           CHECKING_SESSION → CHECKING_LIMIT
                                                                     ↓                ↓
-                                                                 RESUMING ──────→ RESUMED
-                                                                    ↓
+                                                                 RESUMING
+                                                                     ↓
+                                                                  WORKING ──→ RESUMED
+                                                                     ↓
                                                     RETRY_WAIT / DISCOVERED
 ```
 
@@ -238,14 +229,18 @@ edge is rejected with `ErrInvalidTransition`. The interesting ones:
 | `WAITING_FOR_RESET` | itself (unknown-reset re-poll or a restart), `RESET_TIME_REACHED`, `DISCOVERED`, `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED` |
 | `CHECKING_SESSION` | `CHECKING_LIMIT`, `RESUMED` (it resumed on its own), `RETRY_WAIT` (the status check itself failed), `DISCOVERED` |
 | `CHECKING_LIMIT` | `RESUMING`, `RETRY_WAIT`, `WAITING_FOR_RESET` (the limit is still in force), `DISCOVERED` |
-| `RESUMING` | `RESUMED`, `RETRY_WAIT`, `DISCOVERED` |
+| `RESUMING` | `WORKING` (the dispatch answered with a job id), `RESUMED`, `RETRY_WAIT`, `DISCOVERED`, `UNRECOVERABLE` |
+| `WORKING` | `RESUMED`, `RETRY_WAIT`, `DISCOVERED`, `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED` — the job's outcome is only known once it stops |
 | `RETRY_WAIT` | `CHECKING_SESSION`, `WAITING_FOR_RESET`, `DISCOVERED` |
 | `RESUMED` | `RUNNING`, `COMPLETED`, `USER_TERMINATED`, `DISABLED` — never straight back to `RESUMING` |
 
-`COMPLETED`, `USER_TERMINATED` and `UNRECOVERABLE` are terminal. `RESUMED`,
-`COMPLETED`, `USER_TERMINATED`, `DISABLED` and `UNRECOVERABLE` are **settled**:
-recovery refuses to touch them, so a finished conversation is never resumed
-again by a stray tick.
+`COMPLETED`, `USER_TERMINATED` and `UNRECOVERABLE` are terminal. `WORKING`,
+`RESUMED`, `COMPLETED`, `USER_TERMINATED`, `DISABLED` and `UNRECOVERABLE` are
+**settled**, in the sense recovery refuses to touch them: a finished
+conversation is never resumed again by a stray tick. For `WORKING` the reason is
+different — the job is already working on the conversation, so a second resume
+would duplicate the work; it is the follow stage that polls that row, not the
+recovery engine, and a restarted daemon picks it back up from the database.
 
 `RETRY_WAIT` is "this might work on the same schedule": retryable failures wait
 with exponential backoff plus jitter (`initial_delay` 30s, ×2, capped at
@@ -285,8 +280,8 @@ still permits automatic work has an edge to `DISCOVERED`.
 
 ## When the session is still attached to a background agent
 
-`claude -p --resume <session-id>` refuses outright when the same session is still
-held by the interactive CLI's background agent:
+`claude --resume <session-id> --bg "<message>"` refuses outright when the same
+session is still held by the interactive CLI's background agent:
 
 ```console
 Error: That session is running in the background (837eaaea). Run `claude attach
@@ -308,8 +303,8 @@ session's life. One attempt handles it, in three steps:
    is not stopped at all: the original error is reported instead of a guess. The
    stop is recorded
    in the log, never in the attempt row: `ccresu history` still shows the single
-   `claude -p --resume …` command that was run, not a command ccresu issued for
-   its own bookkeeping.
+   `claude --resume <id> --bg …` dispatch that was run, not a command ccresu
+   issued for its own bookkeeping.
 3. The *identical* resume is issued once more — same argument vector, same
    session id, same continuation message — and its result is the attempt's result.
 
@@ -320,9 +315,9 @@ The sequence, from the outside:
 
 | Step | What the CLI sees | What ccresu records |
 | --- | --- | --- |
-| 1 | `claude -p --resume <id> --output-format json "<message>"` — refused, session in the background | the attempt, with its single resume command as `command` |
+| 1 | `claude --resume <id> --bg "<message>"` — refused, session in the background | the attempt, with its single dispatch command as `command` |
 | 2 | `claude stop <job-id>` — eight hex characters, never the session UUID | a log line only: the attempt row still shows one resume |
-| 3 | the same resume, same arguments | the attempt's result, verification included |
+| 3 | the same dispatch, same arguments — acknowledged with `backgrounded · <job-id>` | the attempt's result, once the job is followed and the continuation proven |
 
 If the stop itself fails, or the second resume refuses again (or fails any other
 way), the **original** failure is returned untouched. Nothing loops, the
@@ -350,54 +345,59 @@ transcript, the session id and the audit trail are all untouched.
 
 This is not only asserted against fakes. `make e2e` runs
 `tests/scripts/background-resume-e2e.sh`, which builds the real binary and puts a
-stub `claude` on `PATH`. The stub keeps a background-agent marker, refuses the
-first `-p --resume` with the CLI's text above, clears the marker on `claude stop
-<job-id>`, and then returns a JSON result with the same `session_id` after growing
-the transcript. The stub resolves its argument the way the real CLI does — only
-an eight-hex job name it holds, anything else answered with `No job matching` and
-exit 1 — and the run asserts that the stop carried the job name and never the
-session UUID. Run against the pre-fix binary, that assertion is what fails. The run asserts that `ccresu recover <id>` exits 0 and ends `RESUMED`
-with the verification "proven: session id preserved and transcript grew", that
-the stub saw exactly *resume, stop, resume* with byte-identical resume arguments,
-and that `ccresu history` still records the single resume command.
+stub `claude` on `PATH`. The stub models the CLI as it behaves now:
+`--resume <id> --bg <message>` prints `backgrounded · <job-id>`, the job appears
+in `claude agents --all --json`, reporting `working` on its first read and `done`
+afterwards, and the job grows a transcript of its own — under a session id of its
+own, never the one that was resumed. The stub refuses the retired print-mode
+flags outright, so an argv drift fails the run instead of quietly taking a
+fallback.
 
-The same script with `--pre-fix` is the contrast, and it is the reason the fix
-exists:
+The stop fallback is still proven, because it still happens: a session attached
+to a background agent is refused at dispatch, ccresu stops that job by its
+eight-hex name — never the session UUID, which the stub answers with
+`No job matching` and exit 1, exactly as the real CLI does — and repeats a
+byte-identical dispatch.
 
-```bash
-make e2e                              # the fixed binary: every check passes
+The run then asserts what an operator cares about: `ccresu recover <id>` exits 0
+and ends `RESUMED`; `ccresu inspect` shows the job and the continuation the job
+reported, with the continuation's transcript path; `ccresu history` records the
+dispatch command, the continuation and the proof; and a second limit written into
+the continuation's own transcript is detected, planned and dispatched **at the
+continuation's id**, so the abandoned original id is not resumed again and the
+loop comes round.
 
-# the contrast, against the pre-fix commit (the script needs that binary):
-git worktree add /tmp/ccresu-prefix 00692e3
-(cd /tmp/ccresu-prefix && go build -o /tmp/ccresu-prefix/ccresu ./cmd/ccresu)
-tests/scripts/background-resume-e2e.sh --pre-fix /tmp/ccresu-prefix/ccresu
-```
-
-| Binary | `ccresu recover <id>` | Stub saw | Final state |
-| --- | --- | --- | --- |
-| before the fix (`00692e3`) | exits 1, reporting the refusal | one resume, no stop | `PERMANENTLY_FAILED` (that binary predates the state's removal) |
-| with the fix | exits 0, verification proven | resume, stop, resume | `RESUMED` |
-
-The second session in the same run is the one that cannot be resumed. It now ends
-in `DISCOVERED` with its attempt row, its reason and its transcript intact, and
-the script asserts that `ccresu reset` and `ccresu sessions clear` no longer
-exist (both exit 2 as unknown commands).
+The second session in the same run is the one that cannot be resumed. It ends in
+`DISCOVERED` with its attempt row, its reason and its transcript intact, and the
+script asserts that `ccresu reset` and `ccresu sessions clear` no longer exist
+(both exit 2 as unknown commands).
 
 ## Verification: proof, not optimism
 
-A resume that returns exit code 0 has not necessarily continued the
-conversation. The verifier therefore requires **both**:
+A dispatch that prints `backgrounded · <job-id>` has not necessarily continued
+the conversation. The verifier therefore waits up to
+`recovery.verification_timeout` (default 120s) for three facts, in order:
 
-1. **Session id preserved** — the id reported by `claude -p --resume` equals the
-   id that was asked for (`ErrSessionNotPreserved` otherwise), and
-2. **Transcript growth** — the transcript file gained lines within
-   `recovery.verification_timeout` (default 120s).
+1. **The job leaves `working`.** `claude agents --all --json` is polled until the
+   job reports another state; a job that is no longer listed at all counts as
+   finished. The last state seen is kept for the log and for `ccresu inspect`.
+2. **The job names its continuation.** The agent entry carries the session id the
+   job continues. That id is recorded on the session *and* on the attempt as the
+   continuation, together with the continuation transcript's path, and it is what
+   the next cycle resumes.
+3. **That continuation's transcript grows.** The file for the continuation id is
+   measured against a baseline taken when the job first reported it, so growth
+   means the turn produced work rather than merely starting.
 
-Only then is the attempt recorded as a success, with `session_id_verified` and
-`transcript_grew` set, the state moves to `RESUMED`, and
-`Recovery succeeded` can be notified. Failure to prove either one is reported as
-an unverified attempt rather than a silent success — a process that merely
-started is not a recovery.
+Only then is the attempt recorded as a success, with `continuation_confirmed` and
+`transcript_grew` set, the state moves to `RESUMED`, and `Recovery succeeded` can
+be notified. Failing to prove any of them is reported as an unverified attempt
+rather than a silent success — a job that merely started is not a recovery.
+
+The id that was resumed is not required to answer, because it no longer does: the
+conversation lives under the continuation, and the transcript metrics recorded on
+the attempt are the continuation transcript's own numbers. `ccresu inspect` shows
+both ids, and `ccresu sessions` shows the name the agents listing reports.
 
 ## What is not recoverable
 

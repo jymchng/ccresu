@@ -35,12 +35,15 @@ Only documented interfaces are used, all verified against Claude Code 2.1.223:
 | Discover sessions | `claude agents --json` (`--all`, `--cwd <path>`) |
 | Transcripts | `~/.claude/projects/<slugified-cwd>/<session-id>.jsonl` |
 | Per-session environment | `~/.claude/session-env/<session-id>/` |
-| Resume the original session | `claude -p --resume <session-id> --output-format json "<message>"` |
+| Resume the original session | `claude --resume <session-id> --bg "<message>"`, a dispatched background job |
+| Follow that job | `claude agents --all --json` (its state and the session id it continues) |
 
 The resume argv is built in exactly one place (`claude.ResumeArgs`), is passed as
-separate argv elements with no shell, and forks nothing. A session type the CLI
-reports but ccresu does not understand becomes `UNRECOVERABLE` with the reported
-type in the reason — never an invented command.
+separate argv elements with no shell, and forks nothing. A dispatch cannot report
+cost, turns or duration — `-p` and `--bg` are mutually exclusive — so those stay
+empty; the proof is the job plus the continuation's transcript. A session type the
+CLI reports but ccresu does not understand becomes `UNRECOVERABLE` with the
+reported type in the reason — never an invented command.
 
 ## Quality gates, measured
 
@@ -93,8 +96,9 @@ layer with only the process execution stubbed:
 3. Record the paused-goal companion message.
 4. Resolve 12:00 **Europe/Berlin** — not the host zone.
 5. Persist the schedule and wait.
-6. Reach the reset, recheck, resume with the same session id.
-7. Prove the resume: id preserved *and* transcript grew.
+6. Reach the reset, recheck, dispatch `claude --resume <id> --bg`.
+7. Follow the job and prove the resume: it names its continuation *and* that
+   continuation's transcript grew.
 8. Reach `RESUMED` with the attempt recorded.
 9. Queue and deliver exactly one Telegram success message.
 

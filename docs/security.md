@@ -14,9 +14,10 @@ one of those as data, never as code.
 
 ## What ccresu never does
 
-- **No shell.** A resume is `exec.Command("claude", "-p", "--resume", <id>, ...)`
-  — one argv element per value. There is no `sh -c`, so a session id or
-  continuation message containing `; rm -rf ~` is just an argument.
+- **No shell.** A resume is
+  `exec.Command("claude", "--resume", <id>, "--bg", <message>)` — one argv element
+  per value. There is no `sh -c`, so a session id or continuation message
+  containing `; rm -rf ~` is just an argument.
 - **No TTY, no keystrokes.** No pseudo-terminal is allocated and nothing is typed
   into your terminal.
 - **No arbitrary execution from the API.** No endpoint takes a command, a path or

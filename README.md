@@ -358,7 +358,7 @@ e60a3100  DISCOVERED  none (no usage limit detect...  yes      yes          /roo
 - `SESSION` is the first eight characters of the session ID; commands need the
   **full** ID (see step 6 for the one-liner that copies it).
 - `STATE` is the state-machine position — `DISCOVERED`, `DISABLED`,
-  `WAITING_FOR_RESET`, `RESUMING`, `RESUMED`, `RETRY_WAIT`, `DISCOVERED`
+  `WAITING_FOR_RESET`, `RESUMING`, `WORKING`, `RESUMED`, `RETRY_WAIT`, `DISCOVERED`
   and so on. [docs/recovery.md](docs/recovery.md) has the full diagram.
 - `NEXT ATTEMPT` is the answer to "when will ccresu touch this one, and why":
   `in 2h14m` while a wait is pending, `none (<reason>)` when nothing is
@@ -525,7 +525,8 @@ WHEN                     TRANSITION                                 REASON
 2026-11-05 03:29:03 +08  RESET_TIME_REACHED -> CHECKING_SESSION     checking the session before resuming
 2026-11-05 03:29:03 +08  CHECKING_SESSION -> CHECKING_LIMIT         checking the usage limit has cleared
 2026-11-05 03:29:03 +08  CHECKING_LIMIT -> RESUMING                 resuming the session that holds the conversation
-2026-11-05 03:29:03 +08  RESUMING -> RESUMED                        the original session resumed and the conversation grew
+2026-11-05 03:29:03 +08  RESUMING -> WORKING                        the dispatch reported a background job; following it
+2026-11-05 03:29:11 +08  WORKING -> RESUMED                         the continuation's transcript grew
 ```
 
 `--limit N` caps the number of transitions shown (default 50; the newest are
@@ -622,17 +623,18 @@ finds the next reset time and schedules another attempt with a fresh budget, so
 recovery resumes on its own. `ccresu retry <id>` and
 `ccresu recover <id> --force` are there if you would rather it happened now.
 
-One failure is not the session's fault at all: `claude -p --resume` refuses while
-the session is still attached to Claude Code's background agent
+One failure is not the session's fault at all: `claude --resume <id> --bg` refuses
+while the session is still attached to Claude Code's background agent
 (`That session is running in the background (837eaaea) …`). ccresu treats that as
 "busy", not "gone". In the same attempt it runs `claude stop <job-id>` — the
 eight-hex job name that refusal prints, not the session UUID; `claude stop`
 answers a UUID with `No job matching` and exit 1 — and then repeats the
-*identical* resume once, so the session ends up `RESUMED` instead of failing
-without you doing anything. The conversation is untouched — same session id, same
-transcript — and the stop appears in the log, not in the attempt row. If the stop
-fails, or the second resume refuses again, the original error is reported
-unchanged and the session returns to `DISCOVERED` like any other failed attempt.
+*identical* dispatch once, so the session ends up `RESUMED` instead of failing
+without you doing anything. The conversation is untouched — the transcript
+continues from the same point — and the stop appears in the log, not in the attempt
+row. If the stop fails, or the second dispatch refuses again, the original error is
+reported unchanged and the session returns to `DISCOVERED` like any other failed
+attempt.
 
 ### Step 12 — Turn on Telegram notifications (optional)
 
@@ -807,28 +809,31 @@ ccresu only uses interfaces that exist in the installed CLI (inspected with
 | Discover sessions | `claude agents --json` (`--all`, `--cwd <path>`) |
 | Session transcripts | `~/.claude/projects/<slugified-cwd>/<session-id>.jsonl` |
 | Per-session environment | `~/.claude/session-env/<session-id>/` |
-| Resume the original session | `claude -p --resume <session-id> "<continuation message>"` |
+| Resume the original session | `claude --resume <session-id> --bg "<continuation message>"` (a dispatched background job) |
 | Release a session a background agent still holds | `claude stop <job-id>` (the eight-hex job name the refusal prints) |
 
-`--resume` is the command ccresu lives on. `claude stop` is the one exception, and
-it exists for one situation: `claude -p --resume` refuses while the session is
-still attached to the interactive CLI's background agent, so ccresu stops that
-agent and repeats the identical resume. The job name is taken from the refusal
-itself ("or `claude stop 837eaaea` first"); the session UUID is never passed,
-because `claude stop` resolves only eight-hex job names and answers anything else
-with `No job matching` and exit 1. The conversation is untouched — same
-session id, same transcript. There is no `--fork-session` (it would continue a
-copy instead of your conversation), no new session id, no TTY and no keystroke
+`--resume` is the command ccresu lives on. A resume is a **dispatch**: `--bg`
+hands the continuation to a background job, the CLI acknowledges it with
+`backgrounded · <job-id>`, and ccresu then follows that job. `claude stop` is the
+one exception, and it exists for one situation: a dispatch is refused while the
+session is still attached to the interactive CLI's background agent, so ccresu
+stops that agent and repeats the identical dispatch. The job name is taken from
+the refusal itself ("or `claude stop 837eaaea` first"); the session UUID is never
+passed, because `claude stop` resolves only eight-hex job names and answers
+anything else with `No job matching` and exit 1. There is no `--fork-session` (it
+would continue a copy instead of your conversation), no TTY and no keystroke
 injection, and if the stop fails the original refusal is reported unchanged. See
 [docs/recovery.md](docs/recovery.md) for the exact mechanism and its limitations.
 
-The resume is never dispatched into a background agent either. `--bg` is a
-perfectly good flag in your own shell, but the CLI refuses it alongside the `-p`
-this resume has to carry (`--bg and --print conflict: …`, exit 1), and the form
-that would satisfy it drops `--output-format json` — no result, no cost, and a
-*new* session id instead of the resumed one. A background dispatch is
-fire-and-forget; a recovery is a synchronous turn that has to be proven. See
-[why the resume never passes `--bg`](docs/recovery.md#why-the-resume-never-passes---bg).
+What a dispatched resume cannot report is cost, turns and duration: `-p` and
+`--bg` are mutually exclusive (`--bg and --print conflict: …`, exit 1), so there
+is no `--output-format json` to carry them, and they are left empty rather than
+invented. In exchange the job is a handle ccresu can follow: `claude agents
+--all --json` reports its state, the session id the job continues is recorded on
+the row as the **continuation**, and verification requires that continuation's
+own transcript to grow. A resumed conversation therefore continues under a new
+session id, which `ccresu inspect` and `ccresu sessions` both show. See
+[why the resume no longer passes `-p`](docs/recovery.md#why-the-resume-no-longer-passes--p).
 
 ## Interfaces
 
@@ -855,17 +860,13 @@ recover` stops the session, repeats the identical resume, verifies that the
 conversation grew, and reports `RESUMED` — followed by a session that cannot be
 resumed and is therefore returned to `DISCOVERED`.
 
-The same script with `--pre-fix` runs the identical scenario against a pre-fix
-checkout and expects the old outcome: `PERMANENTLY_FAILED` after one refused
-(that binary predates the state's removal; the current one returns the session to
-`DISCOVERED`)
-resume and no `stop` call. That contrast is the regression test for the bug:
-
-```bash
-git worktree add /tmp/ccresu-prefix 00692e3
-(cd /tmp/ccresu-prefix && go build -o /tmp/ccresu-prefix/ccresu ./cmd/ccresu)
-tests/scripts/background-resume-e2e.sh --pre-fix /tmp/ccresu-prefix/ccresu
-```
+The stub follows the job the same way the real CLI is followed: it registers the
+job in `claude agents --all --json`, reports `working` and then `done`, and writes
+the continuation's own transcript, so the script asserts what verification
+asserts — the continuation session id, that the transcript grew, and that a
+second cycle dispatches at the continuation id rather than starting over. It
+hard-fails if any call passes the retired `-p`, `--print` or `--output-format`,
+which is the regression test for the print-mode form.
 
 ## License
 

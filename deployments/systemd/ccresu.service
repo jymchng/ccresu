@@ -37,8 +37,8 @@ ExecStart=%h/.local/bin/ccresu daemon
 # stops the unit after repeated failures).
 Restart=on-failure
 RestartSec=10s
-# Give an in-flight `claude -p --resume` child a chance to finish or be killed
-# cleanly before systemd escalates to SIGKILL.
+# Give an in-flight `claude --resume <id> --bg` dispatch a chance to finish or
+# be killed cleanly before systemd escalates to SIGKILL.
 KillSignal=SIGTERM
 TimeoutStopSec=60s
 

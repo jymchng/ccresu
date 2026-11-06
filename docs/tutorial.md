@@ -150,7 +150,7 @@ e60a3100  DISCOVERED  none (no usage limit detect...  yes      yes          /hom
 - `SESSION` is the first eight characters of the session ID; commands need the
   **full** ID.
 - `STATE` is the state-machine position — `DISCOVERED`, `WAITING_FOR_RESET`,
-  `RESUMING`, `RESUMED`, `RETRY_WAIT`, `DISCOVERED` and so on. The full
+  `RESUMING`, `WORKING`, `RESUMED`, `RETRY_WAIT`, `DISCOVERED` and so on. The full
   diagram is in [recovery.md](recovery.md).
 - `NEXT ATTEMPT` is when ccresu will touch this row and why: `in 2h14m` while a
   wait is pending, `none (<reason>)` when nothing is scheduled.
@@ -310,7 +310,8 @@ WHEN                     TRANSITION                                 REASON
 2026-11-05 03:29:03 +08  RESET_TIME_REACHED -> CHECKING_SESSION     checking the session before resuming
 2026-11-05 03:29:03 +08  CHECKING_SESSION -> CHECKING_LIMIT         checking the usage limit has cleared
 2026-11-05 03:29:03 +08  CHECKING_LIMIT -> RESUMING                 resuming the session that holds the conversation
-2026-11-05 03:29:03 +08  RESUMING -> RESUMED                        the original session resumed and the conversation grew
+2026-11-05 03:29:03 +08  RESUMING -> WORKING                        the dispatch reported a background job; following it
+2026-11-05 03:29:11 +08  WORKING -> RESUMED                         the continuation's transcript grew
 ```
 
 `--limit N` caps the number of transitions shown (default 50; the newest are
@@ -404,15 +405,16 @@ finds the next reset time and schedules another attempt with a fresh budget, so
 recovery resumes on its own. `ccresu retry <id>` and
 `ccresu recover <id> --force` are there if you would rather it happened now.
 
-One failure is not the session's fault at all: `claude -p --resume` refuses while
-the session is still attached to Claude Code's background agent
+One failure is not the session's fault at all: `claude --resume <id> --bg`
+refuses while the session is still attached to Claude Code's background agent
 (`That session is running in the background (837eaaea) …`). ccresu treats that as
 "busy", not "gone". In the same attempt it runs `claude stop <job-id>` — the
 eight-hex job name that refusal prints, not the session UUID; `claude stop`
 answers a UUID with `No job matching` and exit 1 — and then repeats the
 *identical* resume once, so the session ends up `RESUMED` instead of failing
-without you doing anything. The conversation is untouched — same session id, same
-transcript — and the stop appears in the log, not in the attempt row. If the stop
+without you doing anything. The conversation is untouched — the same transcript,
+continued by the dispatch under the job's own session id — and the stop appears
+in the log, not in the attempt row. If the stop
 fails, or the second resume refuses again, the original error is reported
 unchanged and the session returns to `DISCOVERED` like any other failed attempt.
 
