@@ -193,6 +193,9 @@ func (c *Config) validateRecovery(add problemAdder) {
 	if c.Recovery.MaxConcurrentRecoveries < 1 {
 		add("recovery.max_concurrent_recoveries must be at least 1")
 	}
+	if c.Recovery.RediscoveryWindow.Duration <= 0 {
+		add("recovery.rediscovery_window must be greater than zero")
+	}
 }
 
 func (c *Config) validateTelegram(add problemAdder) {

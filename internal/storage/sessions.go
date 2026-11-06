@@ -14,7 +14,8 @@ import (
 const sessionColumns = `id, project_path, transcript_path, provider, session_type,
 	pid, ppid, process_start_time, state, enabled, recoverable, reason, last_error,
 	transcript_size, transcript_lines, retry_at, discovered_at, last_seen_at, updated_at,
-	continuation_session_id, name, continuation_transcript_path, job_id`
+	continuation_session_id, name, continuation_transcript_path, job_id,
+	continuation_transcript_lines, rediscover_lines`
 
 // SessionFilter narrows a session query. Zero values mean "no constraint".
 type SessionFilter struct {
@@ -74,7 +75,7 @@ func (s *Store) UpsertSession(ctx context.Context, session Session) (bool, error
 	err := s.InTx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `
 			INSERT INTO sessions (`+sessionColumns+`)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (id) DO NOTHING`,
 			session.ID, session.ProjectPath, session.TranscriptPath, session.Provider,
 			string(session.Type), session.PID, session.PPID, int64(session.ProcessStartTime),
@@ -84,6 +85,7 @@ func (s *Store) UpsertSession(ctx context.Context, session Session) (bool, error
 			timeToDB(session.LastSeenAt), timeToDB(session.UpdatedAt),
 			session.ContinuationSessionID, session.Name, session.ContinuationTranscriptPath,
 			session.JobID,
+			session.ContinuationTranscriptLines, session.RediscoverLines,
 		)
 		if err != nil {
 			return fmt.Errorf("insert session %s: %w", session.ID, err)
@@ -557,6 +559,7 @@ func scanSession(row scanner) (Session, error) {
 		&session.TranscriptSize, &session.TranscriptLines, &retryAt,
 		&discoveredAt, &lastSeenAt, &updatedAt, &session.ContinuationSessionID,
 		&session.Name, &session.ContinuationTranscriptPath, &session.JobID,
+		&session.ContinuationTranscriptLines, &session.RediscoverLines,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

@@ -203,6 +203,18 @@ type Session struct {
 	// eight-hex handle `claude agents --json` resolves, kept so a WORKING session
 	// can be polled until its job stops working, even across a daemon restart.
 	JobID string
+	// ContinuationTranscriptLines is how many lines the continuation transcript
+	// held when the last resume was verified -- the measurement the last
+	// successful attempt persisted. It is never advanced, so detection can ask
+	// "has this conversation moved past the point that attempt saw?" when it
+	// re-reads a usage-limit banner on a rediscovered row. Zero means no
+	// measurement: nothing was ever resumed, or the resume was not proven.
+	ContinuationTranscriptLines int64
+	// RediscoverLines is how many lines the continuation transcript held the last
+	// time the rediscovery stage looked at it. It advances on every look, which
+	// is what makes "the continuation is still producing output" answerable
+	// between two passes. Zero means the stage has not looked yet.
+	RediscoverLines int64
 	// RetryAt is the instant the wait ends for a session in RETRY_WAIT: the
 	// backoff ccresu computed when the attempt failed, written down rather than
 	// re-derived. Leaving RETRY_WAIT clears it, so a stale wait is never reported

@@ -45,6 +45,11 @@ func TestParseEmptyDocumentYieldsDefaults(t *testing.T) {
 	if got, want := cfg.Recovery.MaxAttempts, 10; got != want {
 		t.Errorf("max_attempts = %d, want %d", got, want)
 	}
+	// The rediscovery window is the Claude quota window: it is what stops the
+	// daemon from deferring a still-working continuation for ever.
+	if got, want := cfg.Recovery.RediscoveryWindow.Duration, 5*time.Hour; got != want {
+		t.Errorf("rediscovery_window = %v, want %v", got, want)
+	}
 	if cfg.Telegram.Enabled {
 		t.Error("telegram should default to disabled")
 	}

@@ -125,6 +125,10 @@ func TestValidateFieldRules(t *testing.T) {
 			c.Recovery.HealthCheckInterval = NewDuration(0)
 		}, "recovery.health_check_interval"},
 		{"max concurrent", func(c *Config) { c.Recovery.MaxConcurrentRecoveries = 0 }, "recovery.max_concurrent_recoveries"},
+		{"rediscovery window", func(c *Config) { c.Recovery.RediscoveryWindow = NewDuration(0) }, "recovery.rediscovery_window"},
+		{"negative rediscovery window", func(c *Config) {
+			c.Recovery.RediscoveryWindow = NewDuration(-time.Hour)
+		}, "recovery.rediscovery_window must be greater than zero"},
 
 		{"parse mode", func(c *Config) { c.Telegram.ParseMode = "Richtext" }, "telegram.parse_mode"},
 		{"parse mode markdownv2", func(c *Config) { c.Telegram.ParseMode = "MarkdownV2" }, "telegram.parse_mode must be HTML"},

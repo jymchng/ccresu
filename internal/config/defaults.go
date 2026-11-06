@@ -47,6 +47,7 @@ func Defaults() Config {
 			VerificationTimeout:     NewDuration(120e9),
 			HealthCheckInterval:     NewDuration(10e9),
 			MaxConcurrentRecoveries: 3,
+			RediscoveryWindow:       NewDuration(5 * 60 * 60e9),
 		},
 		Telegram: Telegram{
 			Enabled:                false,

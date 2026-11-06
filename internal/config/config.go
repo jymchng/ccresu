@@ -102,6 +102,14 @@ type Recovery struct {
 	VerificationTimeout     Duration `yaml:"verification_timeout"`
 	HealthCheckInterval     Duration `yaml:"health_check_interval"`
 	MaxConcurrentRecoveries int      `yaml:"max_concurrent_recoveries"`
+	// RediscoveryWindow is how long a resumed conversation may keep working
+	// before the daemon stops deferring it and looks for the next usage limit.
+	// A resume continues the conversation under a new session, and while that
+	// session is still producing output there is nothing to schedule: resuming
+	// it again would duplicate work that is already running. The window is the
+	// Claude quota window (5h by default), which is the longest a continuation
+	// can work before a new limit of its own has to be visible.
+	RediscoveryWindow Duration `yaml:"rediscovery_window"`
 }
 
 // Telegram holds optional notification settings.
