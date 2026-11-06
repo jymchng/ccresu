@@ -29,6 +29,12 @@ const retiredResumeFlag = "-p" + " " + "--resume"
 //
 // It deliberately asserts on substrings rather than prose. Rewording is free;
 // reintroducing the dead command is not.
+//
+// stop.go belongs to that set too, even though it documents `claude stop` rather
+// than the resume itself: it is the file that explains why the stop fallback
+// exists, and the sentence explaining it used to promise "the same headless
+// `-p --resume` invocation as always". Excluding a file because its prose is
+// wrong at the moment is how it stays wrong, so it is guarded like the rest.
 func TestPackageDocsDescribeTheDispatchedResume(t *testing.T) {
 	t.Parallel()
 
@@ -41,7 +47,9 @@ func TestPackageDocsDescribeTheDispatchedResume(t *testing.T) {
 	}
 	dir := filepath.Dir(thisFile)
 
-	files := []string{"cli.go", "doc.go", "version.go"}
+	// stop.go documents why the stop fallback exists and what follows it, so it
+	// must describe the same dispatch as the files that spell the vector out.
+	files := []string{"cli.go", "doc.go", "version.go", "stop.go"}
 	for _, name := range files {
 		raw, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
@@ -75,8 +83,8 @@ func TestPackageDocsDescribeTheDispatchedResume(t *testing.T) {
 	}
 
 	// The stop interface is the one command that may follow a refused resume, and
-	// both files that describe the dispatch must also describe it.
-	for _, name := range []string{"cli.go", "doc.go"} {
+	// every file that describes the dispatch must also describe it.
+	for _, name := range []string{"cli.go", "doc.go", "stop.go"} {
 		raw, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
