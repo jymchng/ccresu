@@ -4,7 +4,21 @@ All notable changes to ccresu are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-11-06
+
+### Added
+
+- **`ccresu sessions` has an interactive browser.** On a terminal it opens a
+  full-screen list with filtering (`/`), inspection (`i`), `enable`/`disable`
+  (`e`/`d`), `retry` (`r`), `recover` (`R`) and `delete` (`x`, after a `y`/`N`
+  prompt), so an operator no longer has to copy a session id out of the table
+  first. Piped or redirected output, and `--json`, are unchanged byte for byte —
+  the browser is only selected when stdout is a terminal — and `--tui`/`--no-tui`
+  override the choice. The key map is in
+  [docs/cli.md](docs/cli.md#browsing-the-sessions) and
+  [README.md](README.md); the browser is a view over ccresu's own rows, so it
+  never creates a session and its `delete` forgets the row only, leaving the
+  conversation under `~/.claude` untouched.
 
 ### Changed
 
