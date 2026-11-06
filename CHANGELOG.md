@@ -6,7 +6,11 @@ All notable changes to ccresu are recorded here. The format follows
 
 ## [Unreleased]
 
-### Changed
+### Changed — breaking
+
+A resume is no longer a synchronous print-mode call. Old attempt rows keep their
+`session_id_verified` column and their recorded command; nothing is migrated, and
+`session_id_preserved` is gone from the API, replaced by `continuation_confirmed`.
 
 - **A resume is a background dispatch.** `claude.ResumeArgs` is now
   `claude --resume <session-id> --bg "<message>"` — no `-p`, no
