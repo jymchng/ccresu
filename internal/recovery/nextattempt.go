@@ -50,6 +50,11 @@ const (
 	ReasonTerminated = "session was terminated"
 	// ReasonInFlight is reported while a recovery is actually running.
 	ReasonInFlight = "recovery in progress"
+	// ReasonStillWorking is reported for a resumed session the rediscovery stage
+	// has deferred because its continuation transcript is still growing. The
+	// instant is the deferral's end: that is when ccresu looks again, and
+	// resuming earlier would duplicate work that is already running.
+	ReasonStillWorking = "the continuation is still producing output; ccresu checks it again after this instant"
 	// ReasonWorking is reported while the dispatched background job is still
 	// working on the continuation. No instant is promised because none is
 	// computed: the daemon re-reads the job on every pass and stops polling as
@@ -103,6 +108,12 @@ func NextAttemptFor(session storage.Session, sched *storage.Schedule, now time.T
 	case storage.StateWorking:
 		return NextAttempt{Reason: ReasonWorking}
 	case storage.StateResumed:
+		// A deferral the rediscovery stage wrote is the truthful instant: the
+		// continuation is still producing output, so nothing is looked at again
+		// before it elapses.
+		if session.RetryAt != nil && session.RetryAt.After(now) {
+			return NextAttempt{At: session.RetryAt.UTC(), Reason: ReasonStillWorking, Scheduled: true}
+		}
 		// A resumed session is between cycles, not done: the conversation keeps
 		// running under the continuation session, and the next thing ccresu does
 		// is read that transcript again for the next usage limit. Reporting

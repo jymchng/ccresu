@@ -172,7 +172,15 @@ var transitions = map[State]map[State]struct{}{
 		// The rediscovery edge. A RESUMED session is re-examined from the top of
 		// the cycle with a fresh attempt budget, which is the only way the loop
 		// can run a second time without an operator running `ccresu recover`.
-		StateDiscovered:     {},
+		StateDiscovered: {},
+		// A repeat entry is legal here for the same reason it is legal on
+		// WAITING_FOR_RESET: the rediscovery stage re-observes a resumed session
+		// every pass, and a continuation that is still producing output must be
+		// allowed to record that it was looked at and deferred rather than being
+		// moved along as if it were idle. Keeping the row RESUMED while it works
+		// is what stops a second resume being dispatched for a conversation that
+		// is already running.
+		StateResumed:        {},
 		StateCompleted:      {},
 		StateUserTerminated: {},
 		StateDisabled:       {},

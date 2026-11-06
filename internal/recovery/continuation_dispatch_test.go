@@ -79,6 +79,19 @@ func TestTheSecondCycleDispatchesAtTheContinuationSession(t *testing.T) {
 		t.Errorf("continuation transcript = %q, want %q's transcript",
 			stored.ContinuationTranscriptPath, sessionB)
 	}
+	// The line count this attempt was proved at is written down: it is the mark
+	// the rediscovery stage compares against, so that a still-working
+	// continuation is never resumed twice and new material still can be planned.
+	// Both marks carry the verification's LinesAfter (12), because the same
+	// reading is the attempt's mark and the baseline the first look compares to.
+	if stored.ContinuationTranscriptLines != 12 {
+		t.Errorf("continuation lines = %d, want 12: the attempt's mark",
+			stored.ContinuationTranscriptLines)
+	}
+	if stored.RediscoverLines != 12 {
+		t.Errorf("rediscover lines = %d, want 12: the baseline for still-growing",
+			stored.RediscoverLines)
+	}
 }
 
 // TestTheBaselineMeasuresTheContinuationTranscript proves the growth the verifier

@@ -472,6 +472,56 @@ func (s *Store) SetSessionJob(ctx context.Context, id, jobID string) error {
 	return nil
 }
 
+// SetSessionContinuationLines records how many lines the continuation transcript
+// held when the last resume was proved.
+//
+// It is written once per proved resume and deliberately never advanced: it is the
+// mark detection compares a re-read transcript against, so "has this conversation
+// moved past the point the last attempt saw?" stays answerable for as long as the
+// row lives. A zero value is not a measurement — nothing was ever proved against
+// this file — and callers must read it as unknown rather than as "empty".
+func (s *Store) SetSessionContinuationLines(ctx context.Context, id string, lines int64) error {
+	return s.setSessionLines(ctx, id, lines, "continuation lines",
+		`UPDATE sessions SET continuation_transcript_lines = ?, updated_at = ? WHERE id = ?`)
+}
+
+// SetSessionRediscoverLines records how many lines the continuation transcript
+// held the last time the rediscovery stage looked at it.
+//
+// Unlike the continuation mark this one advances on every look, which is what
+// makes "is the continuation still producing output between two looks?"
+// answerable. A zero value means the stage has not looked yet.
+func (s *Store) SetSessionRediscoverLines(ctx context.Context, id string, lines int64) error {
+	return s.setSessionLines(ctx, id, lines, "rediscovery lines",
+		`UPDATE sessions SET rediscover_lines = ?, updated_at = ? WHERE id = ?`)
+}
+
+// setSessionLines writes one of the two line-count marks.
+//
+// A negative count is clamped to zero instead of being stored: the marks are
+// counts, and a caller that measured nothing must not leave a value a later
+// comparison would read as a real measurement.
+func (s *Store) setSessionLines(ctx context.Context, id string, lines int64, field, query string) error {
+	if s == nil || s.db == nil {
+		return ErrClosed
+	}
+	if lines < 0 {
+		lines = 0
+	}
+	result, err := s.db.ExecContext(ctx, query, lines, timeToDB(s.now().UTC()), id)
+	if err != nil {
+		return fmt.Errorf("set session %s %s: %w", id, field, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set session %s %s: %w", id, field, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("%w: session %s", ErrNotFound, id)
+	}
+	return nil
+}
+
 // SetSessionName records the name `claude agents --all --json` reports.
 //
 // The name is display data, so an empty value is an instruction to forget it

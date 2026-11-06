@@ -25,6 +25,10 @@ const (
 	// One limit banner sits on the newest assistant line; a small window keeps a
 	// re-scan cheap while still catching a banner written after a tool result.
 	defaultTranscriptTail = 25
+	// defaultRediscoveryWindow is the shipped cap on how long a still-growing
+	// continuation is deferred. It mirrors recovery.rediscovery_window so a
+	// hand-built Daemon behaves like the shipped one.
+	defaultRediscoveryWindow = 5 * time.Hour
 )
 
 // Daemon is the watchdog loop.
@@ -210,21 +214,33 @@ func storageSession(session claude.Session) storage.Session {
 	}
 }
 
-// rediscover returns resumed sessions to the top of the recovery cycle.
+// rediscover decides what every resumed session needs next.
 //
-// A resume is not the end of a conversation, it is the start of the next
-// window: the resumed conversation keeps running under its continuation
-// session, and that session can hit a limit of its own. Nothing else would ever
-// move a RESUMED row again, so without this stage a recovered session would be
-// parked for ever — `ccresu inspect` used to report "none (already resumed)" and
-// the loop the operator asked for ran exactly once.
+// A resume is not the end of a conversation, it is the start of the next window:
+// the resumed conversation keeps running under its continuation session, and that
+// session can hit a limit of its own. Nothing else would ever move a RESUMED row
+// again, so without this stage a recovered session would be parked for ever --
+// `ccresu inspect` used to report "none (already resumed)" and the loop the
+// operator asked for ran exactly once.
 //
-// The move is deliberate and recorded. DISCOVERED resets the attempt budget and
-// makes detection re-read the transcript (see detectIn, which skips the "already
-// seen this banner" comparison for a rediscovered row), so the next pass sees
-// the continuation transcript from the top of the cycle instead of a session
-// that has nothing left to do. Only the row changes here: the transcript is
-// read by the detect stage later in the same pass.
+// The one thing this stage must never do is resume a conversation twice. A
+// continuation that is still producing output is still working, and dispatching a
+// second resume for it would duplicate work that is already running, so the row is
+// left RESUMED and deferred instead of being returned to discovery. The evidence
+// is the row's own measurement: the continuation transcript's line count, compared
+// against the count the last look recorded.
+//
+//   - a row whose deferral has not elapsed is not touched at all;
+//   - a transcript that gained lines since the last look is still growing, so the
+//     row stays RESUMED, the growth is recorded, a RESUMED -> RESUMED transition
+//     notes it, and the next look is deferred by twice the previous deferral, up
+//     to recovery.rediscovery_window;
+//   - a transcript that did not grow (or one that cannot be measured yet) has
+//     nothing running to duplicate, so the row goes back to DISCOVERED with a
+//     fresh attempt budget, where the detect stage re-reads it.
+//
+// Only the row changes here: the transcript is read by the detect stage later in
+// the same pass.
 func (d *Daemon) rediscover(ctx context.Context) error {
 	rt := d.runtime
 	if rt.Store == nil {
@@ -236,17 +252,133 @@ func (d *Daemon) rediscover(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list resumed sessions: %w", err)
 	}
+	now := rt.Clock.Now().UTC()
 	var errs []error
 	for _, session := range sessions {
-		reason := "revisited: a resumed session starts the next cycle, so its continuation transcript is read again"
-		if _, err := rt.Store.TransitionSession(ctx, session.ID, storage.StateDiscovered, reason, 0); err != nil {
+		if err := d.rediscoverOne(ctx, session, now); err != nil {
 			errs = append(errs, fmt.Errorf("rediscover %s: %w", session.ID, err))
-			continue
 		}
-		rt.Log.Debug("resumed session revisited", "session", session.ID,
-			"continuation", session.ContinuationSessionID)
 	}
 	return errors.Join(errs...)
+}
+
+// rediscoverOne applies the decision documented on rediscover to one row.
+func (d *Daemon) rediscoverOne(ctx context.Context, session storage.Session, now time.Time) error {
+	rt := d.runtime
+	// A deferral that has not elapsed is the whole point of the backoff: the
+	// conversation was still growing when this row was last looked at, so there
+	// is nothing to decide until the instant ccresu promised.
+	if session.RetryAt != nil && session.RetryAt.After(now) {
+		rt.Log.Debug("resumed session deferred", "session", session.ID, "until", *session.RetryAt)
+		return nil
+	}
+
+	lines, measured := d.continuationLines(session)
+	switch {
+	case measured && session.RediscoverLines > 0 && lines > session.RediscoverLines:
+		previous := session.RediscoverLines
+		if err := rt.Store.SetSessionRediscoverLines(ctx, session.ID, lines); err != nil {
+			return fmt.Errorf("record rediscovery mark: %w", err)
+		}
+		reason := fmt.Sprintf(
+			"the continuation is still working: %d lines, up from the %d last seen, so it is left to run",
+			lines, previous)
+		if _, err := rt.Store.TransitionSession(ctx, session.ID, storage.StateResumed, reason, 0); err != nil {
+			return fmt.Errorf("record the deferral: %w", err)
+		}
+		// The transition clears any previous retry instant (it belongs to
+		// RETRY_WAIT and to nothing else), so the new deferral is written after
+		// it, never before.
+		deferFor := d.rediscoveryDeferral(session, now)
+		if err := rt.Store.SetSessionRetryAt(ctx, session.ID, now.Add(deferFor)); err != nil {
+			return fmt.Errorf("defer the row: %w", err)
+		}
+		rt.Log.Info("continuation still growing", "session", session.ID,
+			"lines", lines, "previous_lines", previous, "deferred_for", deferFor)
+		return nil
+
+	default:
+		// Nothing is running: either the transcript stopped growing between two
+		// looks, or it could not be measured (in which case the detect stage
+		// reads the same file and reports the same failure). The baseline is
+		// recorded first so the next look has something to compare against.
+		if measured {
+			if err := rt.Store.SetSessionRediscoverLines(ctx, session.ID, lines); err != nil {
+				return fmt.Errorf("record rediscovery mark: %w", err)
+			}
+		}
+		reason := "revisited: a resumed session starts the next cycle, so its continuation transcript is read again"
+		if _, err := rt.Store.TransitionSession(ctx, session.ID, storage.StateDiscovered, reason, 0); err != nil {
+			return fmt.Errorf("rediscover %s: %w", session.ID, err)
+		}
+		rt.Log.Debug("resumed session revisited", "session", session.ID,
+			"continuation", session.ContinuationSessionID, "lines", lines)
+		return nil
+	}
+}
+
+// continuationLines measures the transcript a resumed row's conversation lives in.
+//
+// The continuation's own transcript is the file that keeps growing after a
+// resume, so it is the one measured when it is known; otherwise the tracked
+// transcript is. measured is false when nothing could be read, which callers must
+// treat as "no comparison possible" rather than as zero lines.
+func (d *Daemon) continuationLines(session storage.Session) (int64, bool) {
+	path := strings.TrimSpace(session.ContinuationTranscriptPath)
+	if path == "" {
+		path = session.TranscriptPath
+	}
+	if path == "" || d.runtime.Transcripts == nil {
+		return 0, false
+	}
+	info, err := d.runtime.Transcripts.ScanTranscript(path)
+	if err != nil {
+		d.runtime.Log.Debug("measure continuation transcript",
+			"session", session.ID, "transcript", path, "error", err)
+		return 0, false
+	}
+	return info.Lines, true
+}
+
+// rediscoveryDeferral is how long a still-growing continuation is left alone.
+//
+// The first deferral is the daemon's own interval: that is the soonest the row
+// could have been looked at again anyway, so a growing continuation costs nothing
+// extra there. Every further look that still sees growth doubles the previous
+// deferral. The cap is recovery.rediscovery_window, the Claude quota window,
+// because a continuation cannot work for longer than one quota window without a
+// new limit of its own having to be visible: deferring past it would hide the
+// very thing the loop exists to find.
+//
+// The previous deferral is recovered from the row rather than kept in memory:
+// retry_at was written at the row's updated_at, so the gap between them is exactly
+// that deferral. That is why a deferred row must not be written to until its
+// deferral elapses, which is what rediscoverOne does.
+func (d *Daemon) rediscoveryDeferral(session storage.Session, now time.Time) time.Duration {
+	next := d.interval
+	if next <= 0 {
+		next = DefaultDaemonInterval
+	}
+	if session.RetryAt != nil && !session.UpdatedAt.IsZero() {
+		if previous := session.RetryAt.Sub(session.UpdatedAt.UTC()); previous > 0 {
+			next = previous * 2
+		}
+	}
+	if window := d.rediscoveryWindow(); next > window {
+		next = window
+	}
+	return next
+}
+
+// rediscoveryWindow is the configured cap on how long a growing continuation is
+// deferred, falling back to the shipped default for a hand-built runtime.
+func (d *Daemon) rediscoveryWindow() time.Duration {
+	if d.runtime != nil && d.runtime.Config != nil {
+		if window := d.runtime.Config.Recovery.RediscoveryWindow.Duration; window > 0 {
+			return window
+		}
+	}
+	return defaultRediscoveryWindow
 }
 
 // followWorking polls the background job of every WORKING session and closes the
@@ -401,6 +533,13 @@ func (d *Daemon) detect(ctx context.Context) error {
 // detectIn inspects one session transcript.
 func (d *Daemon) detectIn(ctx context.Context, session storage.Session) error {
 	rt := d.runtime
+	// A deferred row is still working: the rediscovery stage owns it until its
+	// deferral elapses, and planning a wait for it here would resume a
+	// conversation that is already running.
+	if session.State == storage.StateResumed && session.RetryAt != nil &&
+		session.RetryAt.After(rt.Clock.Now().UTC()) {
+		return nil
+	}
 	// A dispatched resume moves the conversation into a new session, whose
 	// transcript is a different file. That file is where the next reset time
 	// will be written, so it is read when it is known; the original transcript
@@ -428,11 +567,13 @@ func (d *Daemon) detectIn(ctx context.Context, session storage.Session) error {
 	if !event.IsUsageLimit() {
 		return nil
 	}
-	// A session returned to DISCOVERED is being re-opened on purpose: its last
-	// recorded banner is the very reason it is back here, so skipping it as
-	// "already seen" would leave the session discovered for ever. Re-planning is
-	// what moves it to WAITING_FOR_RESET with a fresh resume time.
-	if session.State != storage.StateDiscovered && d.alreadyDetected(ctx, session.ID, event) {
+	// The banner in the tail may be the very one that produced the last resume. A
+	// transcript that has not grown past the line count that attempt recorded is
+	// still describing work ccresu has already answered, so re-planning it would
+	// dispatch a second resume for the same limit -- which is exactly the double
+	// resume this stage must never cause. Only material the last attempt never saw
+	// can name a limit of its own.
+	if d.alreadyDetected(ctx, session.ID, event) && !d.grewPastLastAttempt(ctx, session, path) {
 		return nil
 	}
 
@@ -478,6 +619,41 @@ func (d *Daemon) detectIn(ctx context.Context, session storage.Session) error {
 		"known_reset", resolution.Known, "reset_at", resolution.At)
 
 	return d.notifyLimit(ctx, session, recorded, resolution, event)
+}
+
+// grewPastLastAttempt reports whether the transcript being read holds material
+// the last proved resume never saw.
+//
+// The mark it compares against is the continuation transcript's line count at the
+// instant that attempt was proved (sessions.continuation_transcript_lines). A
+// transcript that has not passed it cannot contain a new limit: the newest banner
+// in it is the one ccresu already resumed for. Passing it means the conversation
+// has moved on, so whatever limit the tail now names is a new one.
+//
+// A row with no mark (zero) has no attempt to duplicate: nothing was ever proved
+// against this file, so the banner comparison alone decides, exactly as it did
+// before the measurement existed. Zero is what every row stored before it carries,
+// and treating it as "not grown" would freeze those rows for ever. The only row
+// without a mark that may re-plan a banner ccresu already recorded is one that was
+// deliberately returned to DISCOVERED, which is the re-open the loop depends on.
+//
+// A file that cannot be read proves nothing either, and the safe reading of "I
+// cannot tell whether this is new" is "do not resume again": the detect stage has
+// already logged why the transcript could not be read.
+func (d *Daemon) grewPastLastAttempt(ctx context.Context, session storage.Session, path string) bool {
+	if session.ContinuationTranscriptLines <= 0 {
+		return session.State == storage.StateDiscovered
+	}
+	if d.runtime.Transcripts == nil || path == "" {
+		return false
+	}
+	info, err := d.runtime.Transcripts.ScanTranscript(path)
+	if err != nil {
+		d.runtime.Log.Debug("measure transcript against the last attempt",
+			"session", session.ID, "transcript", path, "error", err)
+		return false
+	}
+	return info.Lines > session.ContinuationTranscriptLines
 }
 
 // alreadyDetected reports whether this exact banner was already recorded.

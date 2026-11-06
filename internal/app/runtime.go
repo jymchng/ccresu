@@ -36,10 +36,14 @@ type Server interface {
 	Run(ctx context.Context) error
 }
 
-// Transcripts reads the tail of a session transcript. *claude.Store satisfies
-// it.
+// Transcripts reads transcripts: the tail for detection, and the whole-file
+// measurement the rediscovery stage compares between two looks. *claude.Store
+// satisfies it.
 type Transcripts interface {
 	TailEntries(path string, n int) ([]claude.Entry, error)
+	// ScanTranscript measures a transcript, so a row can be compared against the
+	// line count its last proved resume recorded.
+	ScanTranscript(path string) (claude.TranscriptInfo, error)
 }
 
 // VersionReporter reports the Claude Code version in use. *claude.Provider

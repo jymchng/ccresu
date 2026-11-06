@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -118,9 +119,15 @@ func (n *fakeNotifier) runCount() int {
 	return n.runs
 }
 
-// fakeTranscripts serves transcript tails from memory.
+// fakeTranscripts serves transcript tails and measurements from memory.
+//
+// lines holds the measurement the rediscovery stage reads, because it is not the
+// same number as the entries a test seeds: a transcript of one banner that a
+// resume grew past is a large file with a small tail, and the guard under test
+// compares line counts, not tails.
 type fakeTranscripts struct {
 	entries map[string][]claude.Entry
+	lines   map[string]int64
 	err     error
 }
 
@@ -134,6 +141,25 @@ func (f *fakeTranscripts) TailEntries(path string, limit int) ([]claude.Entry, e
 		entries = entries[len(entries)-limit:]
 	}
 	return append([]claude.Entry(nil), entries...), nil
+}
+
+// ScanTranscript implements Transcripts.
+//
+// A path with a recorded measurement reports it; otherwise the entry count stands
+// in, so a test that only seeds a tail still gets a believable number. A path the
+// test never mentioned is missing, exactly as a transcript that is not there yet
+// is missing on disk.
+func (f *fakeTranscripts) ScanTranscript(path string) (claude.TranscriptInfo, error) {
+	if f.err != nil {
+		return claude.TranscriptInfo{}, f.err
+	}
+	if lines, ok := f.lines[path]; ok {
+		return claude.TranscriptInfo{Path: path, Lines: lines}, nil
+	}
+	if entries, ok := f.entries[path]; ok {
+		return claude.TranscriptInfo{Path: path, Lines: int64(len(entries))}, nil
+	}
+	return claude.TranscriptInfo{}, fmt.Errorf("claude: stat transcript %s: %w", path, os.ErrNotExist)
 }
 
 // fakeServer records its lifecycle and stops when the context is cancelled.
@@ -244,13 +270,16 @@ func newHarness(t *testing.T) *harness {
 
 	notifier := &fakeNotifier{}
 	h := &harness{
-		store:       store,
-		provider:    provider,
-		notifier:    notifier,
-		transcripts: &fakeTranscripts{entries: map[string][]claude.Entry{}},
-		cfg:         &cfg,
-		clock:       clk,
-		signals:     make(chan os.Signal, 1),
+		store:    store,
+		provider: provider,
+		notifier: notifier,
+		transcripts: &fakeTranscripts{
+			entries: map[string][]claude.Entry{},
+			lines:   map[string]int64{},
+		},
+		cfg:     &cfg,
+		clock:   clk,
+		signals: make(chan os.Signal, 1),
 	}
 	h.rt = &Runtime{
 		Config:      &cfg,

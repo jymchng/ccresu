@@ -95,6 +95,17 @@ func TestResumedCanBeRediscovered(t *testing.T) {
 	if !CanTransition(StateResumed, StateDiscovered) {
 		t.Fatal("RESUMED must reach DISCOVERED so the cycle can repeat")
 	}
+	// A resume is also allowed to leave the row RESUMED: the rediscovery stage
+	// re-observes a session every pass, and a continuation that is still producing
+	// output must be able to record that it was looked at and deferred. Refusing
+	// the repeat would force an idle/discovery move for a conversation that is
+	// working, which is what the double resume came from.
+	if !CanTransition(StateResumed, StateResumed) {
+		t.Error("RESUMED must reach RESUMED so a deferral can be recorded")
+	}
+	if err := ValidateTransition(StateResumed, StateResumed); err != nil {
+		t.Errorf("ValidateTransition(RESUMED, RESUMED) = %v, want nil", err)
+	}
 	if err := ValidateTransition(StateResumed, StateDiscovered); err != nil {
 		t.Errorf("ValidateTransition(RESUMED, DISCOVERED) = %v, want nil", err)
 	}

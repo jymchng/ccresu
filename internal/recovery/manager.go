@@ -42,6 +42,13 @@ type Store interface {
 	// SetSessionJob records the background job a resume created, so a WORKING
 	// session can be polled -- including after a restart.
 	SetSessionJob(ctx context.Context, id, jobID string) error
+	// SetSessionContinuationLines records how many lines the continuation
+	// transcript held when this attempt was proved: the mark detection compares a
+	// re-read transcript against.
+	SetSessionContinuationLines(ctx context.Context, id string, lines int64) error
+	// SetSessionRediscoverLines records the line count the rediscovery stage last
+	// saw, which is what "still producing output?" is asked against.
+	SetSessionRediscoverLines(ctx context.Context, id string, lines int64) error
 	StartAttempt(ctx context.Context, sessionID string, usageLimitID int64, command string) (storage.RecoveryAttempt, error)
 	FinishAttempt(ctx context.Context, attemptID int64, result storage.AttemptResult) (storage.RecoveryAttempt, error)
 	CountAttempts(ctx context.Context, sessionID string) (int, error)
@@ -530,6 +537,7 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 		m.log.Warn("record continuation session", "session", sessionID, "error", err)
 	}
 	m.recordTranscriptMetrics(ctx, sessionID, baseline, verification)
+	m.recordContinuationMarks(ctx, sessionID, verification)
 	if err := m.store.SetSessionError(ctx, sessionID, ""); err != nil {
 		m.log.Warn("clear session error", "session", sessionID, "error", err)
 	}
@@ -569,6 +577,31 @@ func (m *Manager) recordTranscriptMetrics(ctx context.Context, sessionID string,
 	if err := m.store.SetSessionTranscriptMetrics(ctx, sessionID, path,
 		verification.SizeAfter, verification.LinesAfter); err != nil {
 		m.log.Warn("record transcript metrics", "session", sessionID, "error", err)
+	}
+}
+
+// recordContinuationMarks stores the two line counts the rediscovery stage
+// compares between passes.
+//
+// The numbers are Verification.LinesAfter, which was measured on the continuation
+// transcript -- the file the conversation actually continues in. The continuation
+// mark is written once and never advanced, so "has this conversation moved past
+// the point the last attempt saw?" stays answerable for ever; the rediscovery mark
+// is the baseline "is it still producing output?" is asked against, and the
+// rediscovery stage advances it on every look.
+//
+// A verification that measured nothing (zero, or a prove where the transcript was
+// unreadable) writes nothing: a zero mark already means "not measured", and
+// storing a zero on top of a real mark would throw the measurement away.
+func (m *Manager) recordContinuationMarks(ctx context.Context, sessionID string, verification Verification) {
+	if verification.LinesAfter <= 0 {
+		return
+	}
+	if err := m.store.SetSessionContinuationLines(ctx, sessionID, verification.LinesAfter); err != nil {
+		m.log.Warn("record continuation lines", "session", sessionID, "error", err)
+	}
+	if err := m.store.SetSessionRediscoverLines(ctx, sessionID, verification.LinesAfter); err != nil {
+		m.log.Warn("record rediscovery lines", "session", sessionID, "error", err)
 	}
 }
 

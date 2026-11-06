@@ -115,6 +115,20 @@ func TestNextAttemptForEveryState(t *testing.T) {
 			wantWhy:   ReasonResumed,
 		},
 		{
+			// The rediscovery stage defers a resumed session whose continuation is
+			// still producing output. That instant is the truthful answer: resuming
+			// earlier would duplicate work that is already running.
+			name: "a deferred resumed session reports the instant it is looked at again",
+			session: storage.Session{
+				State:   storage.StateResumed,
+				Enabled: true,
+				RetryAt: timePtr(fixedNow.Add(30 * time.Minute)),
+			},
+			wantAt:    fixedNow.Add(30 * time.Minute),
+			wantSched: true,
+			wantWhy:   ReasonStillWorking,
+		},
+		{
 			name:    "completed reports that the session finished",
 			session: storage.Session{State: storage.StateCompleted, Enabled: true},
 			wantWhy: ReasonCompleted,
@@ -221,3 +235,6 @@ func TestHumanizeUntil(t *testing.T) {
 		})
 	}
 }
+
+// timePtr returns a pointer to t, for the retry instants these cases pin.
+func timePtr(t time.Time) *time.Time { return &t }
