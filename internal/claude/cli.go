@@ -238,6 +238,9 @@ func (c *CLI) Agents(ctx context.Context, query AgentsQuery) ([]AgentEntry, erro
 // The session id is validated first so it can never be mistaken for a flag, and
 // the returned session id must equal the requested one; otherwise the call
 // fails with ErrSessionNotPreserved instead of reporting a false success.
+//
+// A resume is never dispatched as a background agent (`--bg`), because Claude
+// Code rejects that flag alongside the `-p` this call needs; see ResumeArgs.
 func (c *CLI) Resume(ctx context.Context, sessionID, message string) (ResumeResult, error) {
 	if err := ValidateSessionID(sessionID); err != nil {
 		return ResumeResult{}, err
@@ -350,6 +353,22 @@ func (c *CLI) resumeOnce(ctx context.Context, sessionID string, args []string) (
 //
 // Exported so tests and the recovery audit trail can assert the exact command
 // without reimplementing it.
+//
+// There is no `--bg` here, and it is not an oversight. Claude Code refuses to
+// combine a background agent with the print mode this vector has to carry:
+//
+//	$ claude -p --resume <session-id> --output-format json --bg "say OK"
+//	<exit 1>
+//	--bg and --print conflict: --print never starts the interactive session that
+//	`claude agents` attaches to, so the job would be unattachable. The prompt is
+//	the positional — drop --print: `claude --bg '<task>'`.
+//
+// Dropping `-p` to accommodate it would cost the whole contract: no
+// `--output-format json`, so no result, no is_error and no cost; the dispatch
+// reports a *new* session id rather than the one that was resumed, so the proof
+// that the original conversation continued is gone; and the turn finishes after
+// the process has already returned 0. A resume is a synchronous, verified turn
+// or it is not a resume. See docs/recovery.md.
 func ResumeArgs(sessionID, message string) []string {
 	return []string{"-p", "--resume", sessionID, "--output-format", "json", message}
 }

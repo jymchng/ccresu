@@ -41,6 +41,7 @@ journalctl --user -u ccresu.service -n 100 --no-pager
 | `claude: unsupported claude code version` | The CLI is older than 2.0.0 (`claude.MinimumVersion`). Upgrade Claude Code. |
 | `claude: unrecognized claude code version` | `claude --version` printed something the parser does not know. Run it and compare with `2.1.223 (Claude Code)`. |
 | State `UNRECOVERABLE` with a session type in the reason | `claude agents --json` reported a type ccresu does not know how to resume. It is reported, never invented into a command. |
+| `--bg and --print conflict` in your shell | You combined `--bg` with `-p`. The CLI forbids it: `--print` never starts the session `claude agents` attaches to. ccresu never passes `--bg` for exactly this reason — drop `-p` if you want a background agent by hand, and expect a *new* session id and no JSON result. |
 
 ## Detection and waiting
 

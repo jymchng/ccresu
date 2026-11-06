@@ -90,6 +90,34 @@ export const recoveryDoc: DocPage = {
     },
     {
       kind: "h2",
+      text: "Why the resume never asks for `--bg`",
+    },
+    {
+      kind: "p",
+      text: "The interactive CLI can resume straight into a background agent \u2014 `claude --resume <session-id> --bg '<task>'` prints `backgrounded \u00b7 d48ecad8` and returns at once. ccresu never does, and the reason is not taste: the CLI forbids the combination.",
+    },
+    {
+      kind: "code",
+      label: "Probed against Claude Code 2.1.223",
+      code: `$ claude -p --resume 044e2a0a-... --output-format json --bg "say OK"\n--bg and --print conflict: --print never starts the interactive session that\n\`claude agents\` attaches to, so the job would be unattachable. The prompt is the\npositional \u2014 drop --print: \`claude --bg '<task>'\`.\n$ echo $?\n1`,
+    },
+    {
+      kind: "ul",
+      items: [
+        "Adding `--bg` to `claude.ResumeArgs` would turn every resume into an exit-1 failure \u2014 and, through `describeRunError`, into the kind of failure that is never retried.",
+        "Dropping `-p` to satisfy the flag trades the contract for it: no `--output-format json`, so no result, no `is_error` and no cost.",
+        "The background job reports a *new* session id (`d48ecad8-ae57-413b-ba19-f9beac9062d4` for a resume of `044e2a0a-\u2026`), so the proof that the original conversation continued cannot even be evaluated.",
+        "The process exits 0 before the turn runs; the outcome would only ever be visible later through `claude agents --json` and `claude logs`.",
+      ],
+    },
+    {
+      kind: "note",
+      tone: "info",
+      title: "Pinned, not omitted",
+      text: "A resume is a synchronous, verified turn or it is not a resume, so the vector stays `-p \u2026 --output-format json`. `TestResumeArgsNeverPassBackground` fails if a background flag is ever added, so the absence of `--bg` is a tested decision rather than something a later reader has to infer.",
+    },
+    {
+      kind: "h2",
       text: "When a background agent still holds the session",
     },
     {

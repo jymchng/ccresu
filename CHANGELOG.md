@@ -4,6 +4,29 @@ All notable changes to ccresu are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-11-06
+
+### Documented
+
+- **A resume is never dispatched with `--bg`**, and the documentation now says so
+  with the evidence. Claude Code refuses `--bg` alongside the `-p` every resume
+  carries — `--bg and --print conflict: --print never starts the interactive
+  session that `claude agents` attaches to` — and exits 1 with nothing on stdout,
+  so adding the flag would fail every resume as a non-retryable
+  `ErrCLIUnavailable`. The form that does work drops `-p`, and with it
+  `--output-format json`, the JSON result, the cost, and the proof that the same
+  session id continued: the background job reports a **new** session id. Both
+  transcripts, probed against Claude Code 2.1.223, are in
+  [docs/recovery.md](docs/recovery.md#why-the-resume-never-passes---bg), and the
+  refusal is also a row in [docs/troubleshooting.md](docs/troubleshooting.md).
+- `TestResumeArgsNeverPassBackground` pins the decision, so a background flag
+  added to `claude.ResumeArgs` fails a test instead of failing the field, and the
+  comment on `ResumeArgs` carries the CLI's own refusal.
+- The website's recovery page and the README's "Verified Claude Code interfaces"
+  section carry the same explanation.
+
+No behaviour change: `claude.ResumeArgs` is byte-for-byte the vector 0.4.0 ran.
+
 ## [0.4.0] - 2026-11-06
 
 ### Changed

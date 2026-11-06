@@ -67,6 +67,72 @@ never do. The message is limited to 8 KiB, must be non-empty, the session id of
 a resume is validated before anything is executed, and a `claude stop` target
 must be an eight-hex job name, so neither can be read as a flag or a path.
 
+### Why the resume never passes `--bg`
+
+The interactive CLI can resume straight into a background agent. From your own
+shell that is a perfectly good thing to do:
+
+```console
+$ claude --resume 044e2a0a-b53b-471b-a24f-bf123bd7c3c7 --bg 'say OK'
+backgrounded · d48ecad8
+  claude agents             list sessions
+  claude attach d48ecad8    open in this terminal
+  claude logs d48ecad8      show recent output
+  claude stop d48ecad8      stop this session
+```
+
+ccresu never does, and the reason is not taste: the CLI forbids the combination.
+`--bg` and `-p` are mutually exclusive (probed against Claude Code 2.1.223):
+
+```console
+$ claude -p --resume 044e2a0a-b53b-471b-a24f-bf123bd7c3c7 \
+      --output-format json --bg "say OK"
+--bg and --print conflict: --print never starts the interactive session that
+`claude agents` attaches to, so the job would be unattachable. The prompt is the
+positional — drop --print: `claude --bg '<task>'`.
+$ echo $?
+1
+```
+
+Exit code 1, nothing on stdout. Adding `--bg` to `claude.ResumeArgs` would
+therefore turn every resume into a failure — and, because `describeRunError`
+reports a non-zero exit as `ErrCLIUnavailable`, into the kind of failure that is
+never retried.
+
+Dropping `-p` to satisfy the flag does not fix that; it trades the contract for
+it. The same probe, in the form the CLI suggests:
+
+```console
+$ claude --resume 044e2a0a-b53b-471b-a24f-bf123bd7c3c7 --bg 'say OK'
+$ claude agents --json
+[{"id":"d48ecad8","cwd":"/tmp/probe","kind":"background","startedAt":1793979825419,
+  "sessionId":"d48ecad8-ae57-413b-ba19-f9beac9062d4","name":"say OK","state":"working"}]
+```
+
+The job reports **`d48ecad8-ae57-413b-ba19-f9beac9062d4`**, not the
+`044e2a0a-…` that was resumed. Three things a recovery depends on are gone at
+once:
+
+- **No JSON result.** Without `--output-format json` there is no `result`, no
+  `is_error`, no `subtype`, no `duration_ms` and no `total_cost_usd`, so
+  `ParseResumeJSON` has nothing to map and the attempt can never be recorded as
+  verified.
+- **No proof the same conversation continued.** The dispatch answers with a new
+  session id, so the first half of the verification (the id that was asked for is
+  the id that answered) cannot even be evaluated. `ErrSessionNotPreserved` would
+  fire on every dispatch, and any transcript following would watch the wrong file.
+- **No outcome.** The process exits 0 before the turn runs. Whatever happens next
+  is only visible through `claude agents --json` and `claude logs`, after the
+  fact, and would have to be reconciled against the persisted state machine by a
+  poller.
+
+A resume is a synchronous, verified turn or it is not a resume, so the vector
+stays `-p … --output-format json`. `TestResumeArgsNeverPassBackground` pins that
+decision, so the absence of `--bg` is a tested fact rather than something a later
+reader has to infer. The background form is useful in your terminal — where you
+can watch the job and attach to it — not in a recovery the daemon owns and has to
+prove.
+
 ### Why the message is the last argument
 
 The prompt is a **positional** argument: no flag introduces it. Position is

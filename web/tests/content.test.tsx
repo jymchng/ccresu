@@ -58,6 +58,15 @@ describe("content integrity", () => {
     expect(code + JSON.stringify(doc?.blocks)).toContain("TestResumeArgsExact");
   });
 
+  it("documents that a resume is never dispatched with --bg", () => {
+    const doc = getDoc("recovery");
+    const body = JSON.stringify(doc?.blocks ?? []);
+
+    expect(body).toContain("Why the resume never asks for `--bg`");
+    expect(body).toContain("--bg and --print conflict");
+    expect(body).toContain("TestResumeArgsNeverPassBackground");
+  });
+
   it("narrates the background-agent recovery and the operator reset", () => {
     const body = JSON.stringify(getDoc("recovery")?.blocks ?? []);
 

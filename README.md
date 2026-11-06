@@ -822,6 +822,14 @@ copy instead of your conversation), no new session id, no TTY and no keystroke
 injection, and if the stop fails the original refusal is reported unchanged. See
 [docs/recovery.md](docs/recovery.md) for the exact mechanism and its limitations.
 
+The resume is never dispatched into a background agent either. `--bg` is a
+perfectly good flag in your own shell, but the CLI refuses it alongside the `-p`
+this resume has to carry (`--bg and --print conflict: …`, exit 1), and the form
+that would satisfy it drops `--output-format json` — no result, no cost, and a
+*new* session id instead of the resumed one. A background dispatch is
+fire-and-forget; a recovery is a synchronous turn that has to be proven. See
+[why the resume never passes `--bg`](docs/recovery.md#why-the-resume-never-passes---bg).
+
 ## Interfaces
 
 - `ccresu` — CLI and watchdog daemon.

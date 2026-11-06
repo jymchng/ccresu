@@ -281,6 +281,26 @@ func TestResumeArgsExact(t *testing.T) {
 	}
 }
 
+// The resume vector must stay headless. Claude Code refuses `--bg` together with
+// the `-p` in it, and the form that would satisfy `--bg` drops
+// `--output-format json` -- no result, no cost, and a *new* session id instead of
+// the resumed one. A guard here keeps that decision from being mistaken for an
+// omission.
+func TestResumeArgsNeverPassBackground(t *testing.T) {
+	t.Parallel()
+
+	args := ResumeArgs(testSessionID, "continue")
+	if args[0] != "-p" {
+		t.Fatalf("ResumeArgs()[0] = %q, want -p", args[0])
+	}
+	for _, arg := range args {
+		switch arg {
+		case "--bg", "--background", "-bg":
+			t.Fatalf("ResumeArgs() = %v; a resume never asks for a background agent", args)
+		}
+	}
+}
+
 func TestCLIResumeSuccess(t *testing.T) {
 	t.Parallel()
 
