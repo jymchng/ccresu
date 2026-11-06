@@ -13,7 +13,8 @@ import (
 // one place means a new column is added (or forgotten) in exactly one spot.
 const sessionColumns = `id, project_path, transcript_path, provider, session_type,
 	pid, ppid, process_start_time, state, enabled, recoverable, reason, last_error,
-	transcript_size, transcript_lines, retry_at, discovered_at, last_seen_at, updated_at`
+	transcript_size, transcript_lines, retry_at, discovered_at, last_seen_at, updated_at,
+	continuation_session_id`
 
 // SessionFilter narrows a session query. Zero values mean "no constraint".
 type SessionFilter struct {
@@ -73,7 +74,7 @@ func (s *Store) UpsertSession(ctx context.Context, session Session) (bool, error
 	err := s.InTx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `
 			INSERT INTO sessions (`+sessionColumns+`)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (id) DO NOTHING`,
 			session.ID, session.ProjectPath, session.TranscriptPath, session.Provider,
 			string(session.Type), session.PID, session.PPID, int64(session.ProcessStartTime),
@@ -81,6 +82,7 @@ func (s *Store) UpsertSession(ctx context.Context, session Session) (bool, error
 			session.Reason, session.LastError, session.TranscriptSize, session.TranscriptLines,
 			timePtrToDB(session.RetryAt), timeToDB(session.DiscoveredAt),
 			timeToDB(session.LastSeenAt), timeToDB(session.UpdatedAt),
+			session.ContinuationSessionID,
 		)
 		if err != nil {
 			return fmt.Errorf("insert session %s: %w", session.ID, err)
@@ -406,6 +408,35 @@ func (s *Store) SetSessionTranscriptMetrics(ctx context.Context, id, path string
 	return nil
 }
 
+// SetSessionContinuation records the session id a background job continues the
+// conversation under.
+//
+// A resume is a dispatch: `claude --resume <id> --bg` keeps the row we track but
+// the conversation carries on under the job's own session id. Storing it here is
+// what lets `ccresu sessions` and `ccresu inspect` say where the conversation
+// went, and what lets the next discovery pass read the right transcript instead
+// of the abandoned one. An empty id clears the record, which is what a probe that
+// found no continuation should do rather than leaving a stale id behind.
+func (s *Store) SetSessionContinuation(ctx context.Context, id, continuationID string) error {
+	if s == nil || s.db == nil {
+		return ErrClosed
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET continuation_session_id = ?, updated_at = ? WHERE id = ?`,
+		strings.TrimSpace(continuationID), timeToDB(s.now().UTC()), id)
+	if err != nil {
+		return fmt.Errorf("set session %s continuation: %w", id, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set session %s continuation: %w", id, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("%w: session %s", ErrNotFound, id)
+	}
+	return nil
+}
+
 // SetSessionError records the most recent error text for a session.
 func (s *Store) SetSessionError(ctx context.Context, id, message string) error {
 	if s == nil || s.db == nil {
@@ -466,7 +497,7 @@ func scanSession(row scanner) (Session, error) {
 		&sessionType, &session.PID, &session.PPID, &processStartTime,
 		&state, &enabled, &recoverable, &session.Reason, &session.LastError,
 		&session.TranscriptSize, &session.TranscriptLines, &retryAt,
-		&discoveredAt, &lastSeenAt, &updatedAt,
+		&discoveredAt, &lastSeenAt, &updatedAt, &session.ContinuationSessionID,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

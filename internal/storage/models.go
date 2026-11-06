@@ -176,6 +176,12 @@ type Session struct {
 	// session was last seen, so a later resume can prove the conversation grew.
 	TranscriptSize  int64
 	TranscriptLines int64
+	// ContinuationSessionID is the session id the background job reported after
+	// the most recent proved resume. A dispatched resume continues the
+	// conversation under the job's own id, so this is normally a different id
+	// from ID and is where the conversation now lives. Empty means no
+	// continuation has been recorded.
+	ContinuationSessionID string
 	// RetryAt is the instant the wait ends for a session in RETRY_WAIT: the
 	// backoff ccresu computed when the attempt failed, written down rather than
 	// re-derived. Leaving RETRY_WAIT clears it, so a stale wait is never reported
@@ -225,12 +231,16 @@ type RecoveryAttempt struct {
 	Success *bool
 	Output  string
 	Error   string
-	// SessionIDVerified reports whether the resumed session kept the original
+	// SessionIDVerified reports whether the resume kept the original
 	// session ID, i.e. the conversation was continued rather than restarted.
 	SessionIDVerified *bool
 	// TranscriptGrew reports whether the transcript gained lines, which is the
 	// cross-platform proof that the conversation actually advanced.
 	TranscriptGrew *bool
+	// ContinuationSessionID is the session id the background job reported, when
+	// it differs from SessionID. A dispatch continues the conversation under the
+	// job's own id, so this is where the conversation went.
+	ContinuationSessionID string
 }
 
 // Transition is one entry in the persisted state history.

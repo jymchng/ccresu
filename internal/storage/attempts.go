@@ -11,7 +11,8 @@ import (
 
 // attemptColumns is the canonical column list for attempt queries.
 const attemptColumns = `id, session_id, usage_limit_id, attempt_number, state, command,
-	started_at, finished_at, success, output, error, session_id_verified, transcript_grew`
+	started_at, finished_at, success, output, error, session_id_verified, transcript_grew,
+	continuation_session_id`
 
 // maxAttemptAllocationRetries bounds the retry loop used when two goroutines
 // allocate the same attempt number concurrently. The unique index on
@@ -114,11 +115,18 @@ type AttemptResult struct {
 	Output string
 	// Error is the failure text, empty on success.
 	Error string
-	// SessionIDVerified reports whether the resume kept the original session ID.
+	// SessionIDVerified reports whether the dispatch reported a continuation at
+	// all. The column name is historical: a background dispatch does NOT keep the
+	// original session id, it continues the conversation under the job's own id,
+	// which is what ContinuationSessionID records.
 	SessionIDVerified *bool
 	// TranscriptGrew reports whether the transcript grew, the cross-platform
 	// proof that the conversation continued.
 	TranscriptGrew *bool
+	// ContinuationSessionID is the session id the background job reported, when it
+	// is known. Empty means the dispatch either reported none or the attempt
+	// never got as far as resolving one.
+	ContinuationSessionID string
 	// FinishedAt overrides the finish timestamp; zero means "now".
 	FinishedAt time.Time
 }
@@ -276,7 +284,7 @@ func scanAttempt(row scanner) (RecoveryAttempt, error) {
 	)
 	err := row.Scan(&attempt.ID, &attempt.SessionID, &usageLimitID, &attempt.AttemptNumber,
 		&state, &attempt.Command, &startedAt, &finishedAt, &success, &attempt.Output,
-		&attempt.Error, &verified, &transcriptGrew)
+		&attempt.Error, &verified, &transcriptGrew, &attempt.ContinuationSessionID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return RecoveryAttempt{}, err
