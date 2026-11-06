@@ -2,18 +2,20 @@ package claude
 
 // This file adds the fifth verified interface, `claude stop <job-id>`.
 //
-// It exists for exactly one situation. `claude -p --resume <id>` refuses to run
-// while the same session is still attached to a background agent:
+// It exists for exactly one situation. `claude --resume <id> --bg <message>`
+// refuses to run while the same session is still attached to a background agent:
 //
 //	Error: That session is running in the background (837eaaea). Run
 //	`claude attach 837eaaea` to open it, or `claude stop 837eaaea` first to
 //	resume it here. Add --fork-session to branch off a copy instead.
 //
 // Of the three remedies the CLI offers, only `stop` keeps ccresu's promise: the
-// conversation is kept, the session id is unchanged, and the resume that follows
-// is the same headless `-p --resume` invocation as always. `attach` needs a
-// terminal ccresu deliberately does not have, and `--fork-session` would branch
-// a new conversation, which is the one thing a recovery must never do.
+// conversation is kept, and the resume that follows is the same
+// `--resume <id> --bg <message>` dispatch as always. The job that dispatch creates
+// then continues the conversation under a session id of its own, which is what
+// verification follows. `attach` needs a terminal ccresu deliberately does not
+// have, and `--fork-session` would branch a new conversation, which is the one
+// thing a recovery must never do.
 //
 // The argument is NOT the session UUID. `claude stop` resolves a background job
 // name -- exactly eight lower-case hex characters -- by prefix against the job

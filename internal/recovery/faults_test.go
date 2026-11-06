@@ -157,13 +157,13 @@ func runningGrowthProvider(before, after int64) *providerStub {
 func TestRecoverRefusesToPretendAStorageFailureSucceeded(t *testing.T) {
 	staleAttempt := func(t *testing.T, store *storage.Store) {
 		t.Helper()
-		if _, err := store.StartAttempt(context.Background(), sessionA, 0, "claude -p --resume"); err != nil {
+		if _, err := store.StartAttempt(context.Background(), sessionA, 0, "claude --resume "+sessionA+" --bg"); err != nil {
 			t.Fatalf("seed a running attempt: %v", err)
 		}
 	}
 	budgetSpent := func(t *testing.T, store *storage.Store) {
 		t.Helper()
-		attempt, err := store.StartAttempt(context.Background(), sessionA, 0, "claude -p --resume")
+		attempt, err := store.StartAttempt(context.Background(), sessionA, 0, "claude --resume "+sessionA+" --bg")
 		if err != nil {
 			t.Fatalf("seed attempt: %v", err)
 		}
@@ -748,7 +748,7 @@ func TestFaultStoreDelegatesEverythingElse(t *testing.T) {
 	if _, err := faulty.LatestAttempt(ctx, sessionA); !errors.Is(err, storage.ErrNotFound) {
 		t.Errorf("LatestAttempt = %v, want the store's own not-found error", err)
 	}
-	if _, err := faulty.StartAttempt(ctx, sessionA, 0, "claude -p --resume"); err != nil {
+	if _, err := faulty.StartAttempt(ctx, sessionA, 0, "claude --resume "+sessionA+" --bg"); err != nil {
 		t.Errorf("StartAttempt = %v, want it delegated", err)
 	}
 	if err := faulty.SetSessionTranscriptMetrics(ctx, sessionA, "/t.jsonl", 10, 1); err != nil {

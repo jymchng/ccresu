@@ -110,8 +110,9 @@ func Render(event storage.NotificationEvent, data EventData) (string, error) {
 		fmt.Fprintf(&body, "%s\n", Bold("Recovery started"))
 		fmt.Fprintf(&body, "Session: %s\n", session)
 		fmt.Fprintf(&body, "Attempt: %s\n", Escape(attemptText(data)))
-		body.WriteString("Resuming the original conversation with ")
-		fmt.Fprintf(&body, "%s.\n", Code("claude -p --resume "+data.SessionID))
+		body.WriteString("Dispatching the original conversation in the background with ")
+		fmt.Fprintf(&body, "%s.\n", Code("claude --resume "+data.SessionID+" --bg"))
+		body.WriteString("The job continues the conversation under a session id of its own, which ccresu follows until it finishes.")
 
 	case storage.EventRecoverySuccess:
 		fmt.Fprintf(&body, "%s\n", Bold("Recovery succeeded"))

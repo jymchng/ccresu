@@ -39,7 +39,7 @@ func seedPopulatedSession(t *testing.T, store *storage.Store, id string) {
 	}); err != nil {
 		t.Fatalf("seed usage limit: %v", err)
 	}
-	attempt, err := store.StartAttempt(ctx, id, 0, "claude -p --resume "+id)
+	attempt, err := store.StartAttempt(ctx, id, 0, "claude --resume "+id+" --bg")
 	if err != nil {
 		t.Fatalf("seed attempt: %v", err)
 	}

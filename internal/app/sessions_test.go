@@ -22,7 +22,7 @@ func seedDeletableSession(t *testing.T, h *harness, id string) {
 		s.State = storage.StateCheckingSession
 		s.LastError = "resume failed"
 	})
-	attempt, err := h.store.StartAttempt(ctx, id, 0, "claude -p --resume "+id)
+	attempt, err := h.store.StartAttempt(ctx, id, 0, "claude --resume "+id+" --bg")
 	if err != nil {
 		t.Fatalf("seed attempt: %v", err)
 	}
@@ -47,7 +47,7 @@ func seedFailedSession(t *testing.T, h *harness, id string) {
 		s.State = storage.StateCheckingSession
 		s.LastError = "resume failed"
 	})
-	attempt, err := h.store.StartAttempt(ctx, id, 0, "claude -p --resume "+id)
+	attempt, err := h.store.StartAttempt(ctx, id, 0, "claude --resume "+id+" --bg")
 	if err != nil {
 		t.Fatalf("seed attempt: %v", err)
 	}

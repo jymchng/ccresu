@@ -461,7 +461,7 @@ func TestForeignKeysCascade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("record limit: %v", err)
 	}
-	attempt, err := store.StartAttempt(ctx, session.ID, limit.ID, "claude -p --resume "+session.ID+" continue")
+	attempt, err := store.StartAttempt(ctx, session.ID, limit.ID, "claude --resume "+session.ID+" --bg continue")
 	if err != nil {
 		t.Fatalf("start attempt: %v", err)
 	}

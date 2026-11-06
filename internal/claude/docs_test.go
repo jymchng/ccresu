@@ -8,17 +8,23 @@ import (
 	"testing"
 )
 
+// retiredResumeFlag is the pair of arguments the retired print-mode resume passed
+// together. It is assembled here rather than written out, so that this test --
+// which exists to catch that pair -- is not itself the last place in the tree
+// that spells it.
+const retiredResumeFlag = "-p" + " " + "--resume"
+
 // TestPackageDocsDescribeTheDispatchedResume is a documentation contract test.
 //
 // The package doc comments are the contract an integrator reads before writing
 // code against this package, and they have already been wrong once: they kept
-// advertising `claude -p --resume <id> --output-format json <message>` after the
-// resume became a background dispatch, and nothing failed, because prose has no
-// compiler. This test reads the same files a reader would and fails on the two
-// mistakes that matter:
+// advertising the retired print-mode resume -- a `-p` flag, the session id and
+// `--output-format json`, in that order -- after the resume became a background
+// dispatch, and nothing failed, because prose has no compiler. This test reads
+// the same files a reader would and fails on the two mistakes that matter:
 //
-//   - naming the retired headless command (`-p` together with `--resume`), which
-//     ccresu never runs and which the CLI would refuse anyway;
+//   - naming that retired headless command (`-p` together with `--resume`),
+//     which ccresu never runs and which the CLI would refuse anyway;
 //   - failing to name the dispatch that is run, `--resume <id> --bg <message>`.
 //
 // It deliberately asserts on substrings rather than prose. Rewording is free;
@@ -43,9 +49,10 @@ func TestPackageDocsDescribeTheDispatchedResume(t *testing.T) {
 		}
 		text := string(raw)
 
-		if strings.Contains(text, "-p --resume") {
-			t.Errorf(`%s: documents the retired headless command "-p --resume"; `+
-				`a resume is a background dispatch, so it must read "--resume <id> --bg <message>"`, name)
+		if strings.Contains(text, retiredResumeFlag) {
+			t.Errorf(`%s: documents the retired headless command (%q); `+
+				`a resume is a background dispatch, so it must read "--resume <id> --bg <message>"`,
+				name, retiredResumeFlag)
 		}
 		if strings.Contains(text, "--output-format json <message>") {
 			t.Errorf(`%s: documents "--output-format json <message>", which is never passed: `+

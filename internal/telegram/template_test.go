@@ -100,6 +100,30 @@ func TestRenderEscapesEveryDynamicValue(t *testing.T) {
 	}
 }
 
+// TestRecoveryStartedNamesTheDispatchThatRuns is the regression test for an
+// operator-facing lie: the message told the operator that ccresu was resuming
+// with the retired print-mode command, while the resume had become a background
+// dispatch. The body has to name the command that is actually executed.
+func TestRecoveryStartedNamesTheDispatchThatRuns(t *testing.T) {
+	data := fullEventData()
+	body, err := Render(storage.EventRecoveryStarted, data)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	want := "claude --resume " + data.SessionID + " --bg"
+	if !strings.Contains(body, want) {
+		t.Errorf("body %q does not name the dispatch %q", body, want)
+	}
+	for _, retired := range []string{"-p ", "--print", "--output-format"} {
+		if strings.Contains(body, retired) {
+			t.Errorf("body %q still advertises the retired print-mode resume (%q)", body, retired)
+		}
+	}
+	if !strings.Contains(body, "session id of its own") {
+		t.Errorf("body %q does not say the job continues under its own session id", body)
+	}
+}
+
 func TestRenderRejectsAnUnknownEvent(t *testing.T) {
 	if _, err := Render(storage.NotificationEvent("nope"), fullEventData()); !errors.Is(err, ErrInvalidEvent) {
 		t.Fatalf("Render error = %v, want ErrInvalidEvent", err)

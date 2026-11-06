@@ -745,7 +745,7 @@ func TestNotifierPersistsAcrossARestart(t *testing.T) {
 		t.Fatalf("seed session: %v", err)
 	}
 	attempt, err := store.StartAttempt(ctx, request.SessionID, 0,
-		"claude -p --resume "+request.SessionID+" continue")
+		"claude --resume "+request.SessionID+" --bg continue")
 	if err != nil {
 		t.Fatalf("seed attempt: %v", err)
 	}

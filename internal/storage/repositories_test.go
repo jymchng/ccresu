@@ -410,7 +410,7 @@ func TestAttemptRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	first, err := store.StartAttempt(ctx, session.ID, limit.ID, "claude -p --resume attempts hello")
+	first, err := store.StartAttempt(ctx, session.ID, limit.ID, "claude --resume attempts --bg hello")
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}

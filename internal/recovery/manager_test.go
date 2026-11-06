@@ -645,7 +645,7 @@ func TestRecoverRecordsAFailedPreResumeCheckWithTheBudgetSpent(t *testing.T) {
 
 	ctx := context.Background()
 	for i := 0; i < DefaultMaxAttempts; i++ {
-		if _, err := store.StartAttempt(ctx, sessionA, 0, "claude -p --resume"); err != nil {
+		if _, err := store.StartAttempt(ctx, sessionA, 0, "claude --resume "+sessionA+" --bg"); err != nil {
 			t.Fatalf("start attempt %d: %v", i+1, err)
 		}
 	}
@@ -918,7 +918,7 @@ func exhaustBudget(t *testing.T, store *storage.Store, sessionID string, n int) 
 	t.Helper()
 	ctx := context.Background()
 	for i := 0; i < n; i++ {
-		attempt, err := store.StartAttempt(ctx, sessionID, 0, "claude -p --resume")
+		attempt, err := store.StartAttempt(ctx, sessionID, 0, "claude --resume "+sessionID+" --bg")
 		if err != nil {
 			t.Fatalf("start attempt %d: %v", i+1, err)
 		}
@@ -1021,7 +1021,7 @@ func TestRecoverHonoursTheAttemptBudgetAndForce(t *testing.T) {
 
 	ctx := context.Background()
 	for i := 0; i < DefaultMaxAttempts; i++ {
-		attempt, err := store.StartAttempt(ctx, sessionA, 0, "claude -p --resume")
+		attempt, err := store.StartAttempt(ctx, sessionA, 0, "claude --resume "+sessionA+" --bg")
 		if err != nil {
 			t.Fatalf("start attempt %d: %v", i+1, err)
 		}
@@ -1154,7 +1154,7 @@ func TestRecoverClosesAnAttemptInterruptedByARestart(t *testing.T) {
 	seedSession(t, store, session)
 	ctx := context.Background()
 
-	interrupted, err := store.StartAttempt(ctx, sessionA, 0, "claude -p --resume")
+	interrupted, err := store.StartAttempt(ctx, sessionA, 0, "claude --resume "+sessionA+" --bg")
 	if err != nil {
 		t.Fatalf("start attempt: %v", err)
 	}
