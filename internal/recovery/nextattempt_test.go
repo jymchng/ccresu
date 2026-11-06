@@ -105,9 +105,14 @@ func TestNextAttemptForEveryState(t *testing.T) {
 			wantWhy: ReasonUnrecoverable,
 		},
 		{
-			name:    "resumed reports that it is already done",
-			session: storage.Session{State: storage.StateResumed, Enabled: true},
-			wantWhy: ReasonResumed,
+			// A resumed session is between cycles, not finished: the next thing
+			// ccresu does is read the continuation transcript again, so the
+			// instant is now rather than a time nothing computed.
+			name:      "resumed reports that the next cycle reads the continuation",
+			session:   storage.Session{State: storage.StateResumed, Enabled: true},
+			wantAt:    fixedNow,
+			wantSched: true,
+			wantWhy:   ReasonResumed,
 		},
 		{
 			name:    "completed reports that the session finished",

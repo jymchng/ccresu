@@ -159,7 +159,7 @@ func TestDaemonNeverClaimsToFollowAJobItDoesNotHave(t *testing.T) {
 // TestDaemonRedisoversAResumedSession proves a recovery is not a dead end. The
 // row was left RESUMED by the pass that verified the resume; the next pass must
 // pick it up, record why, and put it back at the top of the cycle, otherwise the
-// loop runs exactly once and the session is parked for ever with
+// loop runs exactly once and the session is parked for ever, reported as
 // "none (already resumed)".
 func TestDaemonRedisoversAResumedSession(t *testing.T) {
 	h := newHarness(t)

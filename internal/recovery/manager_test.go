@@ -897,7 +897,7 @@ func TestRecoverRefusesSettledSessions(t *testing.T) {
 	}
 }
 
-func TestRecoverReportsAnAlreadyResumedSession(t *testing.T) {
+func TestRecoverReturnsAnAlreadyResumedSessionToDiscovery(t *testing.T) {
 	store := newTestStore(t)
 	session := recoverableSession(sessionA)
 	session.State = StateResumed
@@ -908,8 +908,41 @@ func TestRecoverReportsAnAlreadyResumedSession(t *testing.T) {
 	if !errors.Is(err, ErrNotEligible) {
 		t.Fatalf("Recover error = %v, want ErrNotEligible", err)
 	}
-	if !outcome.Resumed || outcome.State != StateResumed {
-		t.Errorf("outcome = %+v, want it to report the existing resume", outcome)
+	// The dispatch is refused -- there is nothing to resume until the
+	// continuation hits its next limit -- but the row is not left parked at
+	// "already resumed": it is returned to discovery, which is where the next
+	// cycle reads the continuation transcript.
+	if outcome.State != StateDiscovered {
+		t.Errorf("outcome state = %s, want %s", outcome.State, StateDiscovered)
+	}
+	if !outcome.Resumed {
+		t.Errorf("outcome = %+v, want it to report the resume that was proved", outcome)
+	}
+	stored, readErr := store.GetSession(context.Background(), sessionA)
+	if readErr != nil {
+		t.Fatalf("re-read session: %v", readErr)
+	}
+	if stored.State != StateDiscovered {
+		t.Fatalf("stored state = %s, want %s", stored.State, StateDiscovered)
+	}
+	transitions, readErr := store.ListTransitions(context.Background(), sessionA, 0)
+	if readErr != nil {
+		t.Fatalf("list transitions: %v", readErr)
+	}
+	var moved bool
+	for _, transition := range transitions {
+		if transition.FromState == StateResumed && transition.ToState == StateDiscovered {
+			moved = true
+			if !strings.Contains(transition.Reason, "continuation transcript") {
+				t.Errorf("reason = %q, want it to explain the rediscovery", transition.Reason)
+			}
+		}
+	}
+	if !moved {
+		t.Errorf("transitions = %+v, want a recorded RESUMED -> DISCOVERED move", transitions)
+	}
+	if !strings.Contains(err.Error(), "returned to DISCOVERED") {
+		t.Errorf("error %q does not say the session was returned to discovery", err)
 	}
 }
 

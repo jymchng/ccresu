@@ -38,8 +38,12 @@ const (
 	ReasonRediscovered = "returned to discovery; ccresu will re-read the transcript and schedule the next reset"
 	// ReasonUnrecoverable is reported when the session cannot be resumed at all.
 	ReasonUnrecoverable = "session cannot be recovered"
-	// ReasonResumed is reported once ccresu has resumed the session.
-	ReasonResumed = "already resumed"
+	// ReasonResumed is reported for a session whose resume was proved. It is not
+	// a finished session: the conversation continues under the session its
+	// background job reported, and the daemon re-reads that transcript on its
+	// next pass to find the next usage limit. The instant is now, because that
+	// pass is what the promise is about.
+	ReasonResumed = "returned to discovery; the daemon re-reads the continuation transcript on its next pass"
 	// ReasonCompleted is reported for a session that finished normally.
 	ReasonCompleted = "session completed"
 	// ReasonTerminated is reported for a session the operator ended.
@@ -99,7 +103,13 @@ func NextAttemptFor(session storage.Session, sched *storage.Schedule, now time.T
 	case storage.StateWorking:
 		return NextAttempt{Reason: ReasonWorking}
 	case storage.StateResumed:
-		return NextAttempt{Reason: ReasonResumed}
+		// A resumed session is between cycles, not done: the conversation keeps
+		// running under the continuation session, and the next thing ccresu does
+		// is read that transcript again for the next usage limit. Reporting
+		// "already resumed" as if nothing were pending is what made a recovered
+		// session look finished for ever, so the instant is now and the reason
+		// names the work that happens on the next pass.
+		return NextAttempt{At: now.UTC(), Reason: ReasonResumed, Scheduled: true}
 	case storage.StateCompleted:
 		return NextAttempt{Reason: ReasonCompleted}
 	case storage.StateUserTerminated:

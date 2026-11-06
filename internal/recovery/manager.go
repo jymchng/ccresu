@@ -328,8 +328,23 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 			stateError(sessionID, state.current, StateCheckingSession)
 	}
 	if state.current == StateResumed {
+		// RESUMED is not the end of the line. The conversation continues under
+		// the continuation session, so the next cycle starts by reading that
+		// transcript again — and an explicit recovery is the operator asking for
+		// exactly that. Returning "already resumed" and leaving the row parked is
+		// what made a recovered session look finished for ever.
+		//
+		// The dispatch itself is still refused: there is nothing to resume until
+		// the continuation transcript shows the next usage limit, and answering
+		// ErrNotEligible keeps that refusal (exit 4) while the recorded reason
+		// says what did happen.
+		reason := "already resumed; returned to discovery so the continuation transcript is read again for the next usage limit"
+		if err := state.move(StateDiscovered, reason, 0); err != nil {
+			return Outcome{SessionID: sessionID, State: state.current}, err
+		}
 		return Outcome{SessionID: sessionID, State: state.current, Resumed: true},
-			stateError(sessionID, state.current, StateCheckingSession)
+			fmt.Errorf("%w: session %s is %s; it was returned to %s so the next cycle reads the continuation transcript",
+				ErrNotEligible, sessionID, StateResumed, StateDiscovered)
 	}
 	attempts, err := m.attemptsThisCycle(ctx, sessionID)
 	if err != nil {

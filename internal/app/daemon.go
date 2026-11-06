@@ -215,9 +215,9 @@ func storageSession(session claude.Session) storage.Session {
 // A resume is not the end of a conversation, it is the start of the next
 // window: the resumed conversation keeps running under its continuation
 // session, and that session can hit a limit of its own. Nothing else would ever
-// move a RESUMED row again, so without this stage a recovered session is parked
-// for ever — `ccresu inspect` reports "none (already resumed)" and the loop the
-// operator asked for runs exactly once.
+// move a RESUMED row again, so without this stage a recovered session would be
+// parked for ever — `ccresu inspect` used to report "none (already resumed)" and
+// the loop the operator asked for ran exactly once.
 //
 // The move is deliberate and recorded. DISCOVERED resets the attempt budget and
 // makes detection re-read the transcript (see detectIn, which skips the "already
