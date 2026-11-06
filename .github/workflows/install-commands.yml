@@ -112,12 +112,23 @@ jobs:
           # A release that is already published, deliberately: this job must pass
           # on a branch and on main, i.e. before the next tag exists. Bump it only
           # when a newer release is out, never to the unreleased version.
-          command="$(node scripts/install-one-liner.mjs unixPinned --version 0.2.0)"
+          #
+          # The version lives in one variable, and the assertion below compares
+          # against that same variable: spelling it twice is what let a bump
+          # install 0.2.0 and then assert 0.1.0.
+          pinned=0.2.0
+          command="$(node scripts/install-one-liner.mjs unixPinned --version "$pinned")"
           printf 'running: %s\n' "$command"
           export HOME
           HOME="$(mktemp -d)"
           bash -c "$command"
-          "$HOME/.local/bin/ccresu" version | grep -Eq '^ccresu 0\.1\.0$'
+          installed="$("$HOME/.local/bin/ccresu" version)"
+          printf 'installed: %s\n' "$installed"
+          version="$(printf '%s\n' "$installed" | awk '{print $2}')"
+          if [ "$version" != "$pinned" ]; then
+            printf 'the pinned one-liner installed %s, expected %s\n' "$version" "$pinned" >&2
+            exit 1
+          fi
 
   go:
     name: Go and source one-liners
