@@ -46,20 +46,26 @@ type CLIOptions struct {
 
 // CLI is the version-aware adapter around the claude executable.
 //
-// It exposes exactly the five verified invocations:
+// It constructs exactly four argument vectors, and no others:
 //
 //	claude --version
 //	claude agents --json [--all] [--cwd <path>]
 //	claude --resume <session-id> --bg <message>
 //	claude stop <job-id>
-//	(the transcript and session-env files are read, not executed)
+//
+// Everything else ccresu knows is read from files, not run as a command:
+// ~/.claude/projects/<slugified-cwd>/<session-id>.jsonl and
+// ~/.claude/session-env/<session-id>/. There is no print-mode invocation -- `-p`
+// and `--output-format json` are never passed, because print mode refuses `--bg`
+// and a resume is a background dispatch.
 //
 // `claude stop` takes an eight-hex background job name, not the session UUID --
 // the CLI resolves job names only and answers a UUID with "No job matching" and
 // exit 1. It is issued only when a resume is refused because the session is
 // still attached to a background agent, and the job name is read out of that
-// refusal: its conversation is kept, so the same resume can follow immediately. No other command is ever constructed, and the
-// message is always passed as a single argv element so no shell ever sees it.
+// refusal: its conversation is kept, so the same resume can follow immediately.
+// No other command is ever constructed, and the message is always passed as a
+// single argv element so no shell ever sees it.
 type CLI struct {
 	bin            string
 	exec           Execer
