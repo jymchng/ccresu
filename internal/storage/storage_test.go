@@ -282,9 +282,9 @@ func TestMigrateFromEmptyAndRollback(t *testing.T) {
 		t.Fatalf("next_attempt_at missing after migrate: %v", sessionColumns(ctx, t, store))
 	}
 
-	// Roll back the newest version: the delete tombstones go with it.
-	// Asserting on the version the runner reports keeps this test honest as
-	// migrations are added.
+	// Roll back the newest version. It is a data migration (it re-opens
+	// PERMANENTLY_FAILED sessions), so no table changes; the point of asserting
+	// it here is that the runner reports it and its rollback succeeds.
 	reverted, err := store.Rollback(ctx, latest-1)
 	if err != nil {
 		t.Fatalf("rollback to %d: %v", latest-1, err)
@@ -294,6 +294,14 @@ func TestMigrateFromEmptyAndRollback(t *testing.T) {
 	}
 	if version, err := store.Version(ctx); err != nil || version != latest-1 {
 		t.Fatalf("Version after rollback = %d, %v", version, err)
+	}
+	if !tables()["deleted_sessions"] {
+		t.Fatalf("a data-only rollback must not drop deleted_sessions: %v", tables())
+	}
+
+	// Roll back the delete tombstones: the table goes with them.
+	if _, err := store.Rollback(ctx, 4); err != nil {
+		t.Fatalf("rollback to 4: %v", err)
 	}
 	if tables()["deleted_sessions"] {
 		t.Fatalf("deleted_sessions survived its rollback: %v", tables())

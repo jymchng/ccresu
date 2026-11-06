@@ -30,7 +30,7 @@ export const troubleshootingDoc: DocPage = {
         ["`sessions: 0` in status", "Discovery found nothing: check that `claude agents --json` works as your user, then run `ccresu doctor` and look at the `claude` and `transcripts` rows."],
         ["The limit message was seen but no session is waiting", "The banner scored below `detector.threshold`, or the wording is unknown. Add a `detector.custom_patterns` rule, or lower the threshold and re-run `ccresu config validate`."],
         ["Waiting for a reset time that looks wrong", "The message's own timezone wins over the host timezone, and a message without one falls back to polling. Check `ccresu inspect` for the timezone it parsed and the deadline it stored."],
-        ["`state: PERMANENTLY_FAILED`", "The attempt budget is spent or the error was classified as non-retryable. `ccresu history` shows the classified error; `ccresu retry <session-id>` resets the budget once the cause is fixed."],
+        ["`state: DISCOVERED`", "The attempt budget is spent or the error was classified as non-retryable. `ccresu history` shows the classified error; `ccresu retry <session-id>` resets the budget once the cause is fixed."],
         ["`state: UNRECOVERABLE`", "The session type or the observed error cannot be resumed through `claude -p --resume`. This is reported instead of inventing an undocumented command."],
         ["Recovery ran but the transcript did not grow", "The resume process started and exited without producing work. The verifier refuses to record RESUMED; check the recorded error and the resumes' output in the logs."],
         ["Exit code 2", "Usage error: an unknown flag, or a flag that command does not define. Global flags work before or after the command name; `ccresu <command> --help` lists the command's flags."],
@@ -68,7 +68,7 @@ export const troubleshootingDoc: DocPage = {
     },
     {
       kind: "p",
-      text: "For a single session, prefer `ccresu retry` (reset the attempt budget), `ccresu reset` (clear a permanently failed session, leaving it disabled), `ccresu enable`/`disable` (stop recovery without forgetting history), or `ccresu recover --force` (try again now) over deleting state.",
+      text: "For a single session, prefer `ccresu retry` (reset the attempt budget), `ccresu retry` (clear a rediscovered session, leaving it disabled), `ccresu enable`/`disable` (stop recovery without forgetting history), or `ccresu recover --force` (try again now) over deleting state.",
     },
   ],
 };

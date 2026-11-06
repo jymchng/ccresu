@@ -62,8 +62,8 @@ describe("content integrity", () => {
     const body = JSON.stringify(getDoc("recovery")?.blocks ?? []);
 
     expect(body).toContain("claude stop <job-id>");
-    expect(body).toContain("PERMANENTLY_FAILED");
-    expect(body).toContain("ccresu reset");
+    expect(body).toContain("DISCOVERED");
+    expect(body).toContain("ccresu retry");
     expect(body).toContain("keeps the attempt row");
     // The reproduce-then-fix contrast is documented, not just the happy path.
     expect(body).toContain("--pre-fix");

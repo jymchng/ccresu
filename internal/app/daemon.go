@@ -261,7 +261,11 @@ func (d *Daemon) detectIn(ctx context.Context, session storage.Session) error {
 	if !event.IsUsageLimit() {
 		return nil
 	}
-	if d.alreadyDetected(ctx, session.ID, event) {
+	// A session returned to DISCOVERED is being re-opened on purpose: its last
+	// recorded banner is the very reason it is back here, so skipping it as
+	// "already seen" would leave the session discovered for ever. Re-planning is
+	// what moves it to WAITING_FOR_RESET with a fresh resume time.
+	if session.State != storage.StateDiscovered && d.alreadyDetected(ctx, session.ID, event) {
 		return nil
 	}
 

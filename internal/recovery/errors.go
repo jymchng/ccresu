@@ -63,20 +63,22 @@ func (e *RetryError) Error() string {
 // Unwrap exposes the underlying failure to errors.Is/As.
 func (e *RetryError) Unwrap() error { return e.Cause }
 
-// terminalError records a failure that ends automatic recovery for a session.
-type terminalError struct {
+// cycleEndError records a failure that ends the current recovery cycle for a
+// session. It does not end the session: the state it names is where the next
+// cycle begins, and DISCOVERED is the usual one.
+type cycleEndError struct {
 	SessionID string
 	State     State
 	Cause     error
 }
 
 // Error implements error.
-func (e *terminalError) Error() string {
-	return fmt.Sprintf("recovery: session %s ended in %s: %v", e.SessionID, e.State, e.Cause)
+func (e *cycleEndError) Error() string {
+	return fmt.Sprintf("recovery: session %s ended its cycle in %s: %v", e.SessionID, e.State, e.Cause)
 }
 
 // Unwrap exposes the underlying failure to errors.Is/As.
-func (e *terminalError) Unwrap() error { return e.Cause }
+func (e *cycleEndError) Unwrap() error { return e.Cause }
 
 // sessionError wraps an error with the session it concerns.
 func sessionError(err error, sessionID string) error {

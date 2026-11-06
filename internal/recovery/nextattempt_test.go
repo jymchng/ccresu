@@ -96,8 +96,8 @@ func TestNextAttemptForEveryState(t *testing.T) {
 		},
 		{
 			name:    "permanently failed reports the spent budget",
-			session: storage.Session{State: storage.StatePermanentlyFailed, Enabled: true},
-			wantWhy: ReasonBudgetSpent,
+			session: storage.Session{State: storage.StateDiscovered, Enabled: true},
+			wantWhy: ReasonRediscovered,
 		},
 		{
 			name:    "unrecoverable reports that it cannot be recovered",
@@ -125,11 +125,12 @@ func TestNextAttemptForEveryState(t *testing.T) {
 			wantWhy: ReasonDisabled,
 		},
 		{
-			// A limit that has been detected but not yet scheduled has no instant;
-			// saying "in 0s" would promise immediate work that is not queued.
-			name:    "no limit detected yet reports none",
+			// A discovered session has no instant of its own: the next discovery
+			// pass is what finds one, so the reason promises that rather than a
+			// time nothing has computed.
+			name:    "a discovered session reports rediscovery",
 			session: storage.Session{State: storage.StateDiscovered, Enabled: true},
-			wantWhy: ReasonNoLimit,
+			wantWhy: ReasonRediscovered,
 		},
 		{
 			name:    "usage limit detected but unscheduled reports none",

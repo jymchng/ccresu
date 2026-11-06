@@ -155,54 +155,67 @@ DISCOVERED → RUNNING → USAGE_LIMIT_DETECTED → WAITING_FOR_RESET → RESET_
                                                                     ↓                ↓
                                                                  RESUMING ──────→ RESUMED
                                                                     ↓
-                                                        RETRY_WAIT / PERMANENTLY_FAILED
+                                                    RETRY_WAIT / DISCOVERED
 ```
+
+`DISCOVERED` is both the start and the retry state: a failed attempt, and a spent
+attempt budget, return the session there, and the next discovery pass reads its
+transcript again and schedules the next reset.
 
 Legal edges are declared once, in `internal/recovery/state.go`, and any other
 edge is rejected with `ErrInvalidTransition`. The interesting ones:
 
 | From | Allowed |
 | --- | --- |
-| `RUNNING` | `USAGE_LIMIT_DETECTED`, `COMPLETED`, `USER_TERMINATED`, `DISABLED`, `PERMANENTLY_FAILED` (budget spent) |
-| `WAITING_FOR_RESET` | itself (unknown-reset re-poll or a restart), `RESET_TIME_REACHED`, `PERMANENTLY_FAILED` (budget spent), `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED` |
-| `CHECKING_SESSION` | `CHECKING_LIMIT`, `RESUMED` (it resumed on its own), `RETRY_WAIT` (the status check itself failed), `PERMANENTLY_FAILED` (budget spent) |
-| `CHECKING_LIMIT` | `RESUMING`, `RETRY_WAIT`, `WAITING_FOR_RESET` (the limit is still in force), `PERMANENTLY_FAILED` (budget spent) |
-| `RESUMING` | `RESUMED`, `RETRY_WAIT`, `PERMANENTLY_FAILED` |
-| `RETRY_WAIT` | `CHECKING_SESSION`, `WAITING_FOR_RESET`, `PERMANENTLY_FAILED` |
+| `DISCOVERED` | `RUNNING`, `CHECKING_SESSION` (recover/retry), `DISABLED`, `UNRECOVERABLE`, itself |
+| `RUNNING` | `USAGE_LIMIT_DETECTED`, `COMPLETED`, `USER_TERMINATED`, `DISABLED`, `DISCOVERED` |
+| `WAITING_FOR_RESET` | itself (unknown-reset re-poll or a restart), `RESET_TIME_REACHED`, `DISCOVERED`, `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED` |
+| `CHECKING_SESSION` | `CHECKING_LIMIT`, `RESUMED` (it resumed on its own), `RETRY_WAIT` (the status check itself failed), `DISCOVERED` |
+| `CHECKING_LIMIT` | `RESUMING`, `RETRY_WAIT`, `WAITING_FOR_RESET` (the limit is still in force), `DISCOVERED` |
+| `RESUMING` | `RESUMED`, `RETRY_WAIT`, `DISCOVERED` |
+| `RETRY_WAIT` | `CHECKING_SESSION`, `WAITING_FOR_RESET`, `DISCOVERED` |
 | `RESUMED` | `RUNNING`, `COMPLETED`, `USER_TERMINATED`, `DISABLED` — never straight back to `RESUMING` |
-| `PERMANENTLY_FAILED` | `CHECKING_SESSION` (an operator asked for another go), `USER_TERMINATED`, `DISABLED` (via `ccresu reset`) |
 
 `COMPLETED`, `USER_TERMINATED` and `UNRECOVERABLE` are terminal. `RESUMED`,
 `COMPLETED`, `USER_TERMINATED`, `DISABLED` and `UNRECOVERABLE` are **settled**:
 recovery refuses to touch them, so a finished conversation is never resumed
 again by a stray tick.
 
-`RETRY_WAIT` vs `PERMANENTLY_FAILED` is the difference between "this might work
-later" and "stop asking": retryable failures wait with exponential backoff plus
-jitter (`initial_delay` 30s, ×2, capped at `max_delay` 15m, ±`jitter` 15%),
-non-retryable failures and an exhausted budget go to `PERMANENTLY_FAILED`.
-`ccresu retry <session-id>` resets the budget, `ccresu recover <session-id>
---force` tries once more anyway, and `ccresu reset <session-id>` clears the stored
-failure and leaves the session `DISABLED` — see [cli.md](cli.md).
+`RETRY_WAIT` is "this might work on the same schedule": retryable failures wait
+with exponential backoff plus jitter (`initial_delay` 30s, ×2, capped at
+`max_delay` 15m, ±`jitter` 15%). Anything else — a non-retryable failure, or an
+exhausted budget — sends the session back to `DISCOVERED`.
+
+There is no terminal failure state. A session that cannot be resumed is not
+broken for ever: it is waiting for its limit to clear, or for a condition that
+has since changed. Returning it to `DISCOVERED` lets the daemon read its
+transcript again, find the next reset time and schedule another attempt, so an
+operator never has to clear a failure by hand. `ccresu retry <session-id>` and
+`ccresu recover <session-id> --force` still exist for a session an operator wants
+to push right now — see [cli.md](cli.md).
 
 A failure **before** the resume is issued — the status check in
 `CHECKING_SESSION` or the limit check in `CHECKING_LIMIT` — is different: no
 attempt row exists, so no budget was spent, and the session rests in
 `RETRY_WAIT` whatever the error is classified as (an `UNRECOVERABLE` verdict
-still wins). Calling such a session `PERMANENTLY_FAILED` would claim a budget it
-never used. Its transition reason says so explicitly, e.g. `the pre-resume check
-failed (permanent); no attempt was spent, next check in 1m0s: …`, so
-`ccresu history` explains the wait.
+still wins), because a rediscovery would claim a budget this failure never spent.
+Its transition reason says so explicitly, e.g. `the pre-resume check failed
+(permanent); no attempt was spent, next check in 1m0s: …`, so `ccresu history`
+explains the wait.
 
-The **attempt budget** is the mirror image. It is a property of the session, not
-of one path through the machine, so `PERMANENTLY_FAILED` is legal from every
-state that still permits automatic work — including `WAITING_FOR_RESET`, where
-the scheduler parks a session whose limit is still in force, and
-`CHECKING_SESSION`, where a crash mid-check leaves one. The guard runs before any
-check, records `maximum attempts reached (10)`, and returns
-`errors.Is(err, ErrMaxAttempts)` as a terminal error; `ccresu retry` (fresh
-budget), `ccresu reset` (clear the failure, leave it disabled) or `ccresu recover
---force` (one more try now) is then the only way forward.
+The **attempt budget** is measured per discovery cycle, not per session. The
+guard runs before any check and counts the attempts started since the session
+last entered `DISCOVERED`; when ten of them have been spent it records
+`maximum attempts reached (10); returned to discovery for the next reset`, moves
+the session to `DISCOVERED`, and returns `errors.Is(err, ErrMaxAttempts)`.
+
+Entering `DISCOVERED` therefore starts a fresh budget — which is the whole point:
+the daemon rediscovers the session, reads its transcript, plans the next reset and
+tries again, without anyone running a command. The budget is a safety valve
+against a tight loop inside one cycle, not a verdict about the session. Because
+the guard can fire wherever a session is parked — `WAITING_FOR_RESET` after an
+unknown-reset poll, `CHECKING_SESSION` after a crash mid-check — every state that
+still permits automatic work has an edge to `DISCOVERED`.
 
 ## When the session is still attached to a background agent
 
@@ -248,37 +261,24 @@ The sequence, from the outside:
 If the stop itself fails, or the second resume refuses again (or fails any other
 way), the **original** failure is returned untouched. Nothing loops, the
 classification is unchanged, and the session is dealt with exactly as any other
-permanent resume failure: `ccresu retry <session-id>` for a fresh budget,
-`ccresu recover <session-id> --force` for one more try now, or `ccresu reset
-<session-id>` to clear the failure and park the session in `DISABLED`.
+failed resume: it returns to `DISCOVERED`, where the next discovery pass reads the
+transcript again and schedules the next reset. `ccresu retry <session-id>` and
+`ccresu recover <session-id> --force` are there if you want it tried right now.
 
 Once a session has been stopped this way, the next resume is a normal resume
 again: the background agent no longer holds it, so there is no stop to issue.
 
-### The operator exit from `PERMANENTLY_FAILED`
+### There is no dead end to exit
 
-A session that reached `PERMANENTLY_FAILED` this way (or any other way) is not
-lost, and `ccresu reset <session-id>` is how an operator says so. It is
-deliberately narrow:
+A session that could not be resumed used to end in a state that only an operator
+could clear. It no longer does. `DISCOVERED` is not a failure: it is the queue the
+daemon reads from, and every failed resume and every spent budget puts the
+session back in it with its attempt history intact.
 
-- It moves `PERMANENTLY_FAILED` → `DISABLED` and **nothing else**; any other
-  state is refused with exit code `4` and a message naming the state.
-- It clears the stored error, so the session no longer looks broken.
-- It keeps the attempt row, the attempt reason and the counter: the history of
-  what happened stays readable in `ccresu history`.
-- It never resumes anything and never refunds an attempt. `ccresu retry <id>`
-  refills the budget, `ccresu recover <id> --force` tries once more now, and
-  `ccresu enable <id>` makes the session recoverable again with whatever budget
-  it has left.
-
-These sessions accumulate: the state is terminal, but the session stays enabled,
-so it keeps appearing in a bare `ccresu` listing with nothing the daemon will ever
-do to it. `ccresu sessions clear` is the sweep for that — it forgets every
-`PERMANENTLY_FAILED` session in one transaction, with a tombstone each, exactly as
-`ccresu sessions delete <id>` forgets one. It removes ccresu's records only; the
-conversations are never touched, and `ccresu enable <id>` undoes it one session at a
-time. `ccresu sessions clear --dry-run` prints the same report without deleting
-anything. See [the CLI reference](cli.md#clearing-every-permanently-failed-session).
+If a session really is finished, `ccresu disable <session-id>` is the honest way
+to say so, and `ccresu sessions delete <session-id>` stops tracking it — see
+[cli.md](cli.md). Nothing about a failed attempt destroys the conversation: the
+transcript, the session id and the audit trail are all untouched.
 
 ## Proving it end to end
 
@@ -309,13 +309,13 @@ tests/scripts/background-resume-e2e.sh --pre-fix /tmp/ccresu-prefix/ccresu
 
 | Binary | `ccresu recover <id>` | Stub saw | Final state |
 | --- | --- | --- | --- |
-| before the fix (`00692e3`) | exits 1, reporting the refusal | one resume, no stop | `PERMANENTLY_FAILED` |
+| before the fix (`00692e3`) | exits 1, reporting the refusal | one resume, no stop | `PERMANENTLY_FAILED` (that binary predates the state's removal) |
 | with the fix | exits 0, verification proven | resume, stop, resume | `RESUMED` |
 
-The failing session in the same run is also the fixture for `ccresu reset`:
-`PERMANENTLY_FAILED` becomes `DISABLED`, the session's stored error is cleared,
-the attempt row and its reason are kept, a second `reset` is refused with exit 4,
-and `ccresu enable` leaves the session recoverable again.
+The second session in the same run is the one that cannot be resumed. It now ends
+in `DISCOVERED` with its attempt row, its reason and its transcript intact, and
+the script asserts that `ccresu reset` and `ccresu sessions clear` no longer
+exist (both exit 2 as unknown commands).
 
 ## Verification: proof, not optimism
 
@@ -344,7 +344,7 @@ started is not a recovery.
 | Normal completion | recognised as completion; not resumed |
 | Limit still in force at resume time | attempt recorded, back to `WAITING_FOR_RESET` |
 | Session still attached to a background agent | `claude stop <job-id>` then the identical resume, once per attempt; if the stop fails the original refusal is reported |
-| Attempt budget spent | `PERMANENTLY_FAILED` until `ccresu retry` (fresh budget) or `ccresu reset` (failure cleared, session left `DISABLED`) |
+| Attempt budget spent | back to `DISCOVERED`; the next discovery pass re-reads the transcript, schedules the next reset and starts a fresh budget |
 
 ## Inspecting what happened
 

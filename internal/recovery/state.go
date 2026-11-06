@@ -29,7 +29,6 @@ const (
 	StateResuming           = storage.StateResuming
 	StateResumed            = storage.StateResumed
 	StateRetryWait          = storage.StateRetryWait
-	StatePermanentlyFailed  = storage.StatePermanentlyFailed
 	StateCompleted          = storage.StateCompleted
 	StateUserTerminated     = storage.StateUserTerminated
 	StateDisabled           = storage.StateDisabled
@@ -48,42 +47,44 @@ var ErrInvalidTransition = errors.New("recovery: invalid state transition")
 //	-> RESET_TIME_REACHED -> CHECKING_SESSION -> CHECKING_LIMIT -> RESUMING
 //	-> RESUMED
 //
-// with RETRY_WAIT looping back to CHECKING_SESSION, and PERMANENTLY_FAILED once
-// the attempt budget is spent. The remaining edges exist so an operator action
-// (disable, terminate, retry) or an off-nominal observation (already resumed,
-// limit not actually cleared) is recorded instead of being forced through the
-// happy path or silently dropped.
+// with RETRY_WAIT looping back to CHECKING_SESSION. The remaining edges exist so
+// an operator action (disable, terminate) or an off-nominal observation (already
+// resumed, limit not actually cleared) is recorded instead of being forced
+// through the happy path or silently dropped.
 //
-// PERMANENTLY_FAILED is reachable from every state that still permits automatic
-// work, not only from RESUMING and RETRY_WAIT. The attempt budget belongs to the
-// session, not to one path through the machine: the guard that enforces it runs
-// before any check, and it finds sessions parked in WAITING_FOR_RESET (the limit
-// was still in force on the last poll) or left in CHECKING_SESSION by a crash
-// mid-check just as often as it finds them in RETRY_WAIT. Refusing those edges
-// would lose both the terminal state and the reason for it, and report an
-// exhausted budget as an ordinary failure. It sits next to DISABLED and
-// USER_TERMINATED for the same reason: a verdict about the session as a whole,
-// legal from anywhere that is not already settled.
+// There is no terminal failure state. A session that cannot be resumed is not
+// broken for ever: the daemon rediscovers it, reads its transcript again, and
+// finds its next reset time. Every state that permits automatic work therefore
+// has an edge back to DISCOVERED, and that is what a failed attempt or an
+// exhausted attempt budget produces. DISCOVERED is the start of a new cycle, not
+// the absence of one: entering it resets the attempt budget, so a session is
+// retried as often as its transcript still shows a usage limit, without an
+// operator running `ccresu reset`.
+//
+// The only state that stops automatic work on its own is UNRECOVERABLE, and only
+// because ccresu has positively established that it has no verified way to
+// continue the conversation. That is a fact about the session, not a budget.
 var transitions = map[State]map[State]struct{}{
 	StateDiscovered: {
 		StateRunning:           {},
+		StateCheckingSession:   {}, // recover and retry start by checking the session
 		StateDisabled:          {},
 		StateUnrecoverable:     {},
-		StatePermanentlyFailed: {}, // budget already spent when it was discovered
+		StateDiscovered:        {}, // a fresh cycle for a budget spent before discovery
 	},
 	StateRunning: {
 		StateUsageLimitDetected: {},
 		StateCompleted:          {},
 		StateUserTerminated:     {},
 		StateDisabled:           {},
-		StatePermanentlyFailed:  {},
+		StateDiscovered:         {},
 	},
 	StateUsageLimitDetected: {
 		StateWaitingForReset:   {},
 		StateUnrecoverable:     {},
 		StateUserTerminated:    {},
 		StateDisabled:          {},
-		StatePermanentlyFailed: {},
+		StateDiscovered:        {},
 	},
 	StateWaitingForReset: {
 		// A repeat entry is legal: an unknown-reset session re-enters the
@@ -93,14 +94,14 @@ var transitions = map[State]map[State]struct{}{
 		StateUnrecoverable:     {},
 		StateUserTerminated:    {},
 		StateDisabled:          {},
-		StatePermanentlyFailed: {},
+		StateDiscovered:        {},
 	},
 	StateResetTimeReached: {
 		StateCheckingSession:   {},
 		StateUnrecoverable:     {},
 		StateUserTerminated:    {},
 		StateDisabled:          {},
-		StatePermanentlyFailed: {},
+		StateDiscovered:        {},
 	},
 	StateCheckingSession: {
 		StateCheckingLimit:     {},
@@ -109,7 +110,7 @@ var transitions = map[State]map[State]struct{}{
 		StateUnrecoverable:     {},
 		StateUserTerminated:    {},
 		StateDisabled:          {},
-		StatePermanentlyFailed: {},
+		StateDiscovered:        {},
 	},
 	StateCheckingLimit: {
 		StateResuming:          {},
@@ -118,12 +119,12 @@ var transitions = map[State]map[State]struct{}{
 		StateUnrecoverable:     {},
 		StateUserTerminated:    {},
 		StateDisabled:          {},
-		StatePermanentlyFailed: {},
+		StateDiscovered:        {},
 	},
 	StateResuming: {
 		StateResumed:           {},
 		StateRetryWait:         {},
-		StatePermanentlyFailed: {},
+		StateDiscovered:        {},
 		StateUnrecoverable:     {},
 		StateUserTerminated:    {},
 		StateDisabled:          {},
@@ -131,7 +132,7 @@ var transitions = map[State]map[State]struct{}{
 	StateRetryWait: {
 		StateCheckingSession:   {},
 		StateWaitingForReset:   {},
-		StatePermanentlyFailed: {},
+		StateDiscovered:        {},
 		StateUserTerminated:    {},
 		StateDisabled:          {},
 	},
@@ -143,11 +144,6 @@ var transitions = map[State]map[State]struct{}{
 		StateCompleted:      {},
 		StateUserTerminated: {},
 		StateDisabled:       {},
-	},
-	StatePermanentlyFailed: {
-		StateCheckingSession: {}, // an operator asked for another go
-		StateUserTerminated:  {},
-		StateDisabled:        {},
 	},
 	StateCompleted:      {},
 	StateUserTerminated: {},
@@ -247,7 +243,9 @@ func PendingStates() []State {
 }
 
 // Failed reports whether a session in state s has failed in a way that needs an
-// operator: either the attempt budget is spent or the session can never resume.
+// operator. Only UNRECOVERABLE qualifies: a spent attempt budget returns the
+// session to DISCOVERED and is retried on the next discovery cycle, so it is a
+// pause, not a failure.
 func Failed(s State) bool {
-	return s == StatePermanentlyFailed || s == StateUnrecoverable
+	return s == StateUnrecoverable
 }

@@ -25,7 +25,6 @@ var reportedStates = []storage.State{
 	storage.StateResuming,
 	storage.StateResumed,
 	storage.StateRetryWait,
-	storage.StatePermanentlyFailed,
 	storage.StateCompleted,
 	storage.StateUserTerminated,
 	storage.StateDisabled,

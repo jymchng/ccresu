@@ -21,7 +21,6 @@ const (
 	StateResuming           State = "RESUMING"
 	StateResumed            State = "RESUMED"
 	StateRetryWait          State = "RETRY_WAIT"
-	StatePermanentlyFailed  State = "PERMANENTLY_FAILED"
 	StateCompleted          State = "COMPLETED"
 	StateUserTerminated     State = "USER_TERMINATED"
 	StateDisabled           State = "DISABLED"
@@ -41,7 +40,6 @@ var allStates = map[State]struct{}{
 	StateResuming:           {},
 	StateResumed:            {},
 	StateRetryWait:          {},
-	StatePermanentlyFailed:  {},
 	StateCompleted:          {},
 	StateUserTerminated:     {},
 	StateDisabled:           {},

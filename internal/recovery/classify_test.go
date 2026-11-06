@@ -20,11 +20,11 @@ func TestClassValidAndState(t *testing.T) {
 		retry bool
 		state State
 	}{
-		{ClassRetryable, true, true, StatePermanentlyFailed},
-		{ClassPermanent, true, false, StatePermanentlyFailed},
+		{ClassRetryable, true, true, StateRetryWait},
+		{ClassPermanent, true, false, StateDiscovered},
 		{ClassUnrecoverable, true, false, StateUnrecoverable},
 		{ClassCanceled, true, false, StateRetryWait},
-		{Class("who"), false, false, StatePermanentlyFailed},
+		{Class("who"), false, false, StateDiscovered},
 	}
 	for _, tc := range cases {
 		if got := tc.class.Valid(); got != tc.valid {

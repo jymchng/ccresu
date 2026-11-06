@@ -56,7 +56,6 @@ func TestEveryCommandAcceptsTheGlobalFlagsInEitherPosition(t *testing.T) {
 		{"recover", []string{"recover", id}},
 		{"retry", []string{"retry", id}},
 		{"enable", []string{"enable", id}},
-		{"reset", []string{"reset", id}},
 		{"disable", []string{"disable", id}},
 		{"history", []string{"history", id}},
 		{"config validate", []string{"config", "validate"}},

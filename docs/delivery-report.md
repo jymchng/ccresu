@@ -102,7 +102,7 @@ Plus two tighter scenarios: a restart in the middle of the wait
 (`TestScenarioSurvivesRestartMidWait`) and `ErrLimitNotCleared` — the limit is
 still in force, so the session goes back to waiting instead of resuming
 (`TestScenarioRefusesWhenTheLimitIsStillInForce`). The attempt-budget path to
-`PERMANENTLY_FAILED` is covered by the `internal/recovery` unit tests.
+Rediscovery after a spent budget is covered by the `internal/recovery` unit tests.
 
 ## Known gaps
 

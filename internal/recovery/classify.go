@@ -18,8 +18,11 @@ const (
 	// failures are retryable because the attempt budget bounds them anyway,
 	// whereas treating them as permanent would abandon a recoverable session.
 	ClassRetryable Class = "retryable"
-	// ClassPermanent means retrying cannot help and the session must not be
-	// re-attempted automatically.
+	// ClassPermanent means repeating the attempt on the current schedule cannot
+	// help: an authentication failure, a missing binary, a session id the CLI
+	// will not accept. It does NOT mean the session is abandoned — a permanent
+	// failure still returns the session to DISCOVERED, where the next discovery
+	// cycle re-reads its transcript and decides afresh.
 	ClassPermanent Class = "permanent"
 	// ClassUnrecoverable means ccresu has no verified way to continue the
 	// session at all.
@@ -45,17 +48,23 @@ func (c Class) Retryable() bool { return c == ClassRetryable }
 
 // State returns the state the session moves to when an attempt fails this way.
 //
-// Unrecoverable failures and the generic permanent failure both stop automatic
-// retries; the distinction matters for the operator-facing message and for the
-// notification that is sent.
+// A failure that is not positively unrecoverable returns the session to
+// DISCOVERED, whatever the class: the daemon rediscovers it, re-reads the
+// transcript and finds the next reset time. There is deliberately no terminal
+// failure state, because a resume that failed is not evidence that the
+// conversation is gone.
 func (c Class) State() State {
 	switch c {
 	case ClassUnrecoverable:
 		return StateUnrecoverable
-	case ClassCanceled:
+	case ClassRetryable, ClassCanceled:
+		// Worth another attempt on the current schedule, so it waits.
 		return StateRetryWait
 	default:
-		return StatePermanentlyFailed
+		// Permanent: repeating on this schedule cannot help. The session is
+		// rediscovered rather than abandoned, and the next cycle starts a fresh
+		// attempt budget.
+		return StateDiscovered
 	}
 }
 

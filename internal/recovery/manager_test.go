@@ -550,9 +550,9 @@ func TestRecoverRecordsAPermanentPreResumeFailureAsARetryWait(t *testing.T) {
 	if !errors.As(err, &retry) {
 		t.Fatalf("Recover error = %v, want a RetryError: the session is retryable and must say so", err)
 	}
-	var terminal *terminalError
-	if errors.As(err, &terminal) {
-		t.Errorf("error = %v, want no terminalError: the session is not permanently failed", err)
+	var cycleEnd *cycleEndError
+	if errors.As(err, &cycleEnd) {
+		t.Errorf("error = %v, want no cycleEndError: a pre-resume failure rests in RETRY_WAIT", err)
 	}
 	if outcome.State != StateRetryWait || outcome.Delay != retry.Delay {
 		t.Errorf("outcome = %+v, want RETRY_WAIT with the same delay %s", outcome, retry.Delay)
@@ -717,20 +717,20 @@ func TestRecoverStopsOnANonRetryableFailure(t *testing.T) {
 	if !errors.Is(err, claude.ErrCLIUnavailable) {
 		t.Fatalf("Recover error = %v, want the CLI error", err)
 	}
-	if outcome.State != StatePermanentlyFailed {
-		t.Errorf("outcome state = %s, want PERMANENTLY_FAILED", outcome.State)
+	if outcome.State != StateDiscovered {
+		t.Errorf("outcome state = %s, want DISCOVERED", outcome.State)
 	}
-	var terminal *terminalError
-	if !errors.As(err, &terminal) || terminal.State != StatePermanentlyFailed {
-		t.Errorf("error = %v, want a terminalError in PERMANENTLY_FAILED", err)
+	var cycleEnd *cycleEndError
+	if !errors.As(err, &cycleEnd) || cycleEnd.State != StateDiscovered {
+		t.Errorf("error = %v, want a cycleEndError in DISCOVERED", err)
 	}
 
 	stored, err := store.GetSession(context.Background(), sessionA)
 	if err != nil {
 		t.Fatalf("get session: %v", err)
 	}
-	if stored.State != StatePermanentlyFailed {
-		t.Errorf("persisted state = %s, want PERMANENTLY_FAILED", stored.State)
+	if stored.State != StateDiscovered {
+		t.Errorf("persisted state = %s, want DISCOVERED", stored.State)
 	}
 	attempts, err := store.ListAttempts(context.Background(), sessionA, 0)
 	if err != nil {
@@ -926,12 +926,12 @@ func TestRecoverRecordsAnExhaustedBudgetFromEveryLiveState(t *testing.T) {
 			if !errors.Is(err, ErrMaxAttempts) {
 				t.Fatalf("Recover error = %v, want it to satisfy errors.Is(err, ErrMaxAttempts)", err)
 			}
-			var terminal *terminalError
-			if !errors.As(err, &terminal) || terminal.State != StatePermanentlyFailed {
-				t.Fatalf("error = %v (%T), want a terminal PERMANENTLY_FAILED error", err, err)
+			var cycleEnd *cycleEndError
+			if !errors.As(err, &cycleEnd) || cycleEnd.State != StateDiscovered {
+				t.Fatalf("error = %v (%T), want a cycleEndError in DISCOVERED", err, err)
 			}
-			if outcome.State != StatePermanentlyFailed {
-				t.Errorf("outcome state = %s, want PERMANENTLY_FAILED", outcome.State)
+			if outcome.State != StateDiscovered {
+				t.Errorf("outcome state = %s, want DISCOVERED", outcome.State)
 			}
 
 			// The verdict must be on disk, not only in the returned error: that is
@@ -940,12 +940,12 @@ func TestRecoverRecordsAnExhaustedBudgetFromEveryLiveState(t *testing.T) {
 			if readErr != nil {
 				t.Fatalf("read back session: %v", readErr)
 			}
-			if stored.State != StatePermanentlyFailed {
-				t.Errorf("persisted state = %s, want PERMANENTLY_FAILED", stored.State)
+			if stored.State != StateDiscovered {
+				t.Errorf("persisted state = %s, want DISCOVERED", stored.State)
 			}
 			// The persisted reason carries the budget; the returned error is the
 			// sentinel notice, and both must agree the budget is what ran out.
-			want := "maximum attempts reached (10)"
+			want := "maximum attempts reached (10); returned to discovery for the next reset"
 			if stored.LastError != want {
 				t.Errorf("persisted error = %q, want %q", stored.LastError, want)
 			}
@@ -960,7 +960,7 @@ func TestRecoverRecordsAnExhaustedBudgetFromEveryLiveState(t *testing.T) {
 			}
 			found := false
 			for _, tr := range transitions {
-				if tr.ToState == StatePermanentlyFailed && tr.FromState == from {
+				if tr.ToState == StateDiscovered && tr.FromState == from {
 					found = true
 					if tr.Reason != want {
 						t.Errorf("transition reason = %q, want %q", tr.Reason, want)
@@ -968,7 +968,7 @@ func TestRecoverRecordsAnExhaustedBudgetFromEveryLiveState(t *testing.T) {
 				}
 			}
 			if !found {
-				t.Errorf("no recorded transition %s -> PERMANENTLY_FAILED in %+v", from, transitions)
+				t.Errorf("no recorded transition %s -> DISCOVERED in %+v", from, transitions)
 			}
 		})
 	}
@@ -1001,12 +1001,12 @@ func TestRecoverHonoursTheAttemptBudgetAndForce(t *testing.T) {
 	if !errors.Is(err, ErrMaxAttempts) {
 		t.Fatalf("Recover error = %v, want ErrMaxAttempts", err)
 	}
-	if outcome.State != StatePermanentlyFailed {
-		t.Errorf("outcome state = %s, want PERMANENTLY_FAILED", outcome.State)
+	if outcome.State != StateDiscovered {
+		t.Errorf("outcome state = %s, want DISCOVERED", outcome.State)
 	}
-	var terminal *terminalError
-	if !errors.As(err, &terminal) || terminal.State != StatePermanentlyFailed {
-		t.Errorf("error = %v, want a terminalError", err)
+	var cycleEnd *cycleEndError
+	if !errors.As(err, &cycleEnd) || cycleEnd.State != StateDiscovered {
+		t.Errorf("error = %v, want a cycleEndError", err)
 	}
 
 	forced, err := manager.Retry(ctx, sessionA)
@@ -1021,27 +1021,43 @@ func TestRecoverHonoursTheAttemptBudgetAndForce(t *testing.T) {
 	}
 }
 
-func TestRecoverRefusesPermanentlyFailedWithoutForce(t *testing.T) {
+func TestBudgetRestartsWhenASessionIsRediscovered(t *testing.T) {
+	// The point of returning a spent session to DISCOVERED: the next cycle gets
+	// a fresh budget, so the session is retried without an operator running a
+	// command to clear it.
 	store := newTestStore(t)
 	session := recoverableSession(sessionA)
-	session.State = StatePermanentlyFailed
+	session.State = StateRetryWait
 	seedSession(t, store, session)
-	provider := growthProvider(10, 12)
-	manager := testManager(t, store, provider, nil)
 
-	outcome, err := manager.Recover(context.Background(), sessionA)
-	if !errors.Is(err, ErrNotEligible) {
-		t.Fatalf("Recover error = %v, want ErrNotEligible", err)
+	ctx := context.Background()
+	exhaustBudget(t, store, sessionA, DefaultMaxAttempts)
+
+	manager := testManager(t, store, growthProvider(10, 12), nil)
+	outcome, err := manager.Recover(ctx, sessionA)
+	if !errors.Is(err, ErrMaxAttempts) {
+		t.Fatalf("Recover error = %v, want ErrMaxAttempts", err)
 	}
-	if outcome.State != StatePermanentlyFailed {
-		t.Errorf("outcome state = %s, want PERMANENTLY_FAILED", outcome.State)
-	}
-	if provider.statusCount() != 0 {
-		t.Error("a spent session must not be checked without force")
+	if outcome.State != StateDiscovered {
+		t.Fatalf("outcome state = %s, want DISCOVERED", outcome.State)
 	}
 
-	if _, err := manager.Retry(context.Background(), sessionA); err != nil {
-		t.Fatalf("Retry: %v", err)
+	// One cycle later the budget is measured from the rediscovery, so the very
+	// same attempt rows no longer count against it.
+	count, err := manager.attemptsThisCycle(ctx, sessionA)
+	if err != nil {
+		t.Fatalf("attemptsThisCycle: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("attempts in the new cycle = %d, want 0", count)
+	}
+
+	resumed, err := manager.Recover(ctx, sessionA)
+	if err != nil {
+		t.Fatalf("Recover after rediscovery: %v", err)
+	}
+	if !resumed.Resumed || resumed.State != StateResumed {
+		t.Errorf("outcome = %+v, want a resume", resumed)
 	}
 }
 
@@ -1307,9 +1323,9 @@ func TestTargetFor(t *testing.T) {
 	}{
 		{ClassUnrecoverable, 1, 10, StateUnrecoverable},
 		{ClassCanceled, 3, 10, StateRetryWait},
-		{ClassPermanent, 1, 10, StatePermanentlyFailed},
-		{ClassRetryable, 1, 10, StatePermanentlyFailed},
-		{ClassRetryable, 10, 10, StatePermanentlyFailed},
+		{ClassPermanent, 1, 10, StateDiscovered},
+		{ClassRetryable, 1, 10, StateRetryWait},
+		{ClassRetryable, 10, 10, StateDiscovered},
 	}
 	for _, tc := range cases {
 		if got := targetFor(tc.class, tc.attempt, tc.max); got != tc.want {

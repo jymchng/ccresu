@@ -88,7 +88,7 @@ describe("documentation", () => {
     expect(
       screen.getByRole("heading", {
         level: 2,
-        name: "The operator exit from PERMANENTLY_FAILED",
+        name: "The operator exit from DISCOVERED",
       }),
     ).toBeInTheDocument();
 

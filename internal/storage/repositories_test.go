@@ -836,7 +836,7 @@ func TestModelValidationHelpers(t *testing.T) {
 		storage.StateDiscovered, storage.StateRunning, storage.StateUsageLimitDetected,
 		storage.StateWaitingForReset, storage.StateResetTimeReached, storage.StateCheckingSession,
 		storage.StateCheckingLimit, storage.StateResuming, storage.StateResumed,
-		storage.StateRetryWait, storage.StatePermanentlyFailed, storage.StateCompleted,
+		storage.StateRetryWait, storage.StateCompleted,
 		storage.StateUserTerminated, storage.StateDisabled, storage.StateUnrecoverable,
 	} {
 		if !state.Valid() {

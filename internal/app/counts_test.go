@@ -29,7 +29,7 @@ func seedMixedSessions(t *testing.T, h *harness) {
 		{"aaaaaaaa-0000-4000-8000-000000000003", storage.StateRetryWait, true, true},
 		{"aaaaaaaa-0000-4000-8000-000000000004", storage.StateDisabled, false, true},
 		{"aaaaaaaa-0000-4000-8000-000000000005", storage.StateUsageLimitDetected, true, false},
-		{"aaaaaaaa-0000-4000-8000-000000000006", storage.StatePermanentlyFailed, true, false},
+		{"aaaaaaaa-0000-4000-8000-000000000006", storage.StateCheckingLimit, true, false},
 		{"aaaaaaaa-0000-4000-8000-000000000007", storage.StateResumed, true, false},
 		{"aaaaaaaa-0000-4000-8000-000000000008", storage.StateCompleted, false, false},
 		{"aaaaaaaa-0000-4000-8000-000000000009", storage.StateUnrecoverable, false, false},

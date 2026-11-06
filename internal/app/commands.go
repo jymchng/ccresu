@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -212,8 +211,6 @@ func (a *App) cmdSessions(ctx context.Context, args []string) error {
 			return a.inspectSession(ctx, "sessions status", rest)
 		case subcommandDelete:
 			return a.cmdSessionsDelete(ctx, rest)
-		case subcommandClear:
-			return a.cmdSessionsClear(ctx, rest)
 		}
 	}
 
@@ -541,11 +538,10 @@ func (a *App) inspectSession(ctx context.Context, command string, args []string)
 const (
 	subcommandStatus = "status"
 	subcommandDelete = "delete"
-	subcommandClear  = "clear"
 )
 
 // sessionsUsage is the documented form of the sessions command.
-const sessionsUsage = "sessions [--all] [--state STATE]... [--limit N] | sessions status <session-id> | sessions delete <session-id> | sessions clear [--dry-run]"
+const sessionsUsage = "sessions [--all] [--state STATE]... [--limit N] | sessions status <session-id> | sessions delete <session-id>"
 
 // sessionsSubcommand finds the subcommand in a `ccresu sessions` argument list.
 //
@@ -597,7 +593,7 @@ func withoutWord(args []string, index int) []string {
 
 // isSessionsSubcommand reports whether word names a `ccresu sessions` subcommand.
 func isSessionsSubcommand(word string) bool {
-	return word == subcommandStatus || word == subcommandDelete || word == subcommandClear
+	return word == subcommandStatus || word == subcommandDelete
 }
 
 // sessionsFlagTakesValue reports whether a flag argument consumes the next
@@ -698,144 +694,6 @@ func (a *App) reportAlreadyDeleted(id string, tombstone storage.DeletedSession) 
 	return nil
 }
 
-// cmdSessionsClear forgets every PERMANENTLY_FAILED session at once.
-//
-// It exists because a permanently failed session stays enabled: it gave up, but
-// nothing switched it off, so it keeps appearing in a bare `ccresu` listing with
-// nothing an operator can do to it except reset or delete it one at a time. A
-// sweep of them is therefore the same operation `sessions delete` performs,
-// applied to every session in that one state, with the same tombstone so
-// discovery cannot bring them back.
-//
-// It is deliberately not generalised over states: PERMANENTLY_FAILED is the only
-// state that is terminal, enabled, and impossible for the daemon to act on, so it
-// is the only one where "clear them all" cannot throw away work in progress.
-func (a *App) cmdSessionsClear(ctx context.Context, args []string) error {
-	const command = "sessions clear"
-	fs := a.flags(command, command+" [--dry-run]")
-	dryRun := fs.Bool("dry-run", false, "report what would be cleared without deleting anything")
-	if err := a.parseFlags(fs, args); err != nil {
-		return err
-	}
-	if rest := fs.Args(); len(rest) > 0 {
-		return usagef("%s takes no arguments, got %q (use 'sessions delete <session-id>' to remove one session)", command, rest[0])
-	}
-
-	rt, release, err := a.openRuntime(ctx)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	var cleared []storage.ForgetResult
-	if *dryRun {
-		sessions, err := rt.Store.ListSessions(ctx, storage.SessionFilter{
-			States: []storage.State{storage.StatePermanentlyFailed},
-		})
-		if err != nil {
-			return fmt.Errorf("%s: list %s sessions: %w", command, storage.StatePermanentlyFailed, err)
-		}
-		for _, session := range sessions {
-			// The dry run reports the session, not a deletion: DeletedAt is left
-			// zero so nothing downstream can claim it happened.
-			preview := storage.ForgetResult{DeletedSession: storage.DeletedSession{
-				ID:             session.ID,
-				ProjectPath:    session.ProjectPath,
-				TranscriptPath: session.TranscriptPath,
-				State:          session.State,
-			}}
-			// The counts are what the sweep would take, asked for rather than
-			// assumed: a preview of zeroes would understate the decision.
-			counts, countErr := rt.Store.CountForgetHistory(ctx, session.ID)
-			if countErr != nil {
-				return fmt.Errorf("%s: count the history of %s: %w", command, session.ID, countErr)
-			}
-			preview.Removed = counts
-			cleared = append(cleared, preview)
-		}
-	} else {
-		cleared, err = rt.Store.ForgetSessionsInState(ctx, storage.StatePermanentlyFailed)
-		if err != nil {
-			return fmt.Errorf("%s: %w", command, err)
-		}
-	}
-
-	totals := storage.ForgetCounts{}
-	pendingWait := false
-	for _, result := range cleared {
-		totals.Attempts += result.Removed.Attempts
-		totals.Transitions += result.Removed.Transitions
-		totals.UsageLimits += result.Removed.UsageLimits
-		totals.Notifications += result.Removed.Notifications
-		pendingWait = pendingWait || result.Removed.Scheduled
-	}
-
-	if a.json {
-		sessions := make([]map[string]any, 0, len(cleared))
-		for _, result := range cleared {
-			entry := map[string]any{
-				"session_id": result.ID,
-				"project":    result.ProjectPath,
-				"transcript": result.TranscriptPath,
-				"state":      string(result.State),
-				"removed":    result.Removed,
-			}
-			if !*dryRun {
-				entry["deleted_at"] = result.DeletedAt.UTC().Format(time.RFC3339Nano)
-			}
-			sessions = append(sessions, entry)
-		}
-		return a.writeJSON(a.stdout, map[string]any{
-			"state":           string(storage.StatePermanentlyFailed),
-			"dry_run":         *dryRun,
-			"cleared":         len(cleared),
-			"sessions":        sessions,
-			"removed":         totals,
-			"pending_wait":    pendingWait,
-			"restore":         "ccresu enable <session-id>",
-			"transcript_kept": true,
-		})
-	}
-
-	if len(cleared) == 0 {
-		if *dryRun {
-			fmt.Fprintf(a.stdout, "no %s sessions to clear; nothing would be deleted\n", storage.StatePermanentlyFailed)
-			return nil
-		}
-		fmt.Fprintf(a.stdout, "no %s sessions to clear\n", storage.StatePermanentlyFailed)
-		return nil
-	}
-
-	if *dryRun {
-		fmt.Fprintf(a.stdout, "%d %s session(s) would be cleared\n", len(cleared), storage.StatePermanentlyFailed)
-	} else {
-		fmt.Fprintf(a.stdout, "%d %s session(s) cleared\n", len(cleared), storage.StatePermanentlyFailed)
-	}
-	rows := make([][]string, 0, len(cleared))
-	for _, result := range cleared {
-		rows = append(rows, []string{
-			shortID(result.ID),
-			truncateText(emptyDash(result.ProjectPath), 40),
-			strconv.Itoa(result.Removed.Attempts),
-			strconv.Itoa(result.Removed.Transitions),
-			strconv.Itoa(result.Removed.UsageLimits),
-			yesNo(result.Removed.Scheduled),
-		})
-	}
-	a.table(a.stdout, []string{"SESSION", "PROJECT", "ATTEMPTS", "TRANSITIONS", "USAGE LIMITS", "PENDING WAIT"}, rows)
-	fmt.Fprintln(a.stdout)
-	a.field(a.stdout, "attempts removed", totals.Attempts)
-	a.field(a.stdout, "transitions removed", totals.Transitions)
-	a.field(a.stdout, "usage limits removed", totals.UsageLimits)
-	a.field(a.stdout, "notifications removed", totals.Notifications)
-	a.field(a.stdout, "conversation", "kept: nothing under ~/.claude is touched")
-	if *dryRun {
-		fmt.Fprintln(a.stdout, "dry run: nothing was deleted; run 'ccresu sessions clear' to remove these sessions")
-		return nil
-	}
-	fmt.Fprintln(a.stdout, "discovery will skip them; undo one with 'ccresu enable <session-id>'")
-	return nil
-}
 
 // nextAttemptReport is the JSON form of a resolved next attempt. It carries both
 // the machine-readable instant and the humanised countdown, so a script needs no
@@ -1098,77 +956,6 @@ func (a *App) cmdDisable(ctx context.Context, args []string) error {
 	return a.setEnabled(ctx, args, false)
 }
 
-// cmdReset clears a PERMANENTLY_FAILED verdict.
-//
-// It is the one operator edge the state machine defines out of that dead end:
-// PERMANENTLY_FAILED -> DISABLED. It never resumes anything and never returns
-// attempts to the budget — `ccresu retry` is what spends another one — so the
-// only thing it changes is the verdict, the stored error and the audit trail.
-func (a *App) cmdReset(ctx context.Context, args []string) error {
-	fs := a.flags("reset", "reset <session-id>")
-	if err := a.parseFlags(fs, args); err != nil {
-		return err
-	}
-	id, err := a.sessionArg(fs, "reset")
-	if err != nil {
-		return err
-	}
-
-	rt, release, err := a.openRuntime(ctx)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	session, err := rt.Store.GetSession(ctx, id)
-	if err != nil {
-		return fmt.Errorf("reset %s: %w", id, err)
-	}
-	if session.State != storage.StatePermanentlyFailed {
-		return withCode(ExitNotEligible, fmt.Errorf("reset %s: %s", id, resetRefusal(session.State)))
-	}
-
-	const reason = "operator reset a permanently failed session"
-	transition, err := rt.Store.ResetFailedSession(ctx, id, reason)
-	if err != nil {
-		return fmt.Errorf("reset %s: %w", id, err)
-	}
-
-	if a.json {
-		return a.writeJSON(a.stdout, map[string]any{
-			"session_id":     id,
-			"state":          string(storage.StateDisabled),
-			"previous_state": string(transition.FromState),
-			"enabled":        false,
-			"reason":         transition.Reason,
-		})
-	}
-	a.field(a.stdout, "session", id)
-	a.field(a.stdout, "state", string(storage.StateDisabled))
-	a.field(a.stdout, "previous state", string(transition.FromState))
-	a.field(a.stdout, "error", "cleared")
-	a.field(a.stdout, "attempts", "kept (use 'ccresu retry' to spend another)")
-	fmt.Fprintf(a.stdout, "session %s: reset; run 'ccresu enable %s' to let ccresu recover it again\n", id, id)
-	return nil
-}
-
-// resetRefusal explains why a session in state cannot be reset, and what to do
-// instead. The wording is specific rather than generic because the state is the
-// only thing that tells an operator which command they actually want.
-func resetRefusal(state storage.State) string {
-	switch state {
-	case storage.StateUnrecoverable:
-		return fmt.Sprintf("state %s cannot be reset: the session cannot be resumed at all, so there is no failure to clear (see 'ccresu inspect')", state)
-	case storage.StateCompleted:
-		return "state COMPLETED cannot be reset: the session finished normally and carries no failure"
-	case storage.StateUserTerminated:
-		return "state USER_TERMINATED cannot be reset: the operator ended the session and no state follows it"
-	case storage.StateDisabled:
-		return "state DISABLED cannot be reset: the session is already disabled (use 'ccresu enable' to let ccresu recover it again)"
-	default:
-		return fmt.Sprintf("state %s is not %s: reset only clears a session that has given up; use 'ccresu recover' to resume it now, or 'ccresu retry' if its attempt budget is spent", state, storage.StatePermanentlyFailed)
-	}
-}
 
 // setEnabled implements enable and disable.
 func (a *App) setEnabled(ctx context.Context, args []string, enabled bool) error {

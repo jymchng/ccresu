@@ -13,7 +13,6 @@ Commands:
   history   show the attempts and state transitions of a session
   inspect   show everything known about one session (same as 'sessions status')
   recover   resume one session now
-  reset     clear a permanently failed session (state becomes disabled)
   retry     retry a session whose attempt budget is spent
   serve     run the local REST/SSE API
   sessions  list, inspect, delete or clear sessions

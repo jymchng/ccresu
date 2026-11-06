@@ -530,7 +530,8 @@ func TestRecoverWithoutARecoveryManager(t *testing.T) {
 func TestRetryReportsAFailedSession(t *testing.T) {
 	h := newHarness(t)
 	h.seedSession(t, canonicalSessionID, func(s *storage.Session) {
-		s.State = storage.StatePermanentlyFailed
+		s.State = storage.StateUnrecoverable
+		s.Recoverable = false
 		s.LastError = "the limit never cleared"
 	})
 	code, _, stderr := h.exec(t, "retry", canonicalSessionID)

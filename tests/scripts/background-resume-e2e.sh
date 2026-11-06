@@ -19,14 +19,15 @@
 #
 #   A  backgrounded   -> must end RESUMED, with the stop call visible
 #   B  poisoned       -> its resume always fails with an authentication error,
-#                        so it must end PERMANENTLY_FAILED, which is then the
-#                        fixture for `ccresu reset`.
+#                        so it now ends DISCOVERED: a failed resume returns the
+#                        session to discovery instead of a terminal failure state.
 #
 # Usage: tests/scripts/background-resume-e2e.sh [--pre-fix] [path-to-ccresu]
 # With no path the binary is built into the scratch directory.
 #
 # `--pre-fix` runs the same scenario but expects the old outcome: the binary from
-# before the fix leaves A in PERMANENTLY_FAILED after one resume and no stop.
+# before the fix leaves A in PERMANENTLY_FAILED after one resume and no stop
+# (that check is about the historical binary, so its expectation stands).
 # That is the reproduce-then-fix contrast. Point it at a pre-fix checkout, e.g.
 #
 #   git worktree add /tmp/ccresu-prefix 00692e3
@@ -270,7 +271,7 @@ check "session A ends RESUMED" "$(state_field "$inspect_a")" "RESUMED"
 contains "recover A proves the conversation continued" "$recover_a" \
 	"proven: session id preserved and transcript grew"
 check_nonzero "recover B is refused" "$recover_b_code"
-check "session B ends PERMANENTLY_FAILED" "$(state_field "$inspect_b")" "PERMANENTLY_FAILED"
+check "session B is rediscovered" "$(state_field "$inspect_b")" "DISCOVERED"
 
 check "the resume ran exactly twice for A" "$resume_calls" "2"
 check "one stop call cleared the background agent" "$stop_calls" "1"
@@ -300,31 +301,19 @@ printf '\n== the stub claude call log (A only)\n'
 awk -F'\037' -v id="$session_a" -v job="$job_a" '$4==id || ($2=="stop" && $3==job)' \
 	"$state/calls.log" | sed 's/^CALL //'
 
-# ---------------------------------------------------------------- reset flow
-printf '\n== pass 2: ccresu reset on the permanently failed session\n'
-reset_out=$(CCRESU_RECOVERY__VERIFICATION_TIMEOUT=20s "$ccresu" reset "$session_b" 2>&1)
-printf '%s\n' "$reset_out"
-after_reset=$(CCRESU_RECOVERY__VERIFICATION_TIMEOUT=20s "$ccresu" inspect "$session_b" 2>&1)
-check "reset moves B to DISABLED" "$(state_field "$after_reset")" "DISABLED"
-# The session-level error is cleared; the attempt that failed keeps its reason,
-# because reset must not rewrite what happened.
-header=$(printf '%s' "$after_reset" | awk 'BEGIN { RS = "" } NR == 1')
-check "reset clears the session's stored error" "$(printf '%s' "$header" | grep -c '^error:' || true)" "0"
-history_b=$(CCRESU_RECOVERY__VERIFICATION_TIMEOUT=20s "$ccresu" --json history "$session_b" 2>&1 || true)
-check "the attempt history was kept" "$(printf '%s' "$history_b" | grep -c '"AttemptNumber"' || true)" "1"
-contains "the kept attempt still records why it failed" "$history_b" "Invalid API key"
-
-# reset must refuse a state it cannot leave: B is DISABLED now.
+# ------------------------------------------------------- the removed commands
+# PERMANENTLY_FAILED no longer exists, so nothing needs `reset` or
+# `sessions clear` to get out of it. Both are gone; a script that still calls
+# them must fail loudly rather than silently doing nothing.
+printf '\n== pass 2: the retired commands are gone\n'
 set +e
-CCRESU_RECOVERY__VERIFICATION_TIMEOUT=20s "$ccresu" reset "$session_b" >/dev/null 2>&1
-refusal=$?
+"$ccresu" reset "$session_b" >/dev/null 2>&1
+reset_code=$?
+"$ccresu" sessions clear >/dev/null 2>&1
+clear_code=$?
 set -e
-check "a second reset is refused with exit 4" "$refusal" "4"
-
-CCRESU_RECOVERY__VERIFICATION_TIMEOUT=20s "$ccresu" enable "$session_b" >/dev/null
-enabled=$(CCRESU_RECOVERY__VERIFICATION_TIMEOUT=20s "$ccresu" --json sessions --all)
-contains "enable after reset leaves B recoverable" "$enabled" '"ID": "'"$session_b"'"'
-check "and enabled again" "$(CCRESU_RECOVERY__VERIFICATION_TIMEOUT=20s "$ccresu" inspect "$session_b" | sed -n 's/^enabled:[[:space:]]*\(.*\)$/\1/p' | head -1)" "yes"
+check "ccresu reset is an unknown command" "$reset_code" "2"
+check "ccresu sessions clear is an unknown subcommand" "$clear_code" "2"
 
 printf '\n'
 if [ "$fail" -ne 0 ]; then

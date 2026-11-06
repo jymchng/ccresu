@@ -155,7 +155,7 @@ detector:
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `true` | Global switch. |
-| `max_attempts` | `10` | Attempt budget per session before `PERMANENTLY_FAILED`. |
+| `max_attempts` | `10` | Attempt budget for one discovery cycle; a session that spends it returns to `DISCOVERED` and gets a fresh budget on the next cycle. |
 | `initial_delay` | `30s` | First retry delay. |
 | `max_delay` | `15m` | Retry delay ceiling. |
 | `multiplier` | `2.0` | Exponential growth factor. |

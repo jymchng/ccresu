@@ -19,7 +19,6 @@ func allStates() []State {
 		StateResuming,
 		StateResumed,
 		StateRetryWait,
-		StatePermanentlyFailed,
 		StateCompleted,
 		StateUserTerminated,
 		StateDisabled,
@@ -63,22 +62,23 @@ func TestHappyPathEdgesAreLegal(t *testing.T) {
 	}
 }
 
-func TestPermanentlyFailedIsReachableFromEveryLiveState(t *testing.T) {
-	// The budget guard runs before any check, so it can find the session in any
-	// state that still permits automatic work. Every one of those needs the edge,
-	// otherwise the terminal state and its reason are lost to a rejected
-	// transition, and ErrMaxAttempts comes back as an ordinary failure.
+func TestDiscoveryIsReachableFromEveryLiveState(t *testing.T) {
+	// A failed attempt and a spent attempt budget both return the session to
+	// DISCOVERED, and the budget guard runs before any check, so it can find the
+	// session in any state that still permits automatic work. Every one of those
+	// needs the edge, otherwise the session is stranded: the error is reported
+	// but the state it asks for cannot be written.
 	live := append([]State{StateDiscovered, StateRunning}, PendingStates()...)
 	for _, from := range live {
-		if !CanTransition(from, StatePermanentlyFailed) {
-			t.Errorf("%s has no edge to PERMANENTLY_FAILED; an exhausted budget there is unwritable", from)
+		if !CanTransition(from, StateDiscovered) {
+			t.Errorf("%s has no edge to DISCOVERED; a failure there cannot be recorded", from)
 		}
 	}
 	// Settled and terminal states keep their edges: recovery never runs on them,
-	// so nothing may claim a budget verdict from there.
-	for _, from := range []State{StateResumed, StateCompleted, StateUserTerminated, StateDisabled, StateUnrecoverable} {
-		if CanTransition(from, StatePermanentlyFailed) {
-			t.Errorf("%s must not reach PERMANENTLY_FAILED", from)
+	// so nothing may claim a rediscovery from there.
+	for _, from := range []State{StateResumed, StateCompleted, StateUserTerminated, StateUnrecoverable} {
+		if CanTransition(from, StateDiscovered) {
+			t.Errorf("%s must not reach DISCOVERED", from)
 		}
 	}
 }
@@ -175,7 +175,6 @@ func TestTerminalSettledPendingFailed(t *testing.T) {
 		{StateResuming, false, false, true, false},
 		{StateResumed, false, true, false, false},
 		{StateRetryWait, false, false, true, false},
-		{StatePermanentlyFailed, false, false, false, true},
 		{StateCompleted, true, true, false, false},
 		{StateUserTerminated, true, true, false, false},
 		{StateDisabled, false, true, false, false},

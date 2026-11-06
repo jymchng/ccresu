@@ -324,29 +324,23 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 		return Outcome{SessionID: sessionID, State: state.current, Resumed: true},
 			stateError(sessionID, state.current, StateCheckingSession)
 	}
-	if state.current == StatePermanentlyFailed && !req.Force {
-		return Outcome{SessionID: sessionID, State: state.current},
-			stateError(sessionID, state.current, StateCheckingSession)
-	}
-
-	attempts, err := m.store.CountAttempts(ctx, sessionID)
+	attempts, err := m.attemptsThisCycle(ctx, sessionID)
 	if err != nil {
 		return Outcome{SessionID: sessionID, State: state.current}, err
 	}
 	if attempts >= m.maxAttempts && !req.Force {
-		// The budget is spent, so PERMANENTLY_FAILED is the truthful record
-		// whatever state the session was parked in. Unlike a failed pre-resume
-		// check — which rests in RETRY_WAIT because no attempt was spent — here
-		// the budget really is gone, and every live state has an edge to the
-		// terminal one. The move is not routed through RETRY_WAIT: that would
-		// record a "might work later" that this session no longer has.
-		reason := fmt.Sprintf("maximum attempts reached (%d)", m.maxAttempts)
-		if err := state.move(StatePermanentlyFailed, reason, 0); err != nil {
+		// The budget for this cycle is spent. The session goes back to
+		// DISCOVERED rather than to a terminal failure state: the daemon
+		// rediscovers it, re-reads the transcript and schedules the next reset,
+		// which starts a fresh budget. An operator never has to run
+		// `ccresu reset` to make that happen.
+		reason := fmt.Sprintf("maximum attempts reached (%d); returned to discovery for the next reset", m.maxAttempts)
+		if err := state.move(StateDiscovered, reason, 0); err != nil {
 			return Outcome{SessionID: sessionID, State: state.current}, err
 		}
 		_ = m.store.SetSessionError(ctx, sessionID, reason)
 		return Outcome{SessionID: sessionID, State: state.current},
-			&terminalError{SessionID: sessionID, State: StatePermanentlyFailed,
+			&cycleEndError{SessionID: sessionID, State: StateDiscovered,
 				Cause: sessionError(ErrMaxAttempts, sessionID)}
 	}
 
@@ -497,15 +491,17 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 // fail records a failed attempt and moves the session along the retry path.
 //
 // A retryable failure below the attempt budget goes to RETRY_WAIT with the
-// computed delay; anything else ends in PERMANENTLY_FAILED or UNRECOVERABLE, so
-// a session can never be retried for ever.
+// computed delay. Everything else is rediscovered: the session returns to
+// DISCOVERED, where the next cycle re-reads its transcript with a fresh budget.
+// Only a proved-unrecoverable session stops there, because that verdict is a
+// fact about the conversation rather than a count of attempts.
 //
 // A failure reported before the resume was issued — the pre-resume status check
 // or the limit check — has no attempt row behind it, so it spends no budget and
 // always rests in RETRY_WAIT (unless ccresu has proved the session
 // unrecoverable). That is a decision about the truth, not about which edges the
-// machine happens to define: PERMANENTLY_FAILED reports a budget that has been
-// spent, and this failure spent none of it.
+// machine happens to define: rediscovery is where a spent budget leads, and this
+// failure spent none of it.
 func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome, baseline Baseline,
 	attempt storage.RecoveryAttempt, verification Verification, cause error) (Outcome, error) {
 	class := Classify(cause)
@@ -517,7 +513,7 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 	preResume := attempt.ID == 0
 	attemptNumber := attempt.AttemptNumber
 	if preResume {
-		if count, err := m.store.CountAttempts(ctx, outcome.SessionID); err == nil {
+		if count, err := m.attemptsThisCycle(ctx, outcome.SessionID); err == nil {
 			attemptNumber = count
 		}
 	}
@@ -576,14 +572,14 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 	}
 	_ = m.store.SetSessionError(ctx, outcome.SessionID, truncate(cause.Error()))
 	outcome.State = state.current
-	return outcome, &terminalError{SessionID: outcome.SessionID, State: target, Cause: cause}
+	return outcome, &cycleEndError{SessionID: outcome.SessionID, State: target, Cause: cause}
 }
 
 // preResumeTarget is where a failure reported before the resume is issued ends.
 //
 // It is a policy, not a reachability trick: no attempt row exists yet, so no
-// budget was spent, and PERMANENTLY_FAILED — which reports a budget that is gone
-// — would be a lie about this session. An unrecoverable verdict is left alone,
+// budget was spent, and sending the session back to DISCOVERED — which is what a
+// spent budget leads to — would be a lie about this session. An unrecoverable verdict is left alone,
 // because no retry can answer it and the machine allows that edge from both
 // pre-resume states. Both of those states also reach RETRY_WAIT, so the move is
 // always legal; if a future call site breaks that, move() says so loudly rather
@@ -595,6 +591,43 @@ func preResumeTarget(target State) State {
 	return StateRetryWait
 }
 
+// attemptsThisCycle counts the attempts spent since the session last entered
+// DISCOVERED, which is what the attempt budget bounds.
+//
+// The budget belongs to a discovery cycle, not to the session's whole life: a
+// session that spends its ten attempts returns to DISCOVERED, the daemon reads
+// its transcript again and schedules the next reset, and the budget starts over
+// from the attempt rows written after that return. Counting every attempt ever
+// would make a rediscovered session fail its own budget check on sight and never
+// resume, which is exactly the dead end this design exists to avoid.
+func (m *Manager) attemptsThisCycle(ctx context.Context, sessionID string) (int, error) {
+	transitions, err := m.store.ListTransitions(ctx, sessionID, 0)
+	if err != nil {
+		return 0, fmt.Errorf("list transitions for %s: %w", sessionID, err)
+	}
+	var since time.Time
+	for i := len(transitions) - 1; i >= 0; i-- {
+		if transitions[i].ToState == storage.StateDiscovered {
+			since = transitions[i].OccurredAt
+			break
+		}
+	}
+	attempts, err := m.store.ListAttempts(ctx, sessionID, 0)
+	if err != nil {
+		return 0, fmt.Errorf("list attempts for %s: %w", sessionID, err)
+	}
+	if since.IsZero() {
+		return len(attempts), nil
+	}
+	count := 0
+	for _, attempt := range attempts {
+		if attempt.StartedAt.After(since) {
+			count++
+		}
+	}
+	return count, nil
+}
+
 // targetFor decides the state a failed attempt leaves the session in.
 func targetFor(class Class, attemptNumber, maxAttempts int) State {
 	switch class {
@@ -604,7 +637,10 @@ func targetFor(class Class, attemptNumber, maxAttempts int) State {
 		return StateRetryWait
 	}
 	if class.Retryable() && attemptNumber >= maxAttempts {
-		return StatePermanentlyFailed
+		// The cycle's budget is spent. The session is rediscovered, not
+		// abandoned, so this is the same target as any other non-unrecoverable
+		// failure.
+		return StateDiscovered
 	}
 	return class.State()
 }

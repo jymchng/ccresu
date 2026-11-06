@@ -127,7 +127,7 @@ e60a3100  DISCOVERED  none (no usage limit detect...  yes      yes          /hom
       kind: "ul",
       items: [
         "`SESSION` is the first eight characters of the session ID; commands need the full ID.",
-        "`STATE` is the state-machine position — DISCOVERED, WAITING_FOR_RESET, RESUMING, RESUMED, RETRY_WAIT, PERMANENTLY_FAILED and so on.",
+        "`STATE` is the state-machine position — DISCOVERED, WAITING_FOR_RESET, RESUMING, RESUMED, RETRY_WAIT, DISCOVERED and so on.",
         "`NEXT ATTEMPT` is when ccresu will touch the row and why: `in 2h14m` while a wait is pending, `none (<reason>)` when nothing is scheduled.",
         "`RECOVERABLE` and `NOTE` explain why a session is or is not actionable.",
       ],
@@ -275,7 +275,7 @@ WHEN                     TRANSITION                                 REASON
     { kind: "h2", text: "Step 10 — Act manually" },
     {
       kind: "p",
-      text: "Four commands bypass the wait, with different rules: `recover` resumes now (still respecting the attempt budget), `recover --force` tries even when the budget is spent, `retry` gives a spent or terminal session a fresh budget, and `reset` clears a permanently failed session into `DISABLED` without refunding an attempt.",
+      text: "Four commands bypass the wait, with different rules: `recover` resumes now (still respecting the attempt budget), `recover --force` tries even when the budget is spent, `retry` gives a spent or terminal session a fresh budget, and `reset` clears a rediscovered session into `DISABLED` without refunding an attempt.",
     },
     {
       kind: "code",
@@ -283,7 +283,7 @@ WHEN                     TRANSITION                                 REASON
       code: `ccresu recover 3f9d1c07-1111-4222-8333-444455556666
 ccresu recover <id> --message "Pick up where the limit interrupted you." --force
 ccresu retry <id>
-ccresu reset <id>`,
+ccresu retry <id>`,
     },
     {
       kind: "p",
@@ -298,7 +298,7 @@ $ echo $?
 4
 
 $ ccresu recover e60a3100-123a-4deb-b146-54705ff80268
-ccresu: recover e60a3100-123a-4deb-b146-54705ff80268: recovery: invalid state transition: DISCOVERED -> CHECKING_SESSION (legal targets: DISABLED, PERMANENTLY_FAILED, RUNNING, UNRECOVERABLE)`,
+ccresu: recover e60a3100-123a-4deb-b146-54705ff80268: recovery: invalid state transition: DISCOVERED -> CHECKING_SESSION (legal targets: DISABLED, DISCOVERED, RUNNING, UNRECOVERABLE)`,
     },
     { kind: "h2", text: "Step 11 — When the resume fails" },
     {
@@ -326,22 +326,22 @@ why:           retrying after a failed attempt`,
       label: "When the budget is exhausted",
       code: `$ ccresu sessions --all
 SESSION   STATE               NEXT ATTEMPT                    ENABLED  RECOVERABLE  PROJECT                 LAST SEEN                NOTE
-7c1b2a44  PERMANENTLY_FAILED  none (attempt budget spent;...  yes      yes          /home/you/projects/demo 2026-11-05 03:28:24 +08  resume session 7c1b2a44-0000-4000-800...
+7c1b2a44  DISCOVERED  none (attempt budget spent;...  yes      yes          /home/you/projects/demo 2026-11-05 03:28:24 +08  resume session 7c1b2a44-0000-4000-800...
 
 $ ccresu retry 7c1b2a44-0000-4000-8000-abcdefabcdef
-ccresu: retry 7c1b2a44-0000-4000-8000-abcdefabcdef: recovery: session 7c1b2a44-0000-4000-8000-abcdefabcdef ended in PERMANENTLY_FAILED: resume session 7c1b2a44-0000-4000-8000-abcdefabcdef: claude: malformed claude output: empty resume output`,
+ccresu: retry 7c1b2a44-0000-4000-8000-abcdefabcdef: recovery: session 7c1b2a44-0000-4000-8000-abcdefabcdef ended in DISCOVERED: resume session 7c1b2a44-0000-4000-8000-abcdefabcdef: claude: malformed claude output: empty resume output`,
     },
     {
       kind: "p",
-      text: "`reset` is the way out that does not spend an attempt: it accepts only `PERMANENTLY_FAILED`, drops the stored error, and parks the session as `DISABLED`. It never resumes, and the attempt history and counter are untouched (`retry` is what refills the budget). Any other state is refused with exit code 4 and a message naming what to use instead; exit 3 means no such session, 2 means a bad argument.",
+      text: "`reset` is the way out that does not spend an attempt: it accepts only `DISCOVERED`, drops the stored error, and parks the session as `DISABLED`. It never resumes, and the attempt history and counter are untouched (`retry` is what refills the budget). Any other state is refused with exit code 4 and a message naming what to use instead; exit 3 means no such session, 2 means a bad argument.",
     },
     {
       kind: "code",
       label: "Clearing the failure",
-      code: `$ ccresu reset 7c1b2a44-0000-4000-8000-abcdefabcdef
+      code: `$ ccresu retry 7c1b2a44-0000-4000-8000-abcdefabcdef
 session:       7c1b2a44-0000-4000-8000-abcdefabcdef
 state:         DISABLED
-previous state: PERMANENTLY_FAILED
+previous state: DISCOVERED
 error:         cleared
 attempts:      kept (use 'ccresu retry' to spend another)
 session 7c1b2a44-0000-4000-8000-abcdefabcdef: reset; run 'ccresu enable 7c1b2a44-0000-4000-8000-abcdefabcdef' to let ccresu recover it again`,
@@ -350,7 +350,7 @@ session 7c1b2a44-0000-4000-8000-abcdefabcdef: reset; run 'ccresu enable 7c1b2a44
       kind: "note",
       tone: "info",
       title: "A background session is stopped, not abandoned",
-      text: "One failure is not the session's fault at all: `claude -p --resume` refuses while the session is still attached to Claude Code's background agent (`That session is running in the background (837eaaea) …`). ccresu treats that as busy, not gone: in the same attempt it runs `claude stop <job-id>` (the eight-hex job name the refusal prints, never the session id) and repeats the identical resume once, so the session reaches RESUMED without intervention and the conversation is kept — same session id, same transcript. The stop is logged, not recorded as the attempt's command. If the stop fails or the second resume refuses again, the original error is reported unchanged and the session lands in PERMANENTLY_FAILED, which is where `retry`, `reset` and `recover --force` come in.",
+      text: "One failure is not the session's fault at all: `claude -p --resume` refuses while the session is still attached to Claude Code's background agent (`That session is running in the background (837eaaea) …`). ccresu treats that as busy, not gone: in the same attempt it runs `claude stop <job-id>` (the eight-hex job name the refusal prints, never the session id) and repeats the identical resume once, so the session reaches RESUMED without intervention and the conversation is kept — same session id, same transcript. The stop is logged, not recorded as the attempt's command. If the stop fails or the second resume refuses again, the original error is reported unchanged and the session lands in DISCOVERED, which is where `retry`, `reset` and `recover --force` come in.",
     },
     { kind: "h2", text: "Step 12 — Turn on Telegram notifications (optional)" },
     {

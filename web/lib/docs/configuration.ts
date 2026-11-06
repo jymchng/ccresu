@@ -69,7 +69,7 @@ export const configurationDoc: DocPage = {
       kind: "table",
       head: ["Field", "Default", "Meaning"],
       rows: [
-        ["max_attempts", "10", "Resume attempts before a session is marked PERMANENTLY_FAILED."],
+        ["max_attempts", "10", "Resume attempts before a session is marked DISCOVERED."],
         ["initial_delay", "30s", "First retry delay after a failed attempt."],
         ["max_delay", "15m", "Ceiling for the exponential backoff."],
         ["multiplier", "2.0", "Growth factor between attempts."],

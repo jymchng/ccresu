@@ -63,7 +63,7 @@ export const features: readonly Feature[] = [
     icon: BellRing,
     title: "Tells you what happened",
     description:
-      "Optional Telegram notifications for limit detected, waiting, recovery started, resumed, failed, permanently failed and session completed.",
+      "Optional Telegram notifications for limit detected, waiting, recovery started, resumed, failed and session completed.",
     detail: "HTML-escaped templates, deduplicated, queued off the recovery path.",
   },
   {

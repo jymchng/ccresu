@@ -197,7 +197,7 @@ need it.
 | Setting | Why it matters unattended |
 | --- | --- |
 | `recovery.max_concurrent_recoveries` | Keep it low (default `3`) so a burst of limits does not spawn a dozen `claude` children. |
-| `recovery.max_attempts` | The budget that ends retries and marks the session `PERMANENTLY_FAILED`. |
+| `recovery.max_attempts` | The budget for one discovery cycle. A session that spends it returns to `DISCOVERED` and gets a fresh budget on the next cycle. |
 | `scheduler.recheck_before_resume` | Leave `true`: re-reads the session before resuming, so a limit that cleared early is not resumed twice. |
 | `telegram.enabled` | The only way to learn about a failure on a headless box; see [telegram.md](telegram.md). |
 | `server.host` | Leave `127.0.0.1`. Read [security.md](security.md) before changing it. |

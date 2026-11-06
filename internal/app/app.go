@@ -432,12 +432,6 @@ func (a *App) commands() []commandSpec {
 			run:     (*App).cmdEnable,
 		},
 		{
-			name:    "reset",
-			summary: "clear a permanently failed session (state becomes disabled)",
-			usage:   "reset <session-id>",
-			run:     (*App).cmdReset,
-		},
-		{
 			name:    "disable",
 			summary: "stop ccresu from recovering a session",
 			usage:   "disable <session-id>",

@@ -168,7 +168,7 @@ func TestRecoverRefusesToPretendAStorageFailureSucceeded(t *testing.T) {
 			t.Fatalf("seed attempt: %v", err)
 		}
 		if _, err := store.FinishAttempt(context.Background(), attempt.ID, storage.AttemptResult{
-			State: StatePermanentlyFailed, Success: false, Error: "earlier failure",
+			State: StateDiscovered, Success: false, Error: "earlier failure",
 			FinishedAt: time.Now().UTC(),
 		}); err != nil {
 			t.Fatalf("finish seeded attempt: %v", err)
@@ -198,9 +198,9 @@ func TestRecoverRefusesToPretendAStorageFailureSucceeded(t *testing.T) {
 			wantErr: "injected storage failure",
 		},
 		{
-			name:    "the attempt count cannot be read",
+			name:    "the transition log cannot be read",
 			session: recoverableSession(sessionA),
-			fault:   [2]any{"CountAttempts", 0},
+			fault:   [2]any{"ListTransitions", 0},
 			wantErr: "injected storage failure",
 		},
 		{

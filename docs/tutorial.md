@@ -150,7 +150,7 @@ e60a3100  DISCOVERED  none (no usage limit detect...  yes      yes          /hom
 - `SESSION` is the first eight characters of the session ID; commands need the
   **full** ID.
 - `STATE` is the state-machine position — `DISCOVERED`, `WAITING_FOR_RESET`,
-  `RESUMING`, `RESUMED`, `RETRY_WAIT`, `PERMANENTLY_FAILED` and so on. The full
+  `RESUMING`, `RESUMED`, `RETRY_WAIT`, `DISCOVERED` and so on. The full
   diagram is in [recovery.md](recovery.md).
 - `NEXT ATTEMPT` is when ccresu will touch this row and why: `in 2h14m` while a
   wait is pending, `none (<reason>)` when nothing is scheduled.
@@ -337,8 +337,8 @@ ccresu recover <id> --message "Pick up where the limit interrupted you." --force
 # put a spent/terminal session back to work with a fresh budget
 ccresu retry <id>
 
-# clear a permanently failed session: it becomes DISABLED and the error is gone
-ccresu reset <id>
+# ask for one more attempt right now
+ccresu retry <id>
 ```
 
 `recover` refuses when the session cannot be resumed, and says why:
@@ -356,7 +356,7 @@ to recover:
 
 ```console
 $ ccresu recover e60a3100-123a-4deb-b146-54705ff80268
-ccresu: recover e60a3100-123a-4deb-b146-54705ff80268: recovery: invalid state transition: DISCOVERED -> CHECKING_SESSION (legal targets: DISABLED, PERMANENTLY_FAILED, RUNNING, UNRECOVERABLE)
+ccresu: recover e60a3100-123a-4deb-b146-54705ff80268: recovery: invalid state transition: RESUMED -> CHECKING_SESSION (legal targets: COMPLETED, DISABLED, RUNNING, USER_TERMINATED)
 ```
 
 ## Step 11 — When the resume fails
@@ -389,51 +389,33 @@ at:            2026-11-04 19:46:02 UTC (in 58s)
 why:           retrying after a failed attempt
 ```
 
-When the budget is exhausted the session lands in `PERMANENTLY_FAILED`, with the
-last error kept on the row:
+When the budget for a cycle is exhausted the session is returned to
+`DISCOVERED`, with the last error kept on the row:
 
 ```console
 $ ccresu sessions --all
-SESSION   STATE               NEXT ATTEMPT                    ENABLED  RECOVERABLE  PROJECT                 LAST SEEN                NOTE
-7c1b2a44  PERMANENTLY_FAILED  none (attempt budget spent;...  yes      yes          /home/you/projects/demo 2026-11-05 03:28:24 +08  resume session 7c1b2a44-0000-4000-800...
+SESSION   STATE       NEXT ATTEMPT                    ENABLED  RECOVERABLE  PROJECT    LAST SEEN                NOTE
+7c1b2a44  DISCOVERED  none (returned to discovery;…  yes      yes                     2026-11-05 03:28:24 +08  resume session 7c1b2a44-0000-4000-800...
 ```
 
-That is the point at which `ccresu retry <id>` (fresh budget), `ccresu reset <id>`
-(the failure cleared, the session parked as `DISABLED`) or
-`ccresu recover <id> --force` (one more try now) is the right tool:
-
-```console
-$ ccresu retry 7c1b2a44-0000-4000-8000-abcdefabcdef
-ccresu: retry 7c1b2a44-0000-4000-8000-abcdefabcdef: recovery: session 7c1b2a44-0000-4000-8000-abcdefabcdef ended in PERMANENTLY_FAILED: resume session 7c1b2a44-0000-4000-8000-abcdefabcdef: claude: malformed claude output: empty resume output
-```
-
-`reset` is the way out that does not spend an attempt. It accepts only
-`PERMANENTLY_FAILED`, and it never resumes anything:
-
-```console
-$ ccresu reset 7c1b2a44-0000-4000-8000-abcdefabcdef
-session:       7c1b2a44-0000-4000-8000-abcdefabcdef
-state:         DISABLED
-previous state: PERMANENTLY_FAILED
-error:         cleared
-attempts:      kept (use 'ccresu retry' to spend another)
-session 7c1b2a44-0000-4000-8000-abcdefabcdef: reset; run 'ccresu enable 7c1b2a44-0000-4000-8000-abcdefabcdef' to let ccresu recover it again
-```
-
-`retry` gives the budget back; `reset` only forgets the failure. A following
-`ccresu enable <id>` makes the session recoverable again with whatever budget it
-has left.
+`DISCOVERED` is not a dead end, and it is not a verdict about the session: it is
+the queue the daemon reads from. The next discovery pass re-reads the transcript,
+finds the next reset time and schedules another attempt with a fresh budget, so
+recovery resumes on its own. `ccresu retry <id>` and
+`ccresu recover <id> --force` are there if you would rather it happened now.
 
 One failure is not the session's fault at all: `claude -p --resume` refuses while
 the session is still attached to Claude Code's background agent
 (`That session is running in the background (837eaaea) …`). ccresu treats that as
-"busy", not "gone": in the same attempt it runs `claude stop <job-id>` (the
-eight-hex job name the refusal prints — not the session id) and then repeats the
-*identical* resume once, so the session ends up `RESUMED` without you
-doing anything. The conversation is untouched — same session id, same transcript —
-and the stop appears in the log, not in the attempt row. If the stop fails, or the
-second resume refuses again, the original error is reported unchanged and the
-session lands in `PERMANENTLY_FAILED` as before.
+"busy", not "gone". In the same attempt it runs `claude stop <job-id>` — the
+eight-hex job name that refusal prints, not the session UUID; `claude stop`
+answers a UUID with `No job matching` and exit 1 — and then repeats the
+*identical* resume once, so the session ends up `RESUMED` instead of failing
+without you doing anything. The conversation is untouched — same session id, same
+transcript — and the stop appears in the log, not in the attempt row. If the stop
+fails, or the second resume refuses again, the original error is reported
+unchanged and the session returns to `DISCOVERED` like any other failed attempt.
+
 
 ## Step 12 — Turn on Telegram notifications (optional)
 

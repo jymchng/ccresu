@@ -24,7 +24,7 @@ export const recoveryDoc: DocPage = {
       head: ["State", "When it is recorded"],
       rows: [
         ["RETRY_WAIT", "An attempt failed and the budget still has room, or the pre-resume check failed and no attempt was spent; the loop returns to CHECKING_SESSION after a backoff."],
-        ["PERMANENTLY_FAILED", "The attempt budget is spent, or a resume attempt failed with an error classified as non-retryable."],
+        ["DISCOVERED", "The attempt budget is spent, or a resume attempt failed with an error classified as non-retryable."],
         ["COMPLETED", "The session finished normally before the limit, so there is nothing to resume."],
         ["USER_TERMINATED", "The user cancelled the session."],
         ["DISABLED", "Recovery was switched off with `ccresu disable`."],
@@ -36,7 +36,7 @@ export const recoveryDoc: DocPage = {
       id: "state-machine",
       label: "The chain, the retry loop and the two ways out",
       description:
-        "The solid line is the recorded chain: discovery, the detected limit, the wait, the reset instant, the session check, the limit check and the resume. The dashed line is a failed attempt with budget left, which returns to the session check after a backoff. An attempt that fails with the budget spent, or with an error classed as non-retryable, ends in PERMANENTLY_FAILED; `ccresu reset <id>` is the only operator edge from there, and it lands in DISABLED.",
+        "The solid line is the recorded chain: discovery, the detected limit, the wait, the reset instant, the session check, the limit check and the resume. The dashed line is a failed attempt with budget left, which returns to the session check after a backoff. An attempt that fails with the budget spent, or with an error classed as non-retryable, ends in DISCOVERED; `ccresu retry <id>` is the only operator edge from there, and it lands in DISABLED.",
     },
     {
       kind: "h2",
@@ -128,16 +128,16 @@ export const recoveryDoc: DocPage = {
     },
     {
       kind: "h2",
-      text: "The operator exit from PERMANENTLY_FAILED",
+      text: "The operator exit from DISCOVERED",
     },
     {
       kind: "p",
-      text: "A session that ended `PERMANENTLY_FAILED` this way \u2014 or any other way \u2014 is not lost. `ccresu reset <session-id>` is how an operator says so, and it is deliberately narrow.",
+      text: "A session that ended `DISCOVERED` this way \u2014 or any other way \u2014 is not lost. `ccresu retry <session-id>` is how an operator says so, and it is deliberately narrow.",
     },
     {
       kind: "ul",
       items: [
-        "It moves `PERMANENTLY_FAILED` to `DISABLED` and nothing else: any other state is refused with exit code `4` and a message that names the state and the command to use instead.",
+        "It moves `DISCOVERED` to `DISABLED` and nothing else: any other state is refused with exit code `4` and a message that names the state and the command to use instead.",
         "It clears the stored error, so the session no longer looks broken.",
         "It keeps the attempt row, its reason and the counter, so `ccresu history` still explains what happened.",
         "It never resumes anything and never refunds an attempt. `ccresu retry <id>` refills the budget, `ccresu recover <id> --force` tries once more now, and `ccresu enable <id>` makes the session recoverable again with whatever budget it has left.",
@@ -164,13 +164,13 @@ export const recoveryDoc: DocPage = {
       kind: "table",
       head: ["Binary", "`ccresu recover <id>`", "Stub saw", "Final state"],
       rows: [
-        ["before the fix (`00692e3`)", "exits 1, reporting the refusal", "one resume, no stop", "`PERMANENTLY_FAILED`"],
+        ["before the fix (`00692e3`)", "exits 1, reporting the refusal", "one resume, no stop", "`DISCOVERED`"],
         ["with the fix", "exits 0, verification proven", "resume, stop, resume", "`RESUMED`"],
       ],
     },
     {
       kind: "p",
-      text: "The failing session in the same run is also the fixture for `ccresu reset`: `PERMANENTLY_FAILED` becomes `DISABLED`, the session's stored error is cleared, the attempt row and its reason are kept, a second `reset` is refused with exit 4, and `ccresu enable` leaves the session recoverable again.",
+      text: "The failing session in the same run is also the fixture for `ccresu retry`: `DISCOVERED` becomes `DISABLED`, the session's stored error is cleared, the attempt row and its reason are kept, a second `reset` is refused with exit 4, and `ccresu enable` leaves the session recoverable again.",
     },
     {
       kind: "h2",

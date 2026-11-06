@@ -31,13 +31,11 @@ const (
 	ReasonDisabled = "session is not enabled"
 	// ReasonNoLimit is reported for a session with no usage limit detected yet.
 	ReasonNoLimit = "no usage limit detected yet"
-	// ReasonBudgetSpent is reported when the attempt budget is exhausted.
-	//
-	// It names both operator commands because they answer different questions:
-	// `retry` spends one more attempt, `reset` accepts the verdict and stops
-	// asking. Mentioning only the first would leave an operator who is done
-	// with the session with no way out of PERMANENTLY_FAILED.
-	ReasonBudgetSpent = "attempt budget spent; use 'ccresu retry' for one more attempt, or 'ccresu reset' to clear the failure"
+	// ReasonRediscovered is reported for a session returned to discovery, which
+	// is where a failed attempt and a spent attempt budget both leave it. The
+	// daemon re-reads the transcript and schedules the next reset on its own, so
+	// the reason promises work rather than asking the operator for a command.
+	ReasonRediscovered = "returned to discovery; ccresu will re-read the transcript and schedule the next reset"
 	// ReasonUnrecoverable is reported when the session cannot be resumed at all.
 	ReasonUnrecoverable = "session cannot be recovered"
 	// ReasonResumed is reported once ccresu has resumed the session.
@@ -89,8 +87,8 @@ func NextAttemptFor(session storage.Session, sched *storage.Schedule, now time.T
 		// The instant is now; the wait is over and the work has started.
 		return NextAttempt{At: now.UTC(), Reason: ReasonInFlight, Scheduled: true}
 
-	case storage.StatePermanentlyFailed:
-		return NextAttempt{Reason: ReasonBudgetSpent}
+	case storage.StateDiscovered:
+		return NextAttempt{Reason: ReasonRediscovered}
 	case storage.StateUnrecoverable:
 		return NextAttempt{Reason: ReasonUnrecoverable}
 	case storage.StateResumed:
@@ -103,9 +101,9 @@ func NextAttemptFor(session storage.Session, sched *storage.Schedule, now time.T
 		return NextAttempt{Reason: ReasonDisabled}
 
 	default:
-		// DISCOVERED, RUNNING and USAGE_LIMIT_DETECTED all mean the same thing
-		// to an operator: nothing is scheduled, because no limit is being
-		// waited out yet.
+		// RUNNING and USAGE_LIMIT_DETECTED both mean the same thing to an
+		// operator: nothing is scheduled, because no limit is being waited out
+		// yet.
 		return NextAttempt{Reason: ReasonNoLimit}
 	}
 }

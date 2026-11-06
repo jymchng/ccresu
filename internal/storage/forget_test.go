@@ -20,7 +20,7 @@ func seedPopulatedSession(t *testing.T, store *storage.Store, id string) {
 		ID:             id,
 		ProjectPath:    "/work/example",
 		TranscriptPath: "/home/user/.claude/projects/example/" + id + ".jsonl",
-		State:          storage.StatePermanentlyFailed,
+		State:          storage.StateUnrecoverable,
 		Reason:         "attempts exhausted",
 		DiscoveredAt:   now,
 		LastSeenAt:     now,
@@ -44,7 +44,7 @@ func seedPopulatedSession(t *testing.T, store *storage.Store, id string) {
 		t.Fatalf("seed attempt: %v", err)
 	}
 	if _, err := store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
-		State: storage.StatePermanentlyFailed,
+		State: storage.StateUnrecoverable,
 		Error: "resume failed",
 	}); err != nil {
 		t.Fatalf("finish attempt: %v", err)
@@ -287,7 +287,7 @@ func TestForgetSessionsInStateForgetsOnlyThatState(t *testing.T) {
 	// seedPopulatedSession records a transition, which leaves the row RUNNING;
 	// put both back in the state the bulk forget is asked about.
 	for _, id := range []string{failed, failed2} {
-		if _, err := store.TransitionSession(ctx, id, storage.StatePermanentlyFailed, "seeded failure", 0); err != nil {
+		if _, err := store.TransitionSession(ctx, id, storage.StateUnrecoverable, "seeded failure", 0); err != nil {
 			t.Fatalf("seed failed state for %s: %v", id, err)
 		}
 	}
@@ -302,7 +302,7 @@ func TestForgetSessionsInStateForgetsOnlyThatState(t *testing.T) {
 		t.Fatalf("seed disabled session: %v", err)
 	}
 
-	results, err := store.ForgetSessionsInState(ctx, storage.StatePermanentlyFailed)
+	results, err := store.ForgetSessionsInState(ctx, storage.StateUnrecoverable)
 	if err != nil {
 		t.Fatalf("ForgetSessionsInState: %v", err)
 	}
@@ -318,8 +318,8 @@ func TestForgetSessionsInStateForgetsOnlyThatState(t *testing.T) {
 		if !ok {
 			t.Fatalf("result set does not name %s: %+v", id, seen)
 		}
-		if result.State != storage.StatePermanentlyFailed {
-			t.Errorf("%s: tombstoned state = %q, want %q", id, result.State, storage.StatePermanentlyFailed)
+		if result.State != storage.StateUnrecoverable {
+			t.Errorf("%s: tombstoned state = %q, want %q", id, result.State, storage.StateUnrecoverable)
 		}
 		if result.ProjectPath == "" || result.TranscriptPath == "" {
 			t.Errorf("%s: tombstone lost the paths, so the delete could not be undone: %+v", id, result)
@@ -349,7 +349,7 @@ func TestForgetSessionsInStateForgetsOnlyThatState(t *testing.T) {
 	}
 
 	// Nothing left to forget is not an error: `sessions clear` is idempotent.
-	results, err = store.ForgetSessionsInState(ctx, storage.StatePermanentlyFailed)
+	results, err = store.ForgetSessionsInState(ctx, storage.StateUnrecoverable)
 	if err != nil {
 		t.Fatalf("second ForgetSessionsInState: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestForgetSessionsInStateGuardsItsArguments(t *testing.T) {
 		t.Fatalf("empty state = %v, want ErrInvalid", err)
 	}
 	var nilStore *storage.Store
-	if _, err := nilStore.ForgetSessionsInState(ctx, storage.StatePermanentlyFailed); !errors.Is(err, storage.ErrClosed) {
+	if _, err := nilStore.ForgetSessionsInState(ctx, storage.StateUnrecoverable); !errors.Is(err, storage.ErrClosed) {
 		t.Fatalf("nil store = %v, want ErrClosed", err)
 	}
 }

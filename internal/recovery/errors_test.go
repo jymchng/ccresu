@@ -30,13 +30,13 @@ func TestRetryErrorCarriesTheSchedule(t *testing.T) {
 
 func TestTerminalErrorNamesTheState(t *testing.T) {
 	cause := errors.New("boom")
-	err := &terminalError{SessionID: "abc", State: StatePermanentlyFailed, Cause: cause}
+	err := &cycleEndError{SessionID: "abc", State: StateDiscovered, Cause: cause}
 	message := err.Error()
-	if !strings.Contains(message, "session abc") || !strings.Contains(message, string(StatePermanentlyFailed)) {
+	if !strings.Contains(message, "session abc") || !strings.Contains(message, string(StateDiscovered)) {
 		t.Errorf("message %q does not name the session and state", message)
 	}
 	if !errors.Is(err, cause) {
-		t.Error("terminalError must expose its cause")
+		t.Error("cycleEndError must expose its cause")
 	}
 }
 
