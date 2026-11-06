@@ -359,15 +359,22 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 	}
 
 	outcome := Outcome{SessionID: sessionID}
+	// A resumed conversation continues under the id its job reported, in that
+	// session's own transcript. Every check and the dispatch itself therefore
+	// target that session: the tracked id is the row ccresu keeps -- what
+	// `ccresu sessions` lists and what the attempts belong to -- but it is not
+	// the session that answers any more, and resuming it would resume a
+	// conversation that has moved on.
+	target := dispatchTarget(session)
 	baseline := BaselineFromSession(session)
 
 	if err := state.move(StateCheckingSession, "checking the session before resuming", 0); err != nil {
 		return Outcome{SessionID: sessionID, State: state.current}, err
 	}
-	status, err := m.provider.GetSessionStatus(ctx, sessionID)
+	status, err := m.provider.GetSessionStatus(ctx, target)
 	if err != nil {
 		return m.fail(ctx, state, Outcome{SessionID: sessionID}, baseline, storage.RecoveryAttempt{},
-			Verification{}, fmt.Errorf("check session %s: %w", sessionID, err))
+			Verification{}, fmt.Errorf("check session %s: %w", target, err))
 	}
 	if !status.Session.Recoverable && status.Session.ID != "" {
 		reason := status.Session.Reason
@@ -420,7 +427,7 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 		return Outcome{SessionID: sessionID, State: state.current}, err
 	}
 	if m.limitCheck != nil {
-		cleared, err := m.limitCheck(ctx, sessionID)
+		cleared, err := m.limitCheck(ctx, target)
 		if err != nil {
 			return m.fail(ctx, state, Outcome{SessionID: sessionID}, baseline, storage.RecoveryAttempt{},
 				Verification{}, fmt.Errorf("check usage limit: %w", err))
@@ -438,23 +445,23 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 	if strings.TrimSpace(message) == "" {
 		message = m.message
 	}
-	if err := state.move(StateResuming, "resuming the original session", 0); err != nil {
+	if err := state.move(StateResuming, "resuming the session that holds the conversation", 0); err != nil {
 		return Outcome{SessionID: sessionID, State: state.current}, err
 	}
-	attempt, err := m.store.StartAttempt(ctx, sessionID, req.UsageLimitID, commandPreview(sessionID, message))
+	attempt, err := m.store.StartAttempt(ctx, sessionID, req.UsageLimitID, commandPreview(target, message))
 	if err != nil {
 		return Outcome{SessionID: sessionID, State: state.current}, fmt.Errorf("record attempt: %w", err)
 	}
 	outcome.Attempt = attempt
 
-	result, resumeErr := m.provider.ResumeSession(ctx, sessionID, message)
+	result, resumeErr := m.provider.ResumeSession(ctx, target, message)
 	if resumeErr != nil {
 		return m.fail(ctx, state, outcome, baseline, attempt, Verification{},
-			fmt.Errorf("resume session %s: %w", sessionID, resumeErr))
+			fmt.Errorf("resume session %s: %w", target, resumeErr))
 	}
 	if result.JobID == "" {
 		return m.fail(ctx, state, outcome, baseline, attempt, Verification{},
-			fmt.Errorf("resume session %s: %w", sessionID, claude.ErrNoBackgroundJob))
+			fmt.Errorf("resume session %s: %w", target, claude.ErrNoBackgroundJob))
 	}
 
 	verification, verifyErr := m.verifier.Verify(ctx, baseline, result)
@@ -925,6 +932,23 @@ func grew(baseline Baseline, status claude.SessionStatus) bool {
 		return false
 	}
 	return status.Transcript.Lines > baseline.TranscriptLines
+}
+
+// dispatchTarget reports the session id a dispatch must resume.
+//
+// The tracked id is the row ccresu keeps, and it is the id the first resume is
+// issued at. Once a job has reported that the conversation continued under a
+// different id, that id is the one holding the conversation: `claude --resume`
+// at the tracked id would re-open a conversation that was abandoned, and the
+// dispatch would neither continue the work nor grow the transcript the verifier
+// watches. An empty continuation therefore means "the tracked id is still the
+// one to resume", which is the only honest reading of a row that has never been
+// resumed.
+func dispatchTarget(session storage.Session) string {
+	if id := strings.TrimSpace(session.ContinuationSessionID); id != "" {
+		return id
+	}
+	return session.ID
 }
 
 // commandPreview renders the resume command recorded with an attempt.

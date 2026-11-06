@@ -309,7 +309,7 @@ WHEN                     TRANSITION                                 REASON
 2026-11-05 03:29:03 +08  WAITING_FOR_RESET -> RESET_TIME_REACHED    the scheduled reset time has arrived
 2026-11-05 03:29:03 +08  RESET_TIME_REACHED -> CHECKING_SESSION     checking the session before resuming
 2026-11-05 03:29:03 +08  CHECKING_SESSION -> CHECKING_LIMIT         checking the usage limit has cleared
-2026-11-05 03:29:03 +08  CHECKING_LIMIT -> RESUMING                 resuming the original session
+2026-11-05 03:29:03 +08  CHECKING_LIMIT -> RESUMING                 resuming the session that holds the conversation
 2026-11-05 03:29:03 +08  RESUMING -> RESUMED                        the original session resumed and the conversation grew
 ```
 

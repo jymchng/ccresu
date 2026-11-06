@@ -1055,3 +1055,39 @@ func TestFormattingHelpers(t *testing.T) {
 		t.Errorf("limitType(unknown) = %q", got)
 	}
 }
+
+// TestSessionsShowsTheNameTheCLIReported is the display half of the loop: an
+// operator watching a session needs to recognise it by name, and a listing of
+// unnamed sessions must not grow a column that says nothing.
+func TestSessionsShowsTheNameTheCLIReported(t *testing.T) {
+	h := newHarness(t)
+	h.seedSession(t, canonicalSessionID, nil)
+
+	code, stdout, stderr := h.exec(t, "sessions")
+	if code != ExitOK {
+		t.Fatalf("exit = %d (stderr %q)", code, stderr)
+	}
+	if strings.Contains(stdout, "NAME") {
+		t.Errorf("the listing grew a NAME column with nothing to show:\n%s", stdout)
+	}
+
+	if err := h.store.SetSessionName(context.Background(), canonicalSessionID, "nightly-audit"); err != nil {
+		t.Fatalf("SetSessionName: %v", err)
+	}
+
+	code, stdout, _ = h.exec(t, "sessions")
+	if code != ExitOK {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stdout, "NAME") || !strings.Contains(stdout, "nightly-audit") {
+		t.Errorf("the listing does not show the session name:\n%s", stdout)
+	}
+
+	code, stdout, _ = h.exec(t, "inspect", canonicalSessionID)
+	if code != ExitOK {
+		t.Fatalf("inspect exit = %d", code)
+	}
+	if !strings.Contains(stdout, "nightly-audit") {
+		t.Errorf("inspect does not report the name:\n%s", stdout)
+	}
+}

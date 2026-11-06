@@ -35,7 +35,22 @@ type Baseline struct {
 }
 
 // BaselineFromSession captures a baseline from a persisted session row.
+//
+// A resumed conversation continues under the id its job reported, in that
+// session's own transcript, so a row that records a continuation must be
+// measured against that file: the transcript named on the row stopped growing
+// the moment the conversation moved, and a dispatch that beat its line count
+// would prove nothing. The row's size and line snapshot belongs to the original
+// transcript, so the continuation starts with no snapshot at all -- zero, which
+// grew() reports as "cannot be proven" rather than as a transcript that grew
+// from nothing. The fresh status taken before the dispatch fills both in.
 func BaselineFromSession(session storage.Session) Baseline {
+	if id := strings.TrimSpace(session.ContinuationSessionID); id != "" {
+		return Baseline{
+			SessionID:      id,
+			TranscriptPath: strings.TrimSpace(session.ContinuationTranscriptPath),
+		}
+	}
 	return Baseline{
 		SessionID:       session.ID,
 		TranscriptPath:  session.TranscriptPath,
