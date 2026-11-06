@@ -468,21 +468,28 @@ func TestRecoverResumesAWaitingSession(t *testing.T) {
 		Session:    resumed,
 		Transcript: claude.TranscriptInfo{Path: "/tmp/t.jsonl", Size: 400, Lines: 9},
 	}
-	h.provider.ResumeResults[canonicalSessionID] = claude.ResumeResult{
-		RequestedSessionID: canonicalSessionID,
-		SessionID:          canonicalSessionID,
-		Verified:           true,
-		Result:             "continued",
-		Subtype:            "success",
-	}
+	// A resume is a background dispatch, so the provider registers the job it
+	// created; the command's verification follows that job to completion.
+	h.provider.ResumeResults[canonicalSessionID] = claude.ResumeResult{RequestedSessionID: canonicalSessionID}
 	// The resumed run appends to the transcript; verification must observe that
 	// growth rather than a frozen measurement.
 	h.provider.OnResume = func(context.Context, string, string) (claude.ResumeResult, error) {
+		jobID := claude.FakeJobID(canonicalSessionID)
+		h.provider.SetJob(claude.AgentEntry{
+			StateID:   jobID,
+			SessionID: canonicalSessionID,
+			Kind:      "background",
+			State:     "done",
+		})
 		h.provider.Statuses[canonicalSessionID] = claude.SessionStatus{
 			Session:    resumed,
 			Transcript: claude.TranscriptInfo{Path: "/tmp/t.jsonl", Size: 4096, Lines: 42},
 		}
-		return h.provider.ResumeResults[canonicalSessionID], nil
+		return claude.ResumeResult{
+			RequestedSessionID:    canonicalSessionID,
+			JobID:                 jobID,
+			ContinuationSessionID: canonicalSessionID,
+		}, nil
 	}
 
 	code, stdout, stderr := h.exec(t, "recover", canonicalSessionID)

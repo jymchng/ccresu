@@ -199,16 +199,21 @@ func TestDaemonActsOnADueSchedule(t *testing.T) {
 		Transcript: claude.TranscriptInfo{Path: "/tmp/t.jsonl", Size: 400, Lines: 9},
 	}
 	h.provider.OnResume = func(context.Context, string, string) (claude.ResumeResult, error) {
+		jobID := claude.FakeJobID(canonicalSessionID)
+		h.provider.SetJob(claude.AgentEntry{
+			StateID:   jobID,
+			SessionID: canonicalSessionID,
+			Kind:      "background",
+			State:     "done",
+		})
 		h.provider.Statuses[canonicalSessionID] = claude.SessionStatus{
 			Session:    claude.Session{ID: canonicalSessionID, Recoverable: true},
 			Transcript: claude.TranscriptInfo{Path: "/tmp/t.jsonl", Size: 4096, Lines: 42},
 		}
 		return claude.ResumeResult{
-			RequestedSessionID: canonicalSessionID,
-			SessionID:          canonicalSessionID,
-			Verified:           true,
-			Subtype:            "success",
-			Result:             "continued",
+			RequestedSessionID:    canonicalSessionID,
+			JobID:                 jobID,
+			ContinuationSessionID: canonicalSessionID,
 		}, nil
 	}
 
@@ -304,16 +309,21 @@ func TestDaemonRecoversPendingSessions(t *testing.T) {
 		Transcript: claude.TranscriptInfo{Path: "/tmp/r.jsonl", Size: 400, Lines: 9},
 	}
 	h.provider.OnResume = func(context.Context, string, string) (claude.ResumeResult, error) {
+		jobID := claude.FakeJobID(retryID)
+		h.provider.SetJob(claude.AgentEntry{
+			StateID:   jobID,
+			SessionID: retryID,
+			Kind:      "background",
+			State:     "done",
+		})
 		h.provider.Statuses[retryID] = claude.SessionStatus{
 			Session:    claude.Session{ID: retryID, Recoverable: true},
 			Transcript: claude.TranscriptInfo{Path: "/tmp/r.jsonl", Size: 4096, Lines: 42},
 		}
 		return claude.ResumeResult{
-			RequestedSessionID: retryID,
-			SessionID:          retryID,
-			Verified:           true,
-			Subtype:            "success",
-			Result:             "continued",
+			RequestedSessionID:    retryID,
+			JobID:                 jobID,
+			ContinuationSessionID: retryID,
 		}, nil
 	}
 

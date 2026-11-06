@@ -378,8 +378,10 @@ func sessionRunning(session Session) bool {
 	return session.PID > 0
 }
 
-// ResumeSession continues the original conversation using the single verified
-// resume command and verifies the session id was preserved.
+// ResumeSession dispatches a continuation of the original conversation into the
+// background using the single verified resume command. What it can report is the
+// job that now holds the conversation; proving that the conversation continued
+// is the verifier's job.
 func (p *Provider) ResumeSession(ctx context.Context, sessionID, message string) (ResumeResult, error) {
 	if err := ValidateSessionID(sessionID); err != nil {
 		return ResumeResult{}, err
@@ -398,12 +400,37 @@ func (p *Provider) ResumeSession(ctx context.Context, sessionID, message string)
 	p.mu.Lock()
 	updated := session
 	updated.LastSeenAt = p.clock.Now().UTC()
-	if result.Verified {
+	if result.JobID != "" {
+		// A dispatch means the conversation is live again; the job itself is what
+		// holds it, so the row's activity is now.
 		updated.LastActivity = updated.LastSeenAt
 	}
 	p.known[sessionID] = updated
 	p.mu.Unlock()
 	return result, nil
+}
+
+// BackgroundJob looks up one background job by its eight-hex job id.
+//
+// The listing is requested with --all so a job that has already finished is
+// still found: the verifier has to observe that the job left `working`, and a
+// job that had vanished from the live listing would be indistinguishable from a
+// failed lookup.
+func (p *Provider) BackgroundJob(ctx context.Context, jobID string) (AgentEntry, error) {
+	if !ValidBackgroundJobID(jobID) {
+		return AgentEntry{}, fmt.Errorf("%w: %q is not an eight-hex background job name",
+			ErrInvalidBackgroundJobID, jobID)
+	}
+	entries, err := p.cli.Agents(ctx, AgentsQuery{All: true})
+	if err != nil {
+		return AgentEntry{}, err
+	}
+	for _, entry := range entries {
+		if strings.EqualFold(entry.StateID, jobID) {
+			return entry, nil
+		}
+	}
+	return AgentEntry{}, fmt.Errorf("%w: background job %s", ErrSessionNotFound, jobID)
 }
 
 // ContinuationMessage is the default prompt ccresu sends when resuming. The

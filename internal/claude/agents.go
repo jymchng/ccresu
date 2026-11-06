@@ -345,3 +345,49 @@ func firstNonZeroTime(values ...time.Time) time.Time {
 	}
 	return time.Time{}
 }
+
+// flexBool accepts true/false, "true"/"false" and 0/1.
+//
+// It lived beside the print-mode resume mapping until a resume became a
+// background dispatch; the transcript reader needs it too, so it lives with the
+// other permissive wire types.
+type flexBool struct {
+	value bool
+	set   bool
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (f *flexBool) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil
+	}
+	switch trimmed[0] {
+	case '"':
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err != nil {
+			return nil
+		}
+		switch strings.ToLower(strings.TrimSpace(s)) {
+		case "true", "1", "yes":
+			f.value, f.set = true, true
+		case "false", "0", "no":
+			f.value, f.set = false, true
+		}
+	case 't':
+		f.value, f.set = true, true
+	case 'f':
+		f.value, f.set = false, true
+	default:
+		var num json.Number
+		if err := json.Unmarshal(trimmed, &num); err == nil {
+			if n, convErr := num.Int64(); convErr == nil {
+				f.value, f.set = n != 0, true
+			}
+		}
+	}
+	return nil
+}
+
+// Bool returns the mapped value.
+func (f flexBool) Bool() bool { return f.value }

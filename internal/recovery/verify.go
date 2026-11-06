@@ -2,7 +2,6 @@ package recovery
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -13,23 +12,24 @@ import (
 )
 
 // DefaultVerificationTimeout bounds how long the verifier waits for the
-// transcript to grow after a resume returns.
+// dispatched job to stop working and for the continuation transcript to appear.
 const DefaultVerificationTimeout = 120 * time.Second
 
-// DefaultHealthCheckInterval is how often the verifier re-reads the session
-// while waiting for the transcript to grow.
+// DefaultHealthCheckInterval is how often the verifier re-reads the job and the
+// transcript while it waits.
 const DefaultHealthCheckInterval = 10 * time.Second
 
 // Baseline is the state of a session before a resume, captured so the verifier
-// can prove afterwards that the same conversation advanced.
+// can prove afterwards that the conversation advanced.
 type Baseline struct {
-	// SessionID is the session that must still be the one addressed.
+	// SessionID is the session that was addressed by the dispatch.
 	SessionID string
-	// TranscriptPath is the transcript ccresu expects to grow.
+	// TranscriptPath is the transcript ccresu expects to grow when the job
+	// continues the conversation under the same session id.
 	TranscriptPath string
 	// TranscriptSize and TranscriptLines snapshot the transcript before the
 	// resume. A zero Lines means the snapshot was never taken, and growth then
-	// cannot be proven — which is reported rather than assumed.
+	// cannot be proven -- which is reported rather than assumed.
 	TranscriptSize  int64
 	TranscriptLines int64
 }
@@ -63,17 +63,30 @@ func BaselineFromStatus(status claude.SessionStatus) Baseline {
 	}
 }
 
-// Verification is the evidence collected after a resume.
+// Verification is the evidence collected after a dispatch.
 //
 // Proven is the only field a caller may treat as success. It is true only when
-// both independent checks passed: the CLI reported the original session id back,
-// and the transcript of that session actually grew.
+// both independent checks passed: the dispatched background job reported the
+// session id that continues the conversation, and that session's transcript
+// grew.
 type Verification struct {
-	// SessionIDPreserved reports that the resumed session is the requested one.
-	SessionIDPreserved bool
-	// TranscriptGrew reports that the transcript gained content.
+	// JobID is the background job the dispatch created.
+	JobID string
+	// JobState is the last state the CLI reported for that job ("working",
+	// "done", "failed", "stopped", or an unknown value from a newer CLI).
+	JobState string
+	// ContinuationSessionID is the session id the job reports. A background
+	// agent continues the conversation under its own session id, so this is
+	// normally a new id rather than the one that was resumed.
+	ContinuationSessionID string
+	// ContinuationConfirmed reports that the job reported a continuation session
+	// id, i.e. that there is a conversation to measure. It replaces the old
+	// "the reported id equals the requested id" check, which print mode made
+	// possible and a background dispatch does not.
+	ContinuationConfirmed bool
+	// TranscriptGrew reports that the continuation transcript gained content.
 	TranscriptGrew bool
-	// Proven reports SessionIDPreserved && TranscriptGrew.
+	// Proven reports ContinuationConfirmed && TranscriptGrew.
 	Proven bool
 	// LinesBefore/After and SizeBefore/After are the measurements the decision
 	// rests on, kept for logs and for `ccresu inspect`.
@@ -92,11 +105,11 @@ type Verification struct {
 // Missing returns the failed checks, for an error message.
 func (v Verification) Missing() []string {
 	var missing []string
-	if !v.SessionIDPreserved {
-		missing = append(missing, "the original session id was not confirmed")
+	if !v.ContinuationConfirmed {
+		missing = append(missing, "the background job reported no continuation session id")
 	}
 	if !v.TranscriptGrew {
-		missing = append(missing, "the transcript did not grow")
+		missing = append(missing, "the continuation transcript did not grow")
 	}
 	return missing
 }
@@ -104,7 +117,8 @@ func (v Verification) Missing() []string {
 // Reason renders why the resume was not proven.
 func (v Verification) Reason() string {
 	if v.Proven {
-		return "the original session id was confirmed and its transcript grew"
+		return fmt.Sprintf("the job %s continued the conversation as session %s and its transcript grew",
+			v.JobID, v.ContinuationSessionID)
 	}
 	missing := v.Missing()
 	if len(missing) == 0 {
@@ -113,33 +127,36 @@ func (v Verification) Reason() string {
 	return strings.Join(missing, "; ")
 }
 
-// Verifier proves a resume continued the original conversation.
+// Verifier proves that a dispatched job continued the conversation.
 //
-// Provider is required: the transcript is read through GetSessionStatus, which
-// is the only component that knows where a session's transcript lives.
+// Provider is required: the job is read through BackgroundJob and the transcript
+// through GetSessionStatus, which are the only components that know where a
+// session's conversation lives.
 type Verifier struct {
-	// Provider supplies post-resume status. Required.
+	// Provider supplies the job and the post-dispatch status. Required.
 	Provider claude.SessionProvider
-	// Clock drives the polling loop and the timeout. Nil means the system clock.
+	// Clock drives the polling loops and the timeout. Nil means the system clock.
 	Clock clock.Clock
-	// Timeout bounds the wait for the transcript to grow. Zero means
-	// DefaultVerificationTimeout; a negative value means "check once, never
-	// wait".
+	// Timeout bounds the wait for the job to stop working and for the transcript
+	// to grow. Zero means DefaultVerificationTimeout; a negative value means
+	// "check once, never wait".
 	Timeout time.Duration
-	// Interval is the gap between checks. Zero means
-	// DefaultHealthCheckInterval; a negative value means "check once".
+	// Interval is the gap between checks. Zero means DefaultHealthCheckInterval;
+	// a negative value means "check once".
 	Interval time.Duration
 }
 
-// Verify performs the two independent checks and reports the evidence.
+// Verify resolves the dispatched job, waits for it to stop working, and measures
+// the transcript of the session it continues.
 //
-// It returns an error only when the checks could not be completed — a cancelled
-// context or an unreadable status. A resume that simply could not be proven is
-// not an error: it is a Verification whose Proven is false, because "we could
-// not check" and "the check failed" are different things and must not be
-// conflated in the state machine.
+// It returns an error only when the checks could not be completed -- a cancelled
+// context, or a job or status that could not be read. A resume that simply could
+// not be proven is not an error: it is a Verification whose Proven is false,
+// because "we could not check" and "the check failed" are different things and
+// must not be conflated in the state machine.
 func (v Verifier) Verify(ctx context.Context, baseline Baseline, result claude.ResumeResult) (Verification, error) {
 	verification := Verification{
+		JobID:       result.JobID,
 		LinesBefore: baseline.TranscriptLines,
 		SizeBefore:  baseline.TranscriptSize,
 		LinesAfter:  baseline.TranscriptLines,
@@ -148,19 +165,34 @@ func (v Verifier) Verify(ctx context.Context, baseline Baseline, result claude.R
 	if err := ctx.Err(); err != nil {
 		return verification, err
 	}
-	if strings.TrimSpace(baseline.SessionID) == "" {
-		return verification, errors.New("recovery: verification needs a baseline session id")
+	if strings.TrimSpace(result.JobID) == "" {
+		verification.Notes = append(verification.Notes,
+			"the dispatch reported no background job id, so there was nothing to follow")
+		return verification, nil
 	}
-
-	verification.SessionIDPreserved, verification.Notes = checkSessionID(baseline.SessionID, result, verification.Notes)
-
 	if v.Provider == nil {
 		verification.Notes = append(verification.Notes,
-			"no session provider was configured, so transcript growth could not be measured")
+			"no session provider was configured, so the job and its transcript could not be read")
 		return verification, nil
 	}
 
-	status, err := v.await(ctx, baseline, result, &verification)
+	entry, err := v.awaitJob(ctx, result.JobID, &verification)
+	if err != nil {
+		return verification, err
+	}
+	if strings.TrimSpace(entry.SessionID) == "" {
+		verification.Notes = append(verification.Notes, fmt.Sprintf(
+			"the background job %s reported no session id, so the conversation it continues is unknown",
+			result.JobID))
+		return verification, nil
+	}
+	verification.ContinuationSessionID = entry.SessionID
+	verification.ContinuationConfirmed = true
+	verification.Notes = append(verification.Notes, fmt.Sprintf(
+		"the background job %s continues the conversation as session %s (state %s)",
+		result.JobID, entry.SessionID, orUnknown(entry.State)))
+
+	status, err := v.awaitGrowth(ctx, entry.SessionID, baseline, &verification)
 	if err != nil {
 		return verification, err
 	}
@@ -169,49 +201,63 @@ func (v Verifier) Verify(ctx context.Context, baseline Baseline, result claude.R
 		verification.Notes = append(verification.Notes,
 			"the session has a live process, but a live process is not proof that the conversation continued")
 	}
-	verification.Proven = verification.SessionIDPreserved && verification.TranscriptGrew
+	verification.Proven = verification.ContinuationConfirmed && verification.TranscriptGrew
 	return verification, nil
 }
 
-// await polls GetSessionStatus until the transcript grows or the timeout
-// expires, recording the newest measurement in verification.
-func (v Verifier) await(ctx context.Context, baseline Baseline, result claude.ResumeResult, verification *Verification) (claude.SessionStatus, error) {
-	timeout := v.Timeout
-	if timeout == 0 {
-		timeout = DefaultVerificationTimeout
+// awaitJob polls the background job until it leaves the working state, recording
+// the newest state in verification.
+//
+// The job is what the dispatch created, so its state is the one fact that says
+// whether the turn is still running: a job that has stopped working has either
+// finished, failed or been stopped, and only then does waiting for the
+// transcript make sense.
+func (v Verifier) awaitJob(ctx context.Context, jobID string, verification *Verification) (claude.AgentEntry, error) {
+	timeout, interval, clk := v.pacing()
+	deadline := clk.Now().Add(timeout)
+	for {
+		entry, err := v.Provider.BackgroundJob(ctx, jobID)
+		if err != nil {
+			return entry, fmt.Errorf("recovery: read background job %s after dispatch: %w", jobID, err)
+		}
+		verification.JobState = entry.State
+		if !jobWorking(entry) {
+			return entry, nil
+		}
+		if timeout < 0 || interval < 0 {
+			verification.Notes = append(verification.Notes, fmt.Sprintf(
+				"the background job %s was still working when it was checked once", jobID))
+			return entry, nil
+		}
+		if !clk.Now().Before(deadline) {
+			verification.Notes = append(verification.Notes, fmt.Sprintf(
+				"the background job %s was still working after %s", jobID, timeout))
+			return entry, nil
+		}
+		select {
+		case <-ctx.Done():
+			return entry, ctx.Err()
+		case <-clk.After(interval):
+		}
 	}
-	interval := v.Interval
-	if interval == 0 {
-		interval = DefaultHealthCheckInterval
-	}
-	clk := v.Clock
-	if clk == nil {
-		clk = clock.System()
-	}
+}
 
+// awaitGrowth polls the continuation session's status until its transcript shows
+// content, recording the newest measurement.
+func (v Verifier) awaitGrowth(ctx context.Context, continuationID string, baseline Baseline, verification *Verification) (claude.SessionStatus, error) {
+	timeout, interval, clk := v.pacing()
 	deadline := clk.Now().Add(timeout)
 	var last claude.SessionStatus
 	for {
-		status, err := v.Provider.GetSessionStatus(ctx, baseline.SessionID)
+		status, err := v.Provider.GetSessionStatus(ctx, continuationID)
 		if err != nil {
-			return status, fmt.Errorf("recovery: check session %s after resume: %w", baseline.SessionID, err)
+			return status, fmt.Errorf("recovery: check session %s after dispatch: %w", continuationID, err)
 		}
 		last = status
 		verification.LinesAfter = status.Transcript.Lines
 		verification.SizeAfter = status.Transcript.Size
-		verification.SessionIDPreserved, verification.Notes = checkSessionID(
-			baseline.SessionID, result, verification.Notes)
-		if id := status.Session.ID; id != "" && id != baseline.SessionID {
-			verification.SessionIDPreserved = false
-			verification.Notes = append(verification.Notes, fmt.Sprintf(
-				"the transcript now belongs to session %s instead of %s, so the original conversation was not continued",
-				id, baseline.SessionID))
-		}
-
-		if measureGrowth(baseline, status, verification) {
+		if measureGrowth(continuationID, baseline, status, verification) {
 			verification.TranscriptGrew = true
-			verification.Proven = verification.SessionIDPreserved
-			verification.Proven = verification.Proven && verification.TranscriptGrew
 			return last, nil
 		}
 		if timeout < 0 || interval < 0 {
@@ -232,14 +278,68 @@ func (v Verifier) await(ctx context.Context, baseline Baseline, result claude.Re
 	}
 }
 
-// measureGrowth records whether the transcript advanced and explains why not.
-func measureGrowth(baseline Baseline, status claude.SessionStatus, verification *Verification) bool {
+// pacing resolves the timeout, interval and clock, applying the documented
+// defaults.
+func (v Verifier) pacing() (time.Duration, time.Duration, clock.Clock) {
+	timeout := v.Timeout
+	if timeout == 0 {
+		timeout = DefaultVerificationTimeout
+	}
+	interval := v.Interval
+	if interval == 0 {
+		interval = DefaultHealthCheckInterval
+	}
+	clk := v.Clock
+	if clk == nil {
+		clk = clock.System()
+	}
+	return timeout, interval, clk
+}
+
+// jobWorking reports whether the job is still running its turn.
+//
+// "working" is the only state that means "busy" in the CLI's vocabulary; an
+// unknown state from a newer CLI is treated as finished, because waiting for a
+// state ccresu does not understand would hang the recovery for the whole
+// timeout.
+func jobWorking(entry claude.AgentEntry) bool {
+	return strings.EqualFold(strings.TrimSpace(entry.State), "working")
+}
+
+// orUnknown renders an empty state honestly.
+func orUnknown(state string) string {
+	if strings.TrimSpace(state) == "" {
+		return "unknown"
+	}
+	return state
+}
+
+// measureGrowth records whether the conversation advanced and explains why not.
+//
+// A background agent continues the conversation under its own session id, so
+// there are two cases. When the job kept the id that was resumed, growth is
+// measured against the snapshot taken before the dispatch. When the job reports
+// a different id -- the normal case -- the continuation starts a fresh
+// transcript, and growth means that transcript exists and has content.
+func measureGrowth(continuationID string, baseline Baseline, status claude.SessionStatus, verification *Verification) bool {
 	linesNow := status.Transcript.Lines
 	sizeNow := status.Transcript.Size
 
+	if continuationID != "" && continuationID != baseline.SessionID {
+		if linesNow > 0 || sizeNow > 0 {
+			verification.Notes = append(verification.Notes, fmt.Sprintf(
+				"the conversation continues under session %s, whose transcript holds %d lines (%d bytes)",
+				continuationID, linesNow, sizeNow))
+			return true
+		}
+		verification.Notes = append(verification.Notes, fmt.Sprintf(
+			"the conversation continues under session %s, whose transcript is still empty", continuationID))
+		return false
+	}
+
 	if baseline.TranscriptLines <= 0 {
-		// The baseline was never snapshotted, so neither a line count nor a
-		// byte count can be compared. Saying "proven" here would be a guess.
+		// The baseline was never snapshotted, so neither a line count nor a byte
+		// count can be compared. Saying "proven" here would be a guess.
 		if linesNow > 0 {
 			verification.Notes = append(verification.Notes,
 				"the transcript line count before the resume was unknown, so growth could not be proven")
@@ -257,29 +357,19 @@ func measureGrowth(baseline Baseline, status claude.SessionStatus, verification 
 	return false
 }
 
-// checkSessionID compares the id the CLI reported with the id that was asked
-// for. It appends to notes and returns the verdict.
-func checkSessionID(want string, result claude.ResumeResult, notes []string) (bool, []string) {
-	if requested := result.RequestedSessionID; requested != "" && requested != want {
-		notes = append(notes, fmt.Sprintf(
-			"ccresu asked to resume %s but the command addressed %s", want, requested))
-		return false, notes
+// summaryOf renders what an attempt row stores as its output.
+//
+// A background dispatch reports no turn result, so the honest summary is the job
+// and the conversation it continued; the assistant text, if any, lives in the
+// transcript and is never copied into the database.
+func summaryOf(result claude.ResumeResult, verification Verification) string {
+	if verification.ContinuationSessionID != "" {
+		return fmt.Sprintf("dispatched %s; continued as session %s", result.JobID, verification.ContinuationSessionID)
 	}
-	if reported := result.SessionID; reported == "" {
-		notes = append(notes, "the CLI reported no session id for the resumed turn, so the conversation identity is unproven")
-		return false, notes
+	if result.JobID != "" {
+		return "dispatched " + result.JobID
 	}
-	if result.SessionID != want {
-		notes = append(notes, fmt.Sprintf(
-			"the CLI reported session %s instead of %s, which means a new conversation was created",
-			result.SessionID, want))
-		return false, notes
-	}
-	if !result.Verified {
-		notes = append(notes, "the provider did not confirm that the resumed session kept its id")
-		return false, notes
-	}
-	return true, notes
+	return "dispatched"
 }
 
 // VerificationFailedError builds the error returned when a resume ran but could

@@ -165,13 +165,13 @@ func TestBackgroundJobID(t *testing.T) {
 		},
 		{
 			name: "wrapped the way the log showed it",
-			err: errors.New("claude: claude executable unavailable: claude -p --resume failed (exit 1): " +
+			err: errors.New("claude: claude executable unavailable: claude --resume failed (exit 1): " +
 				backgroundRefusal + ": exit status 1"),
 			want: "837eaaea",
 		},
 		{
 			name: "wrapped across lines and indented",
-			err: errors.New("claude -p --resume failed (exit 1): Error: That session is\n" +
+			err: errors.New("claude --resume failed (exit 1): Error: That session is\n" +
 				"    running in the background (837eaaea). Run `claude attach 837eaaea`\n" +
 				"    to open it, or `claude stop 837eaaea` first to resume it here.\n"),
 			want: "837eaaea",
@@ -218,13 +218,13 @@ func TestIsSessionRunningInBackground(t *testing.T) {
 		{name: "bare refusal", err: errors.New(backgroundRefusal), want: true},
 		{
 			name: "wrapped the way the log showed it",
-			err: errors.New("claude: claude executable unavailable: claude -p --resume failed (exit 1): " +
+			err: errors.New("claude: claude executable unavailable: claude --resume failed (exit 1): " +
 				backgroundRefusal + ": exit status 1"),
 			want: true,
 		},
 		{
 			name: "indented and wrapped across lines",
-			err: errors.New("claude -p --resume failed (exit 1): Error: That session is\n" +
+			err: errors.New("claude --resume failed (exit 1): Error: That session is\n" +
 				"    running in the background (837eaaea).\n"),
 			want: true,
 		},
@@ -241,7 +241,7 @@ func TestIsSessionRunningInBackground(t *testing.T) {
 			want: true,
 		},
 		{name: "auth error", err: errors.New("invalid api key provided")},
-		{name: "generic exit 1", err: errors.New("claude -p --resume failed (exit 1): unknown error")},
+		{name: "generic exit 1", err: errors.New("claude --resume failed (exit 1): unknown error")},
 		{name: "network text", err: errors.New("connection reset by peer")},
 		{name: "mentions background but not the refusal", err: errors.New("the job will keep running in the background")},
 		{name: "empty error", err: errors.New("")},

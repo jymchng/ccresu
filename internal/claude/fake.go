@@ -2,6 +2,8 @@ package claude
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"sync"
 	"time"
@@ -111,16 +113,20 @@ type FakeProvider struct {
 	Sessions map[string]Session
 	// Statuses overrides GetSessionStatus results.
 	Statuses map[string]SessionStatus
-	// ResumeBehaviour is returned by ResumeSession for the matching id.
+	// ResumeResults is returned by ResumeSession for the matching id.
 	ResumeResults map[string]ResumeResult
+	// Jobs holds the background jobs BackgroundJob resolves, keyed by job id.
+	// ResumeSession registers one for every dispatch it fakes.
+	Jobs map[string]AgentEntry
 
 	// Now supplies timestamps; nil means time.Now.
 	Now func() time.Time
 
-	DiscoverErr error
-	GetErr      error
-	StatusErr   error
-	ResumeErr   error
+	DiscoverErr      error
+	GetErr           error
+	StatusErr        error
+	ResumeErr        error
+	BackgroundJobErr error
 
 	// OnResume, when set, runs instead of the default resume behaviour.
 	OnResume func(ctx context.Context, sessionID, message string) (ResumeResult, error)
@@ -134,6 +140,7 @@ func NewFakeProvider(sessions ...Session) *FakeProvider {
 		Sessions:      make(map[string]Session, len(sessions)),
 		Statuses:      make(map[string]SessionStatus),
 		ResumeResults: make(map[string]ResumeResult),
+		Jobs:          make(map[string]AgentEntry),
 	}
 	for _, session := range sessions {
 		f.Sessions[session.ID] = session
@@ -235,6 +242,13 @@ func (f *FakeProvider) GetSessionStatus(ctx context.Context, sessionID string) (
 }
 
 // ResumeSession implements SessionProvider.
+//
+// A dispatch creates a background job, so the fake registers one: the job id is
+// derived from the session id (deterministic, eight hex characters) and the job
+// continues the conversation under the same session id unless a test supplies
+// ResumeResults with a different ContinuationSessionID. That mirrors the real
+// CLI closely enough for the recovery engine, which reads both facts back
+// through BackgroundJob and GetSessionStatus.
 func (f *FakeProvider) ResumeSession(ctx context.Context, sessionID, message string) (ResumeResult, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, Call{Name: "ResumeSession", SessionID: sessionID, Message: message})
@@ -259,20 +273,63 @@ func (f *FakeProvider) ResumeSession(ctx context.Context, sessionID, message str
 	if session.Unrecoverable() {
 		return ResumeResult{}, errors.Join(ErrUnrecoverable, errors.New(session.Reason))
 	}
-	if hasResult {
-		result.RequestedSessionID = sessionID
-		result.Verified = result.SessionID == sessionID
-		return result, nil
+
+	if !hasResult {
+		result = ResumeResult{
+			Command: append([]string{DefaultExecutable}, ResumeArgs(sessionID, message)...),
+		}
 	}
-	return ResumeResult{
-		RequestedSessionID: sessionID,
-		SessionID:          sessionID,
-		Verified:           true,
-		Result:             "resumed",
-		Subtype:            "success",
-		NumTurns:           1,
-		Command:            append([]string{DefaultExecutable}, ResumeArgs(sessionID, message)...),
-	}, nil
+	result.RequestedSessionID = sessionID
+	if result.JobID == "" {
+		result.JobID = FakeJobID(sessionID)
+	}
+	if result.ContinuationSessionID == "" {
+		result.ContinuationSessionID = sessionID
+	}
+	f.mu.Lock()
+	f.Jobs[result.JobID] = AgentEntry{
+		StateID:   result.JobID,
+		SessionID: result.ContinuationSessionID,
+		CWD:       session.ProjectPath,
+		Kind:      string(SessionTypeBackground),
+		Name:      session.Name,
+		Status:    "busy",
+		State:     "working",
+		StartedAt: f.now().UTC(),
+	}
+	f.mu.Unlock()
+	return result, nil
+}
+
+// BackgroundJob implements SessionProvider.
+func (f *FakeProvider) BackgroundJob(ctx context.Context, jobID string) (AgentEntry, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, Call{Name: "BackgroundJob", SessionID: jobID})
+	if err := ctx.Err(); err != nil {
+		return AgentEntry{}, err
+	}
+	if f.BackgroundJobErr != nil {
+		return AgentEntry{}, f.BackgroundJobErr
+	}
+	entry, ok := f.Jobs[jobID]
+	if !ok {
+		return AgentEntry{}, errors.Join(ErrSessionNotFound, errors.New(jobID))
+	}
+	return entry, nil
+}
+
+// SetJob adds or replaces a background job the fake resolves.
+func (f *FakeProvider) SetJob(entry AgentEntry) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Jobs[entry.StateID] = entry
+}
+
+// FakeJobID derives the deterministic eight-hex job id a fake dispatch reports.
+func FakeJobID(sessionID string) string {
+	sum := sha256.Sum256([]byte("ccresu-fake-job:" + sessionID))
+	return hex.EncodeToString(sum[:4])
 }
 
 var (

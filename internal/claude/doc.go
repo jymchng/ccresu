@@ -10,11 +10,18 @@
 //
 // Resumption uses exactly two commands:
 //
-//	claude -p --resume <session-id> --output-format json "<continuation message>"
+//	claude --resume <session-id> --bg "<continuation message>"
 //	claude stop <job-id>
 //
-// The second is issued only when the first is refused because the session is
-// still attached to a background agent ("That session is running in the
+// A resume is a background dispatch, not a print-mode call: `--bg` and `--print`
+// conflict, so `-p` and `--output-format json` are not used and the dispatch
+// cannot report the result, the turn count or the cost. It answers with
+// `backgrounded · <job-id>` (exit 0) and the job continues the conversation under
+// its own session id, which the caller reads back through [SessionProvider.BackgroundJob]
+// and the transcript.
+//
+// The second command is issued only when the first is refused because the session
+// is still attached to a background agent ("That session is running in the
 // background"). Its argument is the eight lower-case hex job name that refusal
 // prints -- not the session UUID, which `claude stop` answers with "No job
 // matching" and exit 1. Stopping keeps the conversation and the session id, so
@@ -22,9 +29,9 @@
 // ccresu does not have, and `--fork-session` would branch a new conversation.
 //
 // No TTY is attached, no keystroke is injected, no shell is involved and no new
-// session is ever started in place of the original one: the returned session id
-// must equal the requested one, otherwise the attempt fails with
-// ErrSessionNotPreserved.
+// session is ever started in place of the original one: the dispatch is followed
+// by polling the job it created, and a resume that cannot be shown to have
+// continued the conversation is reported as unproven rather than as a success.
 //
 // Sessions that cannot be resumed are reported as UNRECOVERABLE together with a
 // reason; the package never invents a command for them.
@@ -48,7 +55,11 @@
 //		if err != nil {
 //			return err
 //		}
-//		log.Printf("resumed %s (%d turns)", result.SessionID, result.NumTurns)
+//		job, err := provider.BackgroundJob(ctx, result.JobID)
+//		if err != nil {
+//			return err
+//		}
+//		log.Printf("dispatched %s, continues as %s (state %s)", result.JobID, job.SessionID, job.State)
 //	}
 //
 // Tests use [FakeProvider] and [FakeExecer] so no real CLI is required.

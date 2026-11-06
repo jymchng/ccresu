@@ -44,7 +44,7 @@ func scriptedProvider(t *testing.T, home string, script cliScript) (*Provider, *
 		script.agents = testAgentsJSON
 	}
 	if script.resume == "" {
-		script.resume = testResumeJSON
+		script.resume = testDispatchOutput
 	}
 
 	execer := NewFakeExecer(func(call Call) (Output, error) {
@@ -61,7 +61,7 @@ func scriptedProvider(t *testing.T, home string, script cliScript) (*Provider, *
 				Stdout:   []byte(script.agents),
 				ExitCode: script.agentsExit,
 			}, script.agentsErr
-		case strings.HasPrefix(argv, "-p --resume"):
+		case strings.HasPrefix(argv, "--resume"):
 			return Output{
 				Stdout:   []byte(script.resume),
 				Stderr:   []byte(script.resumeStderr),
@@ -426,13 +426,16 @@ func TestProviderResume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResumeSession() error = %v", err)
 	}
-	if !result.Verified || result.SessionID != testSessionID {
-		t.Errorf("result = %+v, want a verified resume", result)
+	if result.JobID == "" {
+		t.Errorf("result = %+v, want the background job the dispatch created", result)
+	}
+	if result.RequestedSessionID != testSessionID {
+		t.Errorf("RequestedSessionID = %q, want %q", result.RequestedSessionID, testSessionID)
 	}
 
 	calls := execer.Calls()
 	last := calls[len(calls)-1]
-	want := strings.Join([]string{"-p", "--resume", testSessionID, "--output-format", "json", "continue the goal"}, " ")
+	want := strings.Join([]string{"--resume", testSessionID, "--bg", "continue the goal"}, " ")
 	if got := strings.Join(last.Args, " "); got != want {
 		t.Errorf("resume argv = %q, want %q", got, want)
 	}
@@ -471,12 +474,14 @@ func TestProviderResumeRefusesUnrecoverable(t *testing.T) {
 		t.Fatalf("ResumeSession() error = %v, want ErrUnrecoverable", err)
 	}
 	for _, call := range execer.Calls() {
-		if strings.HasPrefix(strings.Join(call.Args, " "), "-p --resume") {
+		if strings.HasPrefix(strings.Join(call.Args, " "), "--resume") {
 			t.Fatalf("an unrecoverable session must never produce a resume command: %v", call.Args)
 		}
 	}
 }
 
+// TestProviderResumeFailurePropagates checks that a dispatch the CLI refuses is
+// reported as a failure rather than as a resume.
 func TestProviderResumeFailurePropagates(t *testing.T) {
 	t.Parallel()
 
@@ -488,11 +493,11 @@ func TestProviderResumeFailurePropagates(t *testing.T) {
 	writeTranscript(t, store, "/root/project", testSessionID, 2)
 
 	provider, _ := scriptedProvider(t, home, cliScript{
-		resume:     `{"type":"result","is_error":true,"session_id":"` + testSessionID + `","result":"still limited"}`,
-		resumeExit: 0,
+		resume:     "Error: still limited\n",
+		resumeExit: 1,
 	})
-	if _, err := provider.ResumeSession(context.Background(), testSessionID, "go"); !errors.Is(err, ErrResumeFailed) {
-		t.Fatalf("ResumeSession() error = %v, want ErrResumeFailed", err)
+	if _, err := provider.ResumeSession(context.Background(), testSessionID, "go"); !errors.Is(err, ErrCLIUnavailable) {
+		t.Fatalf("ResumeSession() error = %v, want ErrCLIUnavailable", err)
 	}
 }
 

@@ -604,9 +604,12 @@ func TestStateWalkerReportsAPersistenceFailure(t *testing.T) {
 // fall back to the documented values rather than waiting for ever or spinning:
 // a transcript that has already grown is accepted on the first check.
 func TestVerifierAppliesItsDocumentedDefaults(t *testing.T) {
-	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
-		return statusFor(sessionA, 11, 220), nil
-	}}
+	provider := &providerStub{
+		jobFn: func(int, string) (claude.AgentEntry, error) { return finishedJob(jobID, sessionA), nil },
+		statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
+			return statusFor(sessionID, 11, 220), nil
+		},
+	}
 	verifier := Verifier{Provider: provider, Clock: clock.NewFake(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))}
 
 	got, err := verifier.Verify(context.Background(), baselineFor(sessionA), goodResult(sessionA))
@@ -628,14 +631,17 @@ func TestVerifierStopsWhenTheContextIsCancelledWhileWaiting(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	provider := &providerStub{statusFn: func(call int, sessionID string) (claude.SessionStatus, error) {
-		if call == 2 {
-			cancel()
-		}
-		// The transcript has not grown, so the loop keeps polling until the
-		// context is cancelled instead of returning early.
-		return statusFor(sessionID, 5, 100), nil
-	}}
+	provider := &providerStub{
+		jobFn: func(int, string) (claude.AgentEntry, error) { return finishedJob(jobID, sessionA), nil },
+		statusFn: func(call int, sessionID string) (claude.SessionStatus, error) {
+			if call == 2 {
+				cancel()
+			}
+			// The transcript has not grown, so the loop keeps polling until the
+			// context is cancelled instead of returning early.
+			return statusFor(sessionID, 5, 100), nil
+		},
+	}
 	// A real clock with a millisecond interval is used here on purpose: the
 	// point of the test is that the wait itself is interruptible, and a frozen
 	// fake clock would simply block in the select instead of exercising it.

@@ -44,7 +44,7 @@ func (f *fakeCLI) Run(_ context.Context, name string, args []string, _ claude.Ru
 		return claude.Output{Stdout: []byte(f.version)}, nil
 	case strings.HasPrefix(argv, "agents"):
 		return claude.Output{Stdout: []byte(f.agents), ExitCode: f.exit}, nil
-	case strings.HasPrefix(argv, "-p --resume"):
+	case strings.HasPrefix(argv, "--resume"):
 		return claude.Output{Stdout: []byte(f.resume), ExitCode: f.resumeNo}, nil
 	}
 	f.t.Fatalf("unexpected invocation: %q", argv)
@@ -133,7 +133,7 @@ func TestResumeCommandIsExactlyTheVerifiedOne(t *testing.T) {
 		t:       t,
 		version: "2.1.223 (Claude Code)",
 		agents:  `[]`,
-		resume:  `{"type":"result","subtype":"success","is_error":false,"session_id":"` + sessionA + `","result":"ok","num_turns":3}`,
+		resume:  "backgrounded \u00b7 3f1e2c7a\n  claude stop 3f1e2c7a      stop this session\n",
 	}
 	provider := newProvider(t, exec, home)
 
@@ -152,20 +152,20 @@ func TestResumeCommandIsExactlyTheVerifiedOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResumeSession() error = %v", err)
 	}
-	if !result.Verified {
-		t.Error("Verified = false")
+	if result.JobID != "3f1e2c7a" {
+		t.Errorf("JobID = %q, want the job the dispatch printed", result.JobID)
 	}
 
 	var resumeArgv []string
 	for _, argv := range exec.seen {
-		if len(argv) > 1 && argv[1] == "-p" {
+		if len(argv) > 1 && argv[1] == "--resume" {
 			resumeArgv = argv
 		}
 	}
 	if resumeArgv == nil {
 		t.Fatal("no resume command was executed")
 	}
-	want := []string{"claude", "-p", "--resume", sessionA, "--output-format", "json", message}
+	want := []string{"claude", "--resume", sessionA, "--bg", message}
 	if len(resumeArgv) != len(want) {
 		t.Fatalf("argv = %q, want exactly %q", resumeArgv, want)
 	}
@@ -176,9 +176,12 @@ func TestResumeCommandIsExactlyTheVerifiedOne(t *testing.T) {
 	}
 }
 
-// TestResumeRefusesToClaimSuccessWhenTheSessionChanges checks that a resume which
-// silently starts a new conversation is never reported as a recovery.
-func TestResumeRefusesToClaimSuccessWhenTheSessionChanges(t *testing.T) {
+// TestResumeDispatchThatReportsNoJobIDIsNeverCountedAsSuccess checks that a
+// background dispatch which exits 0 without naming the job it created is a
+// failure: with `--output-format json` gone, the acknowledgement line is the only
+// thing the dispatch can report, so a missing job id means there is no job to
+// verify and nothing to claim.
+func TestResumeDispatchThatReportsNoJobIDIsNeverCountedAsSuccess(t *testing.T) {
 	t.Parallel()
 
 	home := t.TempDir()
@@ -194,35 +197,37 @@ func TestResumeRefusesToClaimSuccessWhenTheSessionChanges(t *testing.T) {
 	cases := []struct {
 		name    string
 		resume  string
+		exit    int
 		wantErr error
 	}{
 		{
-			name:    "different session id",
-			resume:  `{"type":"result","is_error":false,"session_id":"` + sessionB + `","result":"ok"}`,
-			wantErr: claude.ErrSessionNotPreserved,
+			name:    "no acknowledgement line",
+			resume:  "starting a background service\n",
+			wantErr: claude.ErrNoBackgroundJob,
 		},
 		{
-			name:    "no session id",
-			resume:  `{"type":"result","is_error":false,"result":"ok"}`,
-			wantErr: claude.ErrNoSessionIDReported,
+			name:    "acknowledgement without a job id",
+			resume:  "backgrounded \u00b7\n",
+			wantErr: claude.ErrNoBackgroundJob,
 		},
 		{
-			name:    "cli reported an error",
-			resume:  `{"type":"result","is_error":true,"session_id":"` + sessionA + `","result":"usage limit still active"}`,
-			wantErr: claude.ErrResumeFailed,
+			name:    "dispatch refused",
+			resume:  "",
+			exit:    1,
+			wantErr: claude.ErrCLIUnavailable,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			exec := &fakeCLI{t: t, version: "2.1.223 (Claude Code)", agents: "[]", resume: tc.resume}
+			exec := &fakeCLI{t: t, version: "2.1.223 (Claude Code)", agents: "[]", resume: tc.resume, resumeNo: tc.exit}
 			provider := newProvider(t, exec, home)
 			result, err := provider.ResumeSession(context.Background(), sessionA, "continue")
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("error = %v, want %v", err, tc.wantErr)
 			}
-			if result.Verified {
-				t.Error("Verified = true on a failed resume")
+			if result.JobID != "" {
+				t.Errorf("JobID = %q, want empty on a failed dispatch", result.JobID)
 			}
 		})
 	}

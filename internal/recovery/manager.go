@@ -382,14 +382,15 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 	// look unchanged. Only the persisted snapshot can prove movement.
 	if status.Running && grew(baseline, status) {
 		verification := Verification{
-			SessionIDPreserved: true,
-			TranscriptGrew:     true,
-			Proven:             true,
-			LinesBefore:        baseline.TranscriptLines,
-			LinesAfter:         status.Transcript.Lines,
-			SizeBefore:         baseline.TranscriptSize,
-			SizeAfter:          status.Transcript.Size,
-			Running:            true,
+			ContinuationConfirmed: true,
+			ContinuationSessionID: baseline.SessionID,
+			TranscriptGrew:        true,
+			Proven:                true,
+			LinesBefore:           baseline.TranscriptLines,
+			LinesAfter:            status.Transcript.Lines,
+			SizeBefore:            baseline.TranscriptSize,
+			SizeAfter:             status.Transcript.Size,
+			Running:               true,
 			Notes: []string{
 				"the session had already continued on its own, so no resume was needed",
 			},
@@ -444,9 +445,9 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 		return m.fail(ctx, state, outcome, baseline, attempt, Verification{},
 			fmt.Errorf("resume session %s: %w", sessionID, resumeErr))
 	}
-	if result.IsError {
+	if result.JobID == "" {
 		return m.fail(ctx, state, outcome, baseline, attempt, Verification{},
-			fmt.Errorf("resume session %s: %w: %s", sessionID, claude.ErrResumeFailed, firstLine(result.Result)))
+			fmt.Errorf("resume session %s: %w", sessionID, claude.ErrNoBackgroundJob))
 	}
 
 	verification, verifyErr := m.verifier.Verify(ctx, baseline, result)
@@ -462,8 +463,8 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 	finished, err := m.store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
 		State:             StateResumed,
 		Success:           true,
-		Output:            truncate(result.Result),
-		SessionIDVerified: boolPtr(true),
+		Output:            truncate(summaryOf(result, verification)),
+		SessionIDVerified: boolPtr(verification.ContinuationConfirmed),
 		TranscriptGrew:    boolPtr(true),
 		FinishedAt:        m.now(),
 	})
@@ -528,7 +529,7 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 			State:             target,
 			Success:           false,
 			Error:             truncate(cause.Error()),
-			SessionIDVerified: boolPtr(verification.SessionIDPreserved),
+			SessionIDVerified: boolPtr(verification.ContinuationConfirmed),
 			TranscriptGrew:    boolPtr(verification.TranscriptGrew),
 			FinishedAt:        m.now(),
 		}); err != nil {
@@ -867,13 +868,15 @@ func grew(baseline Baseline, status claude.SessionStatus) bool {
 // commandPreview renders the resume command recorded with an attempt.
 //
 // The continuation message is summarised rather than stored in full: the
-// command column is an audit aid, not a copy of the conversation.
+// command column is an audit aid, not a copy of the conversation. It renders the
+// dispatch ccresu actually issues, `claude --resume <id> --bg <message>`, so the
+// attempt row never claims a command that was not executed.
 func commandPreview(sessionID, message string) string {
 	summary := "no message"
 	if trimmed := strings.TrimSpace(message); trimmed != "" {
 		summary = fmt.Sprintf("%d-byte continuation message", len(trimmed))
 	}
-	return fmt.Sprintf("claude -p --resume %s --output-format json <%s>", sessionID, summary)
+	return fmt.Sprintf("claude --resume %s --bg <%s>", sessionID, summary)
 }
 
 // truncate caps a stored string so a huge CLI dump cannot bloat the database.

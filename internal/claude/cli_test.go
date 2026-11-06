@@ -275,76 +275,103 @@ func TestResumeArgsExact(t *testing.T) {
 	t.Parallel()
 
 	got := strings.Join(ResumeArgs(testSessionID, "continue"), " ")
-	want := "-p --resume " + testSessionID + " --output-format json continue"
+	want := "--resume " + testSessionID + " --bg continue"
 	if got != want {
 		t.Fatalf("ResumeArgs() = %q, want %q", got, want)
 	}
 }
 
-// The resume vector must stay headless. Claude Code refuses `--bg` together with
-// the `-p` in it, and the form that would satisfy `--bg` drops
-// `--output-format json` -- no result, no cost, and a *new* session id instead of
-// the resumed one. A guard here keeps that decision from being mistaken for an
-// omission.
-func TestResumeArgsNeverPassBackground(t *testing.T) {
+// A resume is a background dispatch: print mode cannot be combined with --bg, so
+// the vector must carry neither -p nor --output-format, and the message must stay
+// the last positional argument.
+func TestResumeArgsIsABackgroundDispatch(t *testing.T) {
 	t.Parallel()
 
 	args := ResumeArgs(testSessionID, "continue")
-	if args[0] != "-p" {
-		t.Fatalf("ResumeArgs()[0] = %q, want -p", args[0])
-	}
 	for _, arg := range args {
 		switch arg {
-		case "--bg", "--background", "-bg":
-			t.Fatalf("ResumeArgs() = %v; a resume never asks for a background agent", args)
+		case "-p", "--print", "--output-format":
+			t.Fatalf("ResumeArgs() = %v; --bg and --print conflict", args)
 		}
+	}
+	if args[len(args)-1] != "continue" {
+		t.Fatalf("ResumeArgs() = %v, want the message last", args)
 	}
 }
 
-func TestCLIResumeSuccess(t *testing.T) {
+func TestParseBackgroundDispatch(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		stdout string
+		want   string
+		ok     bool
+	}{
+		{"verified line", "backgrounded \u00b7 3f1e2c7a\n  claude agents   list sessions\n", "3f1e2c7a", true},
+		{"colon separator", "backgrounded: 3f1e2c7a", "3f1e2c7a", true},
+		{"bare", "backgrounded 3f1e2c7a", "3f1e2c7a", true},
+		{"ansi coloured", "\x1b[32mbackgrounded\x1b[0m \x1b[1m\u00b7\x1b[0m 3f1e2c7a", "3f1e2c7a", true},
+		{"upper case job", "backgrounded \u00b7 3F1E2C7A", "3f1e2c7a", true},
+		{"no job id", "backgrounded \u00b7\n", "", false},
+		{"not a dispatch", "Starting background service", "", false},
+		{"empty", "", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := ParseBackgroundDispatch([]byte(tc.stdout))
+			if ok != tc.ok || got != tc.want {
+				t.Fatalf("ParseBackgroundDispatch(%q) = (%q, %v), want (%q, %v)", tc.stdout, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
+func TestCLIResumeDispatch(t *testing.T) {
 	t.Parallel()
 
 	cli, execer := newTestCLI(t,
 		Output{Stdout: []byte(testVersionOutput)},
-		Output{Stdout: []byte(testResumeJSON)},
+		Output{Stdout: []byte(testDispatchOutput)},
 	)
 	result, err := cli.Resume(context.Background(), testSessionID, "keep going")
 	if err != nil {
 		t.Fatalf("Resume() error = %v", err)
 	}
-	if !result.Verified {
-		t.Error("Verified = false, want true")
+	if result.JobID != testBackgroundJobID {
+		t.Errorf("JobID = %q, want %q", result.JobID, testBackgroundJobID)
 	}
-	if result.SessionID != testSessionID {
-		t.Errorf("SessionID = %q, want %q", result.SessionID, testSessionID)
+	if result.RequestedSessionID != testSessionID {
+		t.Errorf("RequestedSessionID = %q, want %q", result.RequestedSessionID, testSessionID)
 	}
-	if result.Result != "continued the goal" || result.Subtype != "success" || result.NumTurns != 2 {
-		t.Errorf("unexpected result: %+v", result)
-	}
-	if result.DurationMS != 1234 || result.TotalCostUSD == 0 {
-		t.Errorf("metrics not mapped: %+v", result)
-	}
-	if result.Model != "claude-sonnet-4-5" {
-		t.Errorf("Model = %q, want claude-sonnet-4-5", result.Model)
+	if result.ContinuationSessionID != "" {
+		t.Errorf("ContinuationSessionID = %q, want empty: only the job id is known after a dispatch",
+			result.ContinuationSessionID)
 	}
 
 	calls := execer.Calls()
 	last := calls[len(calls)-1]
-	if last.Name != "claude" {
-		t.Errorf("command name = %q, want claude", last.Name)
-	}
-	want := []string{"-p", "--resume", testSessionID, "--output-format", "json", "keep going"}
+	want := []string{"--resume", testSessionID, "--bg", "keep going"}
 	if strings.Join(last.Args, "\x00") != strings.Join(want, "\x00") {
 		t.Errorf("argv = %v, want %v", last.Args, want)
 	}
-	if result.Command[0] != "claude" || strings.Join(result.Command[1:], " ") != strings.Join(want, " ") {
-		t.Errorf("recorded command = %v", result.Command)
+	if got, wantCmd := strings.Join(result.Command, " "), "claude --resume "+testSessionID+" --bg keep going"; got != wantCmd {
+		t.Errorf("recorded command = %q, want %q", got, wantCmd)
 	}
-	// The message must be the final argv element and a single one, so no shell
-	// ever sees it and no flag parser can mistake it for a flag.
-	message := last.Args[len(last.Args)-1]
-	if message != "keep going" {
-		t.Errorf("message argv = %q, want %q", message, "keep going")
+}
+
+// A dispatch that exits 0 without a job id leaves ccresu with nothing to follow,
+// so it is a failure with its own sentinel rather than a silent success.
+func TestCLIResumeRequiresAJobID(t *testing.T) {
+	t.Parallel()
+
+	cli, _ := newTestCLI(t,
+		Output{Stdout: []byte(testVersionOutput)},
+		Output{Stdout: []byte("Starting background service\u2026\n")},
+	)
+	_, err := cli.Resume(context.Background(), testSessionID, "keep going")
+	if !errors.Is(err, ErrNoBackgroundJob) {
+		t.Fatalf("error = %v, want ErrNoBackgroundJob", err)
 	}
 }
 
@@ -385,24 +412,19 @@ func TestCLIResumeFailures(t *testing.T) {
 		wantErr error
 	}{
 		{
-			name:    "is_error result",
+			name:    "json output without the acknowledgement",
 			output:  Output{Stdout: []byte(`{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"` + testSessionID + `","result":"limit still active"}`)},
-			wantErr: ErrResumeFailed,
+			wantErr: ErrNoBackgroundJob,
 		},
 		{
-			name:    "different session id",
-			output:  Output{Stdout: []byte(`{"type":"result","is_error":false,"session_id":"` + testOtherSessionID + `","result":"ok"}`)},
-			wantErr: ErrSessionNotPreserved,
+			name:    "acknowledgement without a job id",
+			output:  Output{Stdout: []byte("backgrounded \u00b7\n")},
+			wantErr: ErrNoBackgroundJob,
 		},
 		{
-			name:    "no session id",
-			output:  Output{Stdout: []byte(`{"type":"result","is_error":false,"result":"ok"}`)},
-			wantErr: ErrNoSessionIDReported,
-		},
-		{
-			name:    "not json",
+			name:    "plain text instead of an acknowledgement",
 			output:  Output{Stdout: []byte("Error: still limited")},
-			wantErr: ErrMalformedOutput,
+			wantErr: ErrNoBackgroundJob,
 		},
 		{
 			name:    "non zero exit with json noise",
@@ -492,94 +514,6 @@ func (d *deadlineRecorder) Run(ctx context.Context, _ string, _ []string, _ RunO
 		d.timeout = time.Until(deadline)
 	}
 	return d.output, nil
-}
-
-func TestParseResumeJSON(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name      string
-		input     string
-		wantErr   bool
-		wantID    string
-		wantError bool
-	}{
-		{name: "verified object", input: testResumeJSON, wantID: testSessionID},
-		{
-			name:   "stream json takes the result object",
-			input:  `{"type":"system","subtype":"init","session_id":"` + testSessionID + `"}` + "\n" + `{"type":"assistant","message":{"content":"hi"}}` + "\n" + testResumeJSON,
-			wantID: testSessionID,
-		},
-		{
-			name:   "array takes the result object",
-			input:  `[{"type":"assistant","message":{"content":"hi"}},` + testResumeJSON + `]`,
-			wantID: testSessionID,
-		},
-		{
-			name:      "error result",
-			input:     `{"type":"result","is_error":true,"result":"limit still active"}`,
-			wantError: true,
-		},
-		{
-			name:   "camelCase session id",
-			input:  `{"type":"result","sessionId":"` + testSessionID + `","result":"ok"}`,
-			wantID: testSessionID,
-		},
-		{
-			name:   "string booleans and numbers",
-			input:  `{"type":"result","is_error":"false","session_id":"` + testSessionID + `","num_turns":"3","duration_ms":"99","total_cost_usd":"0.5"}`,
-			wantID: testSessionID,
-		},
-		{name: "empty", input: "  ", wantErr: true},
-		{name: "not json", input: "plain text", wantErr: true},
-		{name: "useless object", input: `{"foo":"bar"}`, wantErr: true},
-		{name: "broken array", input: `[`, wantErr: true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			out, err := ParseResumeJSON([]byte(tc.input))
-			if tc.wantErr {
-				if !errors.Is(err, ErrMalformedOutput) {
-					t.Fatalf("error = %v, want ErrMalformedOutput", err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if tc.wantID != "" && out.SessionID != tc.wantID {
-				t.Errorf("SessionID = %q, want %q", out.SessionID, tc.wantID)
-			}
-			if out.IsError != tc.wantError {
-				t.Errorf("IsError = %v, want %v", out.IsError, tc.wantError)
-			}
-			if tc.wantError && out.Subtype == "" {
-				t.Error("an error result should get a subtype")
-			}
-		})
-	}
-}
-
-func TestParseResumeJSONMetrics(t *testing.T) {
-	t.Parallel()
-
-	out, err := ParseResumeJSON([]byte(testResumeJSON))
-	if err != nil {
-		t.Fatalf("ParseResumeJSON() error = %v", err)
-	}
-	if out.NumTurns != 2 || out.DurationMS != 1234 {
-		t.Errorf("metrics = %+v", out)
-	}
-	if out.TotalCostUSD < 0.012 || out.TotalCostUSD > 0.013 {
-		t.Errorf("cost = %v", out.TotalCostUSD)
-	}
-	if out.Type != "result" || out.Model != "claude-sonnet-4-5" {
-		t.Errorf("type/model = %q/%q", out.Type, out.Model)
-	}
-	if len(out.Raw) == 0 {
-		t.Error("Raw was not preserved")
-	}
 }
 
 func TestTail(t *testing.T) {

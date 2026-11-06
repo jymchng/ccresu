@@ -100,7 +100,7 @@ func (v Version) AtLeast(other Version) bool { return v.Compare(other) >= 0 }
 
 // MinimumVersion is the oldest Claude Code release ccresu is verified against.
 //
-// Both verified interfaces (`agents --json` and `-p --output-format json`) were
+// Both verified interfaces (`agents --json` and `--resume … --bg`) were
 // introduced before 2.0, so refusing anything older keeps ccresu from probing
 // flags that may not exist.
 var MinimumVersion = Version{Major: 2, Minor: 0, Patch: 0, Parsed: true}

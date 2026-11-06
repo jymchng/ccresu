@@ -3,11 +3,10 @@ package claude
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -51,7 +50,7 @@ type CLIOptions struct {
 //
 //	claude --version
 //	claude agents --json [--all] [--cwd <path>]
-//	claude -p --resume <session-id> --output-format json <message>
+//	claude --resume <session-id> --bg <message>
 //	claude stop <job-id>
 //	(the transcript and session-env files are read, not executed)
 //
@@ -219,28 +218,28 @@ func (c *CLI) Agents(ctx context.Context, query AgentsQuery) ([]AgentEntry, erro
 	return entries, nil
 }
 
-// Resume runs the verified resume command:
+// Resume dispatches the resume command in the background:
 //
-//	claude -p --resume <session-id> --output-format json <message>
+//	claude --resume <session-id> --bg <message>
 //
-// One situation needs a second command first. The CLI refuses to resume a
-// session that is still attached to a background agent ("That session is
-// running in the background"). Because `claude stop <job-id>` keeps both the
-// conversation and the session id, ccresu answers that refusal by stopping the
-// background agent and repeating the identical resume argument vector once.
-// The stop takes the eight-hex job name the refusal itself prints, not the
-// session UUID; see stop.go.
-// Only that exact refusal is handled this way: every other failure, a stop that
-// itself fails, and a resume that still refuses after a successful stop are
-// returned unchanged, so the existing classification (permanent, no attempt
-// spent) is untouched.
+// The CLI acknowledges the dispatch on stdout with `backgrounded · <job-id>` and
+// exits 0. `--output-format json` is deliberately absent: JSON output exists only
+// in print mode, and print mode refuses `--bg` outright ("--bg and --print
+// conflict"), so the job id is the only thing a dispatch can report. The
+// continuation session id, the transcript and the outcome are visible only
+// afterwards -- through `claude agents --json` and the transcript file -- which
+// is what the verifier reads. Proving continuation is not this call's job.
 //
-// The session id is validated first so it can never be mistaken for a flag, and
-// the returned session id must equal the requested one; otherwise the call
-// fails with ErrSessionNotPreserved instead of reporting a false success.
+// One situation still needs a second command first. The CLI refuses to resume a
+// session that is still attached to a background agent. Because
+// `claude stop <job-id>` keeps both the conversation and the session id, ccresu
+// answers that refusal by stopping the background agent and repeating the
+// identical dispatch once. The stop takes the eight-hex job name the refusal
+// itself prints, not the session UUID; see stop.go. Only that exact refusal is
+// handled this way: every other failure, a stop that itself fails, and a resume
+// that still refuses after a successful stop are returned unchanged.
 //
-// A resume is never dispatched as a background agent (`--bg`), because Claude
-// Code rejects that flag alongside the `-p` this call needs; see ResumeArgs.
+// The session id is validated first so it can never be mistaken for a flag.
 func (c *CLI) Resume(ctx context.Context, sessionID, message string) (ResumeResult, error) {
 	if err := ValidateSessionID(sessionID); err != nil {
 		return ResumeResult{}, err
@@ -261,38 +260,32 @@ func (c *CLI) Resume(ctx context.Context, sessionID, message string) (ResumeResu
 	}
 
 	args := ResumeArgs(sessionID, message)
-	result, resumeErr := c.resumeOnce(ctx, sessionID, args)
-	if resumeErr == nil || !IsSessionRunningInBackground(resumeErr) {
-		return result, resumeErr
+	result, dispatchErr := c.resumeOnce(ctx, sessionID, args)
+	if dispatchErr == nil || !IsSessionRunningInBackground(dispatchErr) {
+		return result, dispatchErr
 	}
 
 	// The refusal says the session is busy elsewhere, not that the conversation
 	// is gone. Stopping it is bookkeeping: the transcript and the session id
-	// survive, so the resume that follows is the same command with the same
+	// survive, so the dispatch that follows is the same command with the same
 	// arguments. The stop is recorded in the log only; the attempt row keeps
-	// showing the one `claude -p --resume …` command.
-	//
-	// The stop needs the CLI's eight-hex job name, not the session UUID: the
-	// refusal names it ("claude stop 837eaaea"), so it is read from there. When
-	// the message names no job, no stop is attempted and the refusal is
-	// reported unchanged -- guessing a job name could stop another session.
-	jobID := BackgroundJobID(resumeErr)
+	// showing the one `claude --resume ...` command.
+	jobID := BackgroundJobID(dispatchErr)
 	if jobID == "" {
 		c.log.Warn("the refusal named no background job id; cannot stop the session holding it",
 			"session", sessionID)
-		return result, resumeErr
+		return result, dispatchErr
 	}
-	c.log.Warn("claude refused the resume because the session is attached to a background agent; stopping it and resuming again",
+	c.log.Warn("claude refused the resume because the session is attached to a background agent; stopping it and dispatching again",
 		"session", sessionID, "job", jobID)
 	if stopErr := c.Stop(ctx, jobID); stopErr != nil {
 		// Without the stop the session is still in the way, so the original
-		// refusal is the honest result. Returning it untouched keeps the
-		// existing permanent classification intact.
+		// refusal is the honest result.
 		c.log.Warn("claude stop did not clear the background session; reporting the original resume failure",
 			"session", sessionID, "job", jobID, "error", stopErr)
-		return result, resumeErr
+		return result, dispatchErr
 	}
-	c.log.Info("stopped the background session; repeating the identical resume",
+	c.log.Info("stopped the background session; repeating the identical dispatch",
 		"session", sessionID, "job", jobID)
 
 	retried, retryErr := c.resumeOnce(ctx, sessionID, args)
@@ -303,7 +296,7 @@ func (c *CLI) Resume(ctx context.Context, sessionID, message string) (ResumeResu
 	return retried, retryErr
 }
 
-// resumeOnce runs one resume invocation and interprets its output.
+// resumeOnce runs one background dispatch and reads the job id it reports.
 //
 // It exists so the background-session recovery repeats exactly the same command:
 // the argument vector is built once by the caller and handed in, never rebuilt
@@ -314,63 +307,57 @@ func (c *CLI) resumeOnce(ctx context.Context, sessionID string, args []string) (
 		RequestedSessionID: sessionID,
 		Command:            append([]string{c.bin}, args...),
 	}
-
-	parsed, parseErr := ParseResumeJSON(out.Stdout)
-	if parsed != nil {
-		result.SessionID = parsed.SessionID
-		result.Result = parsed.Result
-		result.Subtype = parsed.Subtype
-		result.IsError = parsed.IsError
-		result.NumTurns = parsed.NumTurns
-		result.DurationMS = parsed.DurationMS
-		result.TotalCostUSD = parsed.TotalCostUSD
-		result.Model = parsed.Model
-	}
-
 	if runErr != nil || out.ExitCode != 0 {
 		if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
 			return result, fmt.Errorf("%w: %w", ErrCLIUnavailable, runErr)
 		}
-		return result, describeRunError("claude -p --resume", out, runErr)
+		return result, describeRunError("claude --resume --bg", out, runErr)
 	}
-	if parseErr != nil {
-		return result, parseErr
+	jobID, ok := ParseBackgroundDispatch(out.Stdout)
+	if !ok {
+		return result, fmt.Errorf("%w: the dispatch printed no background job id: %q",
+			ErrNoBackgroundJob, tail(string(out.Stdout), 200))
 	}
-	if parsed.IsError {
-		return result, fmt.Errorf("%w: %s", ErrResumeFailed, firstNonEmpty(parsed.Result, parsed.Subtype, "unknown error"))
-	}
-	if result.SessionID == "" {
-		return result, ErrNoSessionIDReported
-	}
-	if result.SessionID != sessionID {
-		return result, fmt.Errorf("%w: got %s, want %s", ErrSessionNotPreserved, result.SessionID, sessionID)
-	}
-	result.Verified = true
+	result.JobID = jobID
 	return result, nil
 }
 
-// ResumeArgs returns the verified resume argument vector.
+// ResumeArgs returns the resume argument vector.
 //
-// Exported so tests and the recovery audit trail can assert the exact command
-// without reimplementing it.
-//
-// There is no `--bg` here, and it is not an oversight. Claude Code refuses to
-// combine a background agent with the print mode this vector has to carry:
-//
-//	$ claude -p --resume <session-id> --output-format json --bg "say OK"
-//	<exit 1>
-//	--bg and --print conflict: --print never starts the interactive session that
-//	`claude agents` attaches to, so the job would be unattachable. The prompt is
-//	the positional — drop --print: `claude --bg '<task>'`.
-//
-// Dropping `-p` to accommodate it would cost the whole contract: no
-// `--output-format json`, so no result, no is_error and no cost; the dispatch
-// reports a *new* session id rather than the one that was resumed, so the proof
-// that the original conversation continued is gone; and the turn finishes after
-// the process has already returned 0. A resume is a synchronous, verified turn
-// or it is not a resume. See docs/recovery.md.
+// It carries no `-p` and no `--output-format`, because print mode refuses `--bg`
+// ("--bg and --print conflict: --print never starts the interactive session that
+// `claude agents` attaches to"). A resume is a background dispatch by design:
+// what the dispatch cannot report -- the JSON result, the turn count, the cost --
+// is reported as unavailable rather than guessed at.
 func ResumeArgs(sessionID, message string) []string {
-	return []string{"-p", "--resume", sessionID, "--output-format", "json", message}
+	return []string{"--resume", sessionID, "--bg", message}
+}
+
+// backgroundedPattern matches the CLI's dispatch acknowledgement:
+//
+//	backgrounded · 93874eb3
+//
+// The job id is the eight lower-case hex name `claude stop` and `claude attach`
+// accept. The separator is tolerated as a middle dot, a colon or whitespace, so
+// a restyled line still parses.
+var backgroundedPattern = regexp.MustCompile(`(?i)backgrounded\s*(?:[\x{00b7}:\x{2022}-]\s*)?([0-9a-f]{8})\b`)
+
+// ParseBackgroundDispatch extracts the job id from a dispatch's stdout.
+//
+// It returns ("", false) rather than an error: a dispatch that printed no job id
+// is a failure the caller reports with its own sentinel, and the caller has the
+// output to quote.
+func ParseBackgroundDispatch(stdout []byte) (string, bool) {
+	text := ansiEscape.ReplaceAll(stdout, []byte(" "))
+	match := backgroundedPattern.FindSubmatch(text)
+	if match == nil {
+		return "", false
+	}
+	id := strings.ToLower(string(match[1]))
+	if !ValidBackgroundJobID(id) {
+		return "", false
+	}
+	return id, true
 }
 
 // run executes one command with the per-command timeout applied when the caller
@@ -433,232 +420,4 @@ func tail(s string, n int) string {
 		s = "…" + s[cut:]
 	}
 	return strings.Join(strings.Fields(s), " ")
-}
-
-// ResumeOutput is the verified `-p --output-format json` result object.
-//
-// Verified shape (Claude Code 2.1.223):
-//
-//	{"type":"result","subtype":"success","is_error":false,"duration_ms":1234,
-//	 "num_turns":2,"result":"…","session_id":"<uuid>","total_cost_usd":0.01,
-//	 "usage":{…},"modelUsage":{"claude-sonnet-4":{"…":true}}}
-//
-// Every field is optional in the mapping: a missing session_id is reported as a
-// failure rather than assumed to match.
-type ResumeOutput struct {
-	Type         string
-	Subtype      string
-	IsError      bool
-	Result       string
-	SessionID    string
-	NumTurns     int
-	DurationMS   int
-	TotalCostUSD float64
-	Model        string
-	Raw          json.RawMessage
-}
-
-// resumeWire is the permissive wire form of the resume result.
-type resumeWire struct {
-	Type         flexString `json:"type"`
-	Subtype      flexString `json:"subtype"`
-	IsError      flexBool   `json:"is_error"`
-	Result       flexString `json:"result"`
-	SessionID    flexString `json:"session_id"`
-	SessionIDAlt flexString `json:"sessionId"`
-	NumTurns     flexInt    `json:"num_turns"`
-	DurationMS   flexInt    `json:"duration_ms"`
-	Cost         flexFloat  `json:"total_cost_usd"`
-	Model        flexString `json:"model"`
-	ModelUsage   flexModel  `json:"modelUsage"`
-	Error        flexString `json:"error"`
-}
-
-// flexBool accepts true/false, "true"/"false" and 0/1.
-type flexBool struct {
-	value bool
-	set   bool
-}
-
-// UnmarshalJSON implements json.Unmarshaler.
-func (f *flexBool) UnmarshalJSON(data []byte) error {
-	trimmed := bytes.TrimSpace(data)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return nil
-	}
-	switch trimmed[0] {
-	case '"':
-		var s string
-		if err := json.Unmarshal(trimmed, &s); err != nil {
-			return nil
-		}
-		switch strings.ToLower(strings.TrimSpace(s)) {
-		case "true", "1", "yes":
-			f.value, f.set = true, true
-		case "false", "0", "no":
-			f.value, f.set = false, true
-		}
-	case 't':
-		f.value, f.set = true, true
-	case 'f':
-		f.value, f.set = false, true
-	default:
-		var num json.Number
-		if err := json.Unmarshal(trimmed, &num); err == nil {
-			if n, convErr := num.Int64(); convErr == nil {
-				f.value, f.set = n != 0, true
-			}
-		}
-	}
-	return nil
-}
-
-// Bool returns the mapped value.
-func (f flexBool) Bool() bool { return f.value }
-
-// flexFloat accepts a JSON number or a numeric string.
-type flexFloat struct {
-	value float64
-	set   bool
-}
-
-// UnmarshalJSON implements json.Unmarshaler.
-func (f *flexFloat) UnmarshalJSON(data []byte) error {
-	trimmed := bytes.TrimSpace(data)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return nil
-	}
-	var num json.Number
-	if err := json.Unmarshal(trimmed, &num); err == nil {
-		if v, convErr := num.Float64(); convErr == nil {
-			f.value, f.set = v, true
-		}
-		return nil
-	}
-	var s string
-	if err := json.Unmarshal(trimmed, &s); err != nil {
-		return nil
-	}
-	if v, convErr := strconv.ParseFloat(strings.TrimSpace(s), 64); convErr == nil {
-		f.value, f.set = v, true
-	}
-	return nil
-}
-
-// Float returns the mapped value.
-func (f flexFloat) Float() float64 { return f.value }
-
-// flexModel extracts the first model name from the modelUsage map, whose values
-// have changed shape between releases.
-type flexModel struct {
-	value string
-}
-
-// UnmarshalJSON implements json.Unmarshaler.
-func (f *flexModel) UnmarshalJSON(data []byte) error {
-	var usage map[string]json.RawMessage
-	if err := json.Unmarshal(data, &usage); err != nil {
-		return nil
-	}
-	names := make([]string, 0, len(usage))
-	for name := range usage {
-		names = append(names, name)
-	}
-	if len(names) == 0 {
-		return nil
-	}
-	// Deterministic choice: shortest name, then lexical, avoids map ordering.
-	best := names[0]
-	for _, name := range names[1:] {
-		if len(name) < len(best) || (len(name) == len(best) && name < best) {
-			best = name
-		}
-	}
-	f.value = best
-	return nil
-}
-
-// String returns the mapped model name.
-func (f flexModel) String() string { return f.value }
-
-// ParseResumeJSON maps `-p --output-format json` output.
-//
-// The verified output is a single JSON object; a newline-delimited stream or a
-// JSON array (as produced by --output-format stream-json) is also accepted by
-// taking the last result-shaped object, because the trailing object is the one
-// that summarises the turn.
-func ParseResumeJSON(data []byte) (*ResumeOutput, error) {
-	trimmed := bytes.TrimSpace(data)
-	if len(trimmed) == 0 {
-		return nil, fmt.Errorf("%w: empty resume output", ErrMalformedOutput)
-	}
-
-	candidates := [][]byte{}
-	if trimmed[0] == '[' {
-		var raws []json.RawMessage
-		if err := json.Unmarshal(trimmed, &raws); err != nil {
-			return nil, fmt.Errorf("%w: resume array: %v", ErrMalformedOutput, err)
-		}
-		for _, raw := range raws {
-			candidates = append(candidates, raw)
-		}
-	} else if trimmed[0] == '{' {
-		if json.Valid(trimmed) {
-			candidates = append(candidates, trimmed)
-		} else {
-			// Fall back to newline-delimited objects.
-			for _, line := range bytes.Split(trimmed, []byte("\n")) {
-				line = bytes.TrimSpace(line)
-				if len(line) > 0 && line[0] == '{' && json.Valid(line) {
-					candidates = append(candidates, line)
-				}
-			}
-		}
-	} else {
-		return nil, fmt.Errorf("%w: resume output is not JSON", ErrMalformedOutput)
-	}
-	if len(candidates) == 0 {
-		return nil, fmt.Errorf("%w: no JSON object in resume output", ErrMalformedOutput)
-	}
-
-	// The result object is the last one in a stream, so later candidates win.
-	var chosen *resumeWire
-	var chosenRaw json.RawMessage
-	for _, raw := range candidates {
-		var wire resumeWire
-		if err := json.Unmarshal(raw, &wire); err != nil {
-			continue
-		}
-		kind := strings.ToLower(wire.Type.String())
-		if kind != "" && kind != "result" && wire.Result.String() == "" {
-			// stream-json also emits assistant/user/system objects.
-			continue
-		}
-		if kind == "" && wire.SessionID.String() == "" && wire.Result.String() == "" && !wire.IsError.set {
-			continue
-		}
-		copied := wire
-		chosen = &copied
-		chosenRaw = append(json.RawMessage(nil), raw...)
-	}
-	if chosen == nil {
-		return nil, fmt.Errorf("%w: resume output had no result object", ErrMalformedOutput)
-	}
-
-	out := &ResumeOutput{
-		Type:         chosen.Type.String(),
-		Subtype:      chosen.Subtype.String(),
-		IsError:      chosen.IsError.Bool(),
-		Result:       firstNonEmpty(chosen.Result.String(), chosen.Error.String()),
-		SessionID:    firstNonEmpty(chosen.SessionID.String(), chosen.SessionIDAlt.String()),
-		NumTurns:     chosen.NumTurns.Int(),
-		DurationMS:   chosen.DurationMS.Int(),
-		TotalCostUSD: chosen.Cost.Float(),
-		Model:        firstNonEmpty(chosen.Model.String(), chosen.ModelUsage.String()),
-		Raw:          chosenRaw,
-	}
-	if out.Subtype == "" && out.IsError {
-		out.Subtype = "error"
-	}
-	return out, nil
 }

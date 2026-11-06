@@ -15,6 +15,8 @@ const (
 	sessionA = "11111111-1111-4111-8111-111111111111"
 	sessionB = "22222222-2222-4222-8222-222222222222"
 	sessionC = "33333333-3333-4333-8333-333333333333"
+
+	jobID = "93874eb3"
 )
 
 // baselineFor returns a baseline that has a transcript snapshot, so growth can
@@ -23,9 +25,9 @@ func baselineFor(id string) Baseline {
 	return Baseline{SessionID: id, TranscriptPath: "/home/u/.claude/projects/p/" + id + ".jsonl", TranscriptLines: 5, TranscriptSize: 100}
 }
 
-// goodResult is a resume result that preserved the session id.
-func goodResult(id string) claude.ResumeResult {
-	return claude.ResumeResult{RequestedSessionID: id, SessionID: id, Verified: true, Result: "done"}
+// goodResult is the dispatch acknowledgement: the job the CLI created.
+func goodResult(_ string) claude.ResumeResult {
+	return claude.ResumeResult{RequestedSessionID: sessionA, JobID: jobID}
 }
 
 // statusFor builds a status reading with the given transcript measurement.
@@ -36,21 +38,24 @@ func statusFor(id string, lines, size int64) claude.SessionStatus {
 	}
 }
 
-func TestVerifierProvesGrowthByLineCount(t *testing.T) {
-	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
-		return statusFor(sessionA, 9, 180), nil
-	}}
+func TestVerifierProvesGrowthOfTheContinuationSession(t *testing.T) {
+	provider := &providerStub{
+		jobFn: func(int, string) (claude.AgentEntry, error) { return finishedJob(jobID, sessionB), nil },
+		statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
+			return statusFor(sessionID, 9, 180), nil
+		},
+	}
 	verifier := Verifier{Provider: provider, Timeout: -1, Interval: -1}
 
 	got, err := verifier.Verify(context.Background(), baselineFor(sessionA), goodResult(sessionA))
 	if err != nil {
 		t.Fatalf("Verify = %v, want nil", err)
 	}
-	if !got.SessionIDPreserved || !got.TranscriptGrew || !got.Proven {
+	if !got.ContinuationConfirmed || !got.TranscriptGrew || !got.Proven {
 		t.Fatalf("Verification = %+v, want a proven resume", got)
 	}
-	if got.LinesBefore != 5 || got.LinesAfter != 9 || got.SizeBefore != 100 || got.SizeAfter != 180 {
-		t.Errorf("measurements = %+v, want the before/after snapshots", got)
+	if got.JobID != jobID || got.ContinuationSessionID != sessionB || got.JobState != "done" {
+		t.Errorf("Verification = %+v, want the job and the continuation it reported", got)
 	}
 	if reason := got.Reason(); !strings.Contains(reason, "grew") {
 		t.Errorf("Reason = %q, want it to explain the success", reason)
@@ -60,10 +65,34 @@ func TestVerifierProvesGrowthByLineCount(t *testing.T) {
 	}
 }
 
+func TestVerifierProvesGrowthByLineCountWhenTheJobKeptTheSession(t *testing.T) {
+	provider := &providerStub{
+		jobFn: func(int, string) (claude.AgentEntry, error) { return finishedJob(jobID, sessionA), nil },
+		statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
+			return statusFor(sessionID, 9, 180), nil
+		},
+	}
+	verifier := Verifier{Provider: provider, Timeout: -1, Interval: -1}
+
+	got, err := verifier.Verify(context.Background(), baselineFor(sessionA), goodResult(sessionA))
+	if err != nil {
+		t.Fatalf("Verify = %v, want nil", err)
+	}
+	if !got.TranscriptGrew || !got.Proven {
+		t.Fatalf("Verification = %+v, want the line count to prove growth", got)
+	}
+	if got.LinesBefore != 5 || got.LinesAfter != 9 || got.SizeBefore != 100 || got.SizeAfter != 180 {
+		t.Errorf("measurements = %+v, want the before/after snapshots", got)
+	}
+}
+
 func TestVerifierProvesGrowthBySizeWhenLinesDoNotMove(t *testing.T) {
-	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
-		return statusFor(sessionA, 5, 240), nil
-	}}
+	provider := &providerStub{
+		jobFn: func(int, string) (claude.AgentEntry, error) { return finishedJob(jobID, sessionA), nil },
+		statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
+			return statusFor(sessionID, 5, 240), nil
+		},
+	}
 	verifier := Verifier{Provider: provider, Timeout: -1, Interval: -1}
 
 	got, err := verifier.Verify(context.Background(), baselineFor(sessionA), goodResult(sessionA))
@@ -79,9 +108,12 @@ func TestVerifierProvesGrowthBySizeWhenLinesDoNotMove(t *testing.T) {
 }
 
 func TestVerifierReportsUnprovenResumeOnceChecked(t *testing.T) {
-	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
-		return statusFor(sessionA, 5, 100), nil
-	}}
+	provider := &providerStub{
+		jobFn: func(int, string) (claude.AgentEntry, error) { return finishedJob(jobID, sessionA), nil },
+		statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
+			return statusFor(sessionID, 5, 100), nil
+		},
+	}
 	verifier := Verifier{Provider: provider, Timeout: -1, Interval: -1}
 
 	got, err := verifier.Verify(context.Background(), baselineFor(sessionA), goodResult(sessionA))
@@ -90,6 +122,9 @@ func TestVerifierReportsUnprovenResumeOnceChecked(t *testing.T) {
 	}
 	if got.Proven || got.TranscriptGrew {
 		t.Fatalf("Verification = %+v, want an unproven resume", got)
+	}
+	if !got.ContinuationConfirmed {
+		t.Error("ContinuationConfirmed = false, want true: the job did report a continuation")
 	}
 	if !containsNote(got.Notes, "checked once") {
 		t.Errorf("Notes = %v, want the single-check explanation", got.Notes)
@@ -101,10 +136,13 @@ func TestVerifierReportsUnprovenResumeOnceChecked(t *testing.T) {
 
 func TestVerifierTimesOutWaitingForGrowth(t *testing.T) {
 	var calls int
-	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
-		calls++
-		return statusFor(sessionA, 5, 100), nil
-	}}
+	provider := &providerStub{
+		jobFn: func(int, string) (claude.AgentEntry, error) { return finishedJob(jobID, sessionA), nil },
+		statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
+			calls++
+			return statusFor(sessionID, 5, 100), nil
+		},
+	}
 	// A real clock with a tiny budget exercises the polling loop and its
 	// deadline without a real wait.
 	verifier := Verifier{Provider: provider, Timeout: time.Millisecond, Interval: time.Millisecond}
@@ -124,12 +162,73 @@ func TestVerifierTimesOutWaitingForGrowth(t *testing.T) {
 	}
 }
 
+// TestVerifierWaitsForTheJobToStopWorking is the core of the recorded probe: the
+// job is polled until it leaves `working`, and only then is the continuation
+// transcript measured.
+func TestVerifierWaitsForTheJobToStopWorking(t *testing.T) {
+	var jobCalls int
+	provider := &providerStub{
+		jobFn: func(call int, _ string) (claude.AgentEntry, error) {
+			jobCalls = call
+			if call < 3 {
+				entry := finishedJob(jobID, sessionB)
+				entry.State = "working"
+				return entry, nil
+			}
+			return finishedJob(jobID, sessionB), nil
+		},
+		statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
+			return statusFor(sessionID, 4, 400), nil
+		},
+	}
+	verifier := Verifier{Provider: provider, Timeout: time.Second, Interval: time.Millisecond}
+
+	got, err := verifier.Verify(context.Background(), baselineFor(sessionA), goodResult(sessionA))
+	if err != nil {
+		t.Fatalf("Verify = %v, want nil", err)
+	}
+	if !got.Proven {
+		t.Fatalf("Verification = %+v, want the job to be followed to completion", got)
+	}
+	if jobCalls < 3 {
+		t.Errorf("the job was read %d times, want it polled until it left working", jobCalls)
+	}
+	if got.JobState != "done" {
+		t.Errorf("JobState = %q, want the last state the CLI reported", got.JobState)
+	}
+}
+
+func TestVerifierReportsAJobStillWorking(t *testing.T) {
+	provider := &providerStub{
+		jobFn: func(int, string) (claude.AgentEntry, error) {
+			entry := finishedJob(jobID, sessionB)
+			entry.State = "working"
+			return entry, nil
+		},
+	}
+	verifier := Verifier{Provider: provider, Timeout: -1, Interval: -1}
+
+	got, err := verifier.Verify(context.Background(), baselineFor(sessionA), goodResult(sessionA))
+	if err != nil {
+		t.Fatalf("Verify = %v, want nil", err)
+	}
+	if got.Proven {
+		t.Fatal("a job that is still working proves nothing")
+	}
+	if !containsNote(got.Notes, "still working") {
+		t.Errorf("Notes = %v, want the still-working explanation", got.Notes)
+	}
+}
+
 func TestVerifierNeverAcceptsARunningProcessAsProof(t *testing.T) {
-	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
-		status := statusFor(sessionA, 5, 100)
-		status.Running = true
-		return status, nil
-	}}
+	provider := &providerStub{
+		jobFn: func(int, string) (claude.AgentEntry, error) { return finishedJob(jobID, sessionA), nil },
+		statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
+			status := statusFor(sessionID, 5, 100)
+			status.Running = true
+			return status, nil
+		},
+	}
 	verifier := Verifier{Provider: provider, Timeout: -1, Interval: -1}
 
 	got, err := verifier.Verify(context.Background(), baselineFor(sessionA), goodResult(sessionA))
@@ -147,24 +246,27 @@ func TestVerifierNeverAcceptsARunningProcessAsProof(t *testing.T) {
 	}
 }
 
-func TestVerifierRejectsATranscriptThatChangedSession(t *testing.T) {
-	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
-		return statusFor(sessionB, 12, 300), nil
-	}}
+// TestVerifierRejectsAContinuationWithAnEmptyTranscript covers the new-session
+// case: a job that reports its own session id proves continuation only when that
+// session's transcript holds content.
+func TestVerifierRejectsAContinuationWithAnEmptyTranscript(t *testing.T) {
+	provider := &providerStub{
+		jobFn: func(int, string) (claude.AgentEntry, error) { return finishedJob(jobID, sessionB), nil },
+		statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
+			return statusFor(sessionID, 0, 0), nil
+		},
+	}
 	verifier := Verifier{Provider: provider, Timeout: -1, Interval: -1}
 
 	got, err := verifier.Verify(context.Background(), baselineFor(sessionA), goodResult(sessionA))
 	if err != nil {
 		t.Fatalf("Verify = %v, want nil", err)
 	}
-	if got.SessionIDPreserved {
-		t.Fatal("a transcript that belongs to another session must not preserve identity")
+	if got.TranscriptGrew || got.Proven {
+		t.Fatalf("Verification = %+v, want an empty continuation transcript to prove nothing", got)
 	}
-	if got.Proven {
-		t.Fatal("growth of a different conversation is not proof")
-	}
-	if !containsNote(got.Notes, "belongs to session "+sessionB) {
-		t.Errorf("Notes = %v, want the identity change to be explained", got.Notes)
+	if !containsNote(got.Notes, "transcript is still empty") {
+		t.Errorf("Notes = %v, want the empty-transcript explanation", got.Notes)
 	}
 }
 
@@ -174,9 +276,6 @@ func TestVerifierWithoutProviderCannotProveGrowth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify = %v, want nil", err)
 	}
-	if !got.SessionIDPreserved {
-		t.Error("SessionIDPreserved = false, want true: the CLI did report the right id")
-	}
 	if got.Proven {
 		t.Fatal("without a provider the transcript cannot be measured, so the resume is unproven")
 	}
@@ -185,10 +284,38 @@ func TestVerifierWithoutProviderCannotProveGrowth(t *testing.T) {
 	}
 }
 
-func TestVerifierRejectsAnEmptyBaselineSessionID(t *testing.T) {
-	verifier := Verifier{}
-	if _, err := verifier.Verify(context.Background(), Baseline{}, goodResult(sessionA)); err == nil {
-		t.Fatal("Verify = nil error, want a baseline requirement error")
+func TestVerifierRejectsADispatchWithoutAJobID(t *testing.T) {
+	verifier := Verifier{Provider: &providerStub{}, Timeout: -1, Interval: -1}
+	got, err := verifier.Verify(context.Background(), baselineFor(sessionA), claude.ResumeResult{RequestedSessionID: sessionA})
+	if err != nil {
+		t.Fatalf("Verify = %v, want nil", err)
+	}
+	if got.Proven {
+		t.Fatal("a dispatch that named no job proves nothing")
+	}
+	if !containsNote(got.Notes, "no background job id") {
+		t.Errorf("Notes = %v, want the missing-job explanation", got.Notes)
+	}
+}
+
+func TestVerifierReportsAJobWithoutAContinuationSession(t *testing.T) {
+	provider := &providerStub{jobFn: func(int, string) (claude.AgentEntry, error) {
+		return finishedJob(jobID, ""), nil
+	}}
+	verifier := Verifier{Provider: provider, Timeout: -1, Interval: -1}
+
+	got, err := verifier.Verify(context.Background(), baselineFor(sessionA), goodResult(sessionA))
+	if err != nil {
+		t.Fatalf("Verify = %v, want nil", err)
+	}
+	if got.ContinuationConfirmed || got.Proven {
+		t.Fatalf("Verification = %+v, want no continuation to be confirmed", got)
+	}
+	if !containsNote(got.Notes, "reported no session id") {
+		t.Errorf("Notes = %v, want the missing-session explanation", got.Notes)
+	}
+	if len(got.Missing()) != 2 {
+		t.Errorf("Missing() = %v, want both checks", got.Missing())
 	}
 }
 
@@ -206,11 +333,30 @@ func TestVerifierHonoursACancelledContext(t *testing.T) {
 	}
 }
 
+func TestVerifierReportsAnUnreadableJob(t *testing.T) {
+	boom := errors.New("agents listing unreadable")
+	provider := &providerStub{jobFn: func(int, string) (claude.AgentEntry, error) {
+		return claude.AgentEntry{}, boom
+	}}
+	verifier := Verifier{Provider: provider, Timeout: -1, Interval: -1}
+
+	_, err := verifier.Verify(context.Background(), baselineFor(sessionA), goodResult(sessionA))
+	if !errors.Is(err, boom) {
+		t.Fatalf("Verify error = %v, want the provider failure", err)
+	}
+	if !strings.Contains(err.Error(), jobID) {
+		t.Errorf("error = %q, want it to name the job", err)
+	}
+}
+
 func TestVerifierReportsAnUnreadableStatus(t *testing.T) {
 	boom := errors.New("transcript unreadable")
-	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
-		return claude.SessionStatus{}, boom
-	}}
+	provider := &providerStub{
+		jobFn: func(int, string) (claude.AgentEntry, error) { return finishedJob(jobID, sessionA), nil },
+		statusFn: func(_ int, _ string) (claude.SessionStatus, error) {
+			return claude.SessionStatus{}, boom
+		},
+	}
 	verifier := Verifier{Provider: provider, Timeout: -1, Interval: -1}
 
 	_, err := verifier.Verify(context.Background(), baselineFor(sessionA), goodResult(sessionA))
@@ -222,58 +368,11 @@ func TestVerifierReportsAnUnreadableStatus(t *testing.T) {
 	}
 }
 
-func TestVerifierSessionIDChecks(t *testing.T) {
-	cases := []struct {
-		name   string
-		note   string
-		result claude.ResumeResult
-	}{
-		{
-			name:   "addressed another session",
-			note:   "asked to resume " + sessionA + " but the command addressed " + sessionB,
-			result: claude.ResumeResult{RequestedSessionID: sessionB, SessionID: sessionA, Verified: true},
-		},
-		{
-			name:   "no session id reported",
-			note:   "reported no session id",
-			result: claude.ResumeResult{RequestedSessionID: sessionA, Verified: true},
-		},
-		{
-			name:   "a different session was created",
-			note:   "reported session " + sessionB + " instead of " + sessionA,
-			result: claude.ResumeResult{SessionID: sessionB, Verified: false},
-		},
-		{
-			name:   "provider did not confirm",
-			note:   "did not confirm",
-			result: claude.ResumeResult{RequestedSessionID: sessionA, SessionID: sessionA, Verified: false},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			verifier := Verifier{Timeout: -1, Interval: -1}
-			got, err := verifier.Verify(context.Background(), baselineFor(sessionA), tc.result)
-			if err != nil {
-				t.Fatalf("Verify = %v, want nil", err)
-			}
-			if got.SessionIDPreserved {
-				t.Fatal("SessionIDPreserved = true, want false")
-			}
-			if got.Proven {
-				t.Fatal("Proven = true, want false")
-			}
-			if !containsNote(got.Notes, tc.note) {
-				t.Errorf("Notes = %v, want a note containing %q", got.Notes, tc.note)
-			}
-		})
-	}
-}
-
 func TestMeasureGrowthWithoutABaselineSnapshot(t *testing.T) {
 	baseline := Baseline{SessionID: sessionA}
 	verification := Verification{}
 
-	if measureGrowth(baseline, statusFor(sessionA, 4, 90), &verification) {
+	if measureGrowth(baseline.SessionID, baseline, statusFor(sessionA, 4, 90), &verification) {
 		t.Fatal("growth must not be claimed without a baseline snapshot")
 	}
 	if !containsNote(verification.Notes, "before the resume was unknown") {
@@ -281,7 +380,7 @@ func TestMeasureGrowthWithoutABaselineSnapshot(t *testing.T) {
 	}
 
 	verification = Verification{}
-	if measureGrowth(baseline, statusFor(sessionA, 0, 0), &verification) {
+	if measureGrowth(baseline.SessionID, baseline, statusFor(sessionA, 0, 0), &verification) {
 		t.Fatal("an empty transcript proves nothing")
 	}
 	if len(verification.Notes) != 0 {
@@ -290,8 +389,14 @@ func TestMeasureGrowthWithoutABaselineSnapshot(t *testing.T) {
 
 	baseline = Baseline{SessionID: sessionA, TranscriptLines: 5}
 	verification = Verification{}
-	if measureGrowth(baseline, statusFor(sessionA, 5, 400), &verification) {
+	if measureGrowth(baseline.SessionID, baseline, statusFor(sessionA, 5, 400), &verification) {
 		t.Fatal("a size increase without a baseline size cannot prove growth")
+	}
+
+	// A continuation under a new session id needs content, not a delta.
+	verification = Verification{}
+	if !measureGrowth(sessionB, baseline, statusFor(sessionB, 1, 10), &verification) {
+		t.Fatal("a continuation with a non-empty transcript proves the conversation moved")
 	}
 }
 
@@ -300,11 +405,11 @@ func TestVerificationMissingAndReason(t *testing.T) {
 	if got := empty.Missing(); len(got) != 2 {
 		t.Errorf("Missing() = %v, want both checks", got)
 	}
-	partial := Verification{SessionIDPreserved: true}
+	partial := Verification{ContinuationConfirmed: true}
 	if got := partial.Missing(); len(got) != 1 {
 		t.Errorf("Missing() = %v, want only the growth check", got)
 	}
-	inconsistent := Verification{SessionIDPreserved: true, TranscriptGrew: true}
+	inconsistent := Verification{ContinuationConfirmed: true, TranscriptGrew: true}
 	if got := inconsistent.Reason(); got != "the resume could not be verified" {
 		t.Errorf("Reason() = %q, want the generic unproven message", got)
 	}
@@ -353,7 +458,7 @@ func TestVerificationFailedError(t *testing.T) {
 	if !strings.Contains(err.Error(), sessionA) {
 		t.Errorf("error = %q, want it to name the session", err)
 	}
-	proven := Verification{SessionIDPreserved: true, TranscriptGrew: true, Proven: true}
+	proven := Verification{ContinuationConfirmed: true, TranscriptGrew: true, Proven: true}
 	if err := VerificationFailedError(sessionA, proven); err != nil && !errors.Is(err, ErrVerificationFailed) {
 		t.Errorf("error = %v, want ErrVerificationFailed", err)
 	}

@@ -59,11 +59,13 @@ const testAgentsJSON = `[
   }
 ]`
 
-// testResumeJSON is the verified `-p --output-format json` shape.
-const testResumeJSON = `{"type":"result","subtype":"success","is_error":false,` +
-	`"duration_ms":1234,"num_turns":2,"result":"continued the goal",` +
-	`"session_id":"` + testSessionID + `","total_cost_usd":0.0123,` +
-	`"modelUsage":{"claude-sonnet-4-5":{"inputTokens":10}}}`
+// testDispatchOutput is the CLI's acknowledgement of a background dispatch: the
+// job id it created, then the four commands it suggests for that job.
+const testDispatchOutput = "backgrounded \u00b7 " + testBackgroundJobID + "\n" +
+	"  claude agents             list sessions\n" +
+	"  claude attach " + testBackgroundJobID + "    open in this terminal\n" +
+	"  claude logs " + testBackgroundJobID + "      show recent output\n" +
+	"  claude stop " + testBackgroundJobID + "      stop this session\n"
 
 // newTestCLI builds a CLI backed by a scripted execer.
 func newTestCLI(t *testing.T, outputs ...Output) (*CLI, *FakeExecer) {
@@ -430,12 +432,15 @@ func TestFakeProviderBehaviour(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResumeSession() error = %v", err)
 	}
-	if !result.Verified || result.SessionID != testSessionID {
-		t.Errorf("resume result not verified: %+v", result)
+	if result.JobID == "" || result.ContinuationSessionID != testSessionID {
+		t.Errorf("resume result carries no job or no continuation: %+v", result)
+	}
+	if job, err := fake.BackgroundJob(ctx, result.JobID); err != nil || job.SessionID != testSessionID {
+		t.Errorf("BackgroundJob(%q) = %+v, %v; want the continuation session", result.JobID, job, err)
 	}
 
-	if got := len(fake.Calls()); got != 5 {
-		t.Errorf("recorded %d calls, want 5", got)
+	if got := len(fake.Calls()); got != 6 {
+		t.Errorf("recorded %d calls, want 6", got)
 	}
 
 	// Unrecoverable sessions refuse to resume.

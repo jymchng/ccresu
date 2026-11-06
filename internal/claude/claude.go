@@ -77,6 +77,9 @@ var (
 	ErrUnsupportedVersion = errors.New("claude: unsupported claude code version")
 	// ErrUnrecognizedVersion reports a version string that cannot be parsed.
 	ErrUnrecognizedVersion = errors.New("claude: unrecognized claude code version")
+	// ErrNoBackgroundJob reports a resume dispatch that exited 0 but printed no
+	// background job id, so there is nothing to follow and nothing to verify.
+	ErrNoBackgroundJob = errors.New("claude: the resume dispatch reported no background job id")
 	// ErrMalformedOutput reports JSON that does not match the verified shape.
 	ErrMalformedOutput = errors.New("claude: malformed claude output")
 	// ErrNoSessionIDReported reports resume output without a session id. Without
@@ -276,41 +279,37 @@ type SessionStatus struct {
 	CheckedAt time.Time
 }
 
-// ResumeResult is the outcome of a resume attempt.
+// ResumeResult is the outcome of a resume dispatch.
+//
+// A resume is dispatched into the background, so this is what a dispatch can
+// honestly report: the id that was addressed and the background job that now
+// holds the conversation. The continuation session id, the transcript growth and
+// the turn's outcome are not part of it -- they are visible only afterwards,
+// through `claude agents --json` and the transcript, and are what verification
+// measures.
 type ResumeResult struct {
 	// RequestedSessionID is the session id ccresu asked to resume.
 	RequestedSessionID string
-	// SessionID is the session id the CLI reported back.
-	SessionID string
-	// Verified reports SessionID == RequestedSessionID, which is the proof that
-	// the original conversation continued rather than a new one starting.
-	Verified bool
-	// Result is the final assistant text of the resumed turn.
-	Result string
-	// Subtype is the CLI result subtype ("success" or an error subtype).
-	Subtype string
-	// IsError reports whether the CLI flagged the turn as an error.
-	IsError bool
-	// NumTurns is the number of turns the CLI reported.
-	NumTurns int
-	// DurationMS is the CLI-reported turn duration.
-	DurationMS int
-	// TotalCostUSD is the CLI-reported cost, when present.
-	TotalCostUSD float64
-	// Model is the model that produced the turn, when reported.
-	Model string
+	// JobID is the eight-hex background job the dispatch created, taken from the
+	// CLI's own acknowledgement ("backgrounded · <job-id>").
+	JobID string
+	// ContinuationSessionID is the session id that job reports afterwards. It is
+	// filled in by verification, never by the dispatch: a background agent
+	// continues the conversation under its own session id.
+	ContinuationSessionID string
 	// Command is the exact argv that was executed.
 	Command []string
 }
 
 // SessionProvider discovers and resumes Claude Code sessions.
 //
-// Implementations must never invent a command: resuming uses
-// `claude -p --resume <session-id> --output-format json "<message>"` and, only
-// when the CLI refuses that because the session is still attached to a
-// background agent, the single `claude stop <job-id>` that clears the way
-// before the same resume is repeated. The job id is the eight-hex name the
-// refusal prints, never the session UUID.
+// Implementations must never invent a command: resuming dispatches
+// `claude --resume <session-id> --bg "<message>"` and, only when the CLI refuses
+// that because the session is still attached to a background agent, the single
+// `claude stop <job-id>` that clears the way before the same dispatch is
+// repeated. The stop's job id is the eight-hex name the refusal prints, never the
+// session UUID; the dispatch's own job id is the eight-hex name it prints on
+// stdout.
 type SessionProvider interface {
 	// Discover lists known sessions, newest activity first.
 	Discover(ctx context.Context, filter DiscoverFilter) ([]Session, error)
@@ -318,8 +317,14 @@ type SessionProvider interface {
 	GetSession(ctx context.Context, sessionID string) (Session, error)
 	// GetSessionStatus returns the current status of one session.
 	GetSessionStatus(ctx context.Context, sessionID string) (SessionStatus, error)
-	// ResumeSession continues an existing session and verifies the session id.
+	// ResumeSession dispatches a continuation of an existing session into the
+	// background and reports the job that now holds it. Proving that the
+	// conversation continued is the verifier's job, not this call's.
 	ResumeSession(ctx context.Context, sessionID, message string) (ResumeResult, error)
+	// BackgroundJob looks up one background job by its eight-hex job id, newest
+	// `claude agents --json` listing first. It returns ErrSessionNotFound when no
+	// job matches.
+	BackgroundJob(ctx context.Context, jobID string) (AgentEntry, error)
 }
 
 // sortSessions orders sessions by recency and then by id so discovery output is

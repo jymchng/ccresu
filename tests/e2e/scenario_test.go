@@ -189,19 +189,28 @@ func TestFullScenarioReplaysTheRealInterruption(t *testing.T) {
 	if got := calls[0].Message; got != manager.ContinuationMessage() {
 		t.Fatalf("assertion 6: continuation message = %q, want %q", got, manager.ContinuationMessage())
 	}
-	if len(wantArgs) != 6 || wantArgs[0] != "-p" || wantArgs[1] != "--resume" ||
-		wantArgs[2] != support.SessionID || wantArgs[3] != "--output-format" || wantArgs[4] != "json" ||
-		wantArgs[5] != manager.ContinuationMessage() {
+	if len(wantArgs) != 4 || wantArgs[0] != "--resume" || wantArgs[1] != support.SessionID ||
+		wantArgs[2] != "--bg" || wantArgs[3] != manager.ContinuationMessage() {
 		t.Fatalf("assertion 6: unexpected resume argv shape %v", wantArgs)
 	}
+	for _, arg := range wantArgs {
+		if arg == "-p" || arg == "--output-format" || arg == "json" {
+			t.Fatalf("assertion 6: the dispatch must be a background resume, got %v", wantArgs)
+		}
+	}
 
-	// (7) The original session id was preserved, both in what was asked for and
-	// in what the CLI reported back.
+	// (7) The resume addressed the session that was asked for, and the job the
+	// dispatch created reported a conversation to measure. A background agent may
+	// continue under its own session id, so the proof is that a continuation was
+	// confirmed and its transcript grew -- not that the original id answered.
 	if calls[0].SessionID != support.SessionID {
 		t.Fatalf("assertion 7: resumed %q, want %q", calls[0].SessionID, support.SessionID)
 	}
-	if !outcome.Verification.SessionIDPreserved {
-		t.Fatalf("assertion 7: session id was not proven preserved: %v", outcome.Verification.Notes)
+	if !outcome.Verification.ContinuationConfirmed {
+		t.Fatalf("assertion 7: the job reported no continuation: %v", outcome.Verification.Notes)
+	}
+	if outcome.Verification.JobID == "" {
+		t.Fatal("assertion 7: the verification carries no background job id")
 	}
 
 	// (8) The working directory is unchanged: the resume addressed the same

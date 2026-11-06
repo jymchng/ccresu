@@ -22,8 +22,10 @@ import (
 type providerStub struct {
 	mu          sync.Mutex
 	statusFn    func(call int, sessionID string) (claude.SessionStatus, error)
+	jobFn       func(call int, jobID string) (claude.AgentEntry, error)
 	resumeFn    func(sessionID, message string) (claude.ResumeResult, error)
 	statusCalls int
+	jobCalls    int
 	resumes     []resumeCall
 	discovers   int
 }
@@ -66,6 +68,27 @@ func (p *providerStub) ResumeSession(_ context.Context, sessionID, message strin
 		return goodResult(sessionID), nil
 	}
 	return fn(sessionID, message)
+}
+
+// BackgroundJob reports the job a dispatch created. The default is the shape a
+// real dispatch produces: a finished job that continues the conversation under
+// its own session id, which is what the verifier follows.
+func (p *providerStub) BackgroundJob(_ context.Context, jobID string) (claude.AgentEntry, error) {
+	p.mu.Lock()
+	p.jobCalls++
+	call := p.jobCalls
+	fn := p.jobFn
+	p.mu.Unlock()
+	if fn == nil {
+		return finishedJob(jobID, sessionB), nil
+	}
+	return fn(call, jobID)
+}
+
+// finishedJob is a background job that has left the working state and reports the
+// conversation it continued.
+func finishedJob(jobID, sessionID string) claude.AgentEntry {
+	return claude.AgentEntry{StateID: jobID, SessionID: sessionID, Kind: "background", State: "done"}
 }
 
 func (p *providerStub) resumeCount() int {
@@ -744,12 +767,12 @@ func TestRecoverStopsOnANonRetryableFailure(t *testing.T) {
 	}
 }
 
-func TestRecoverTreatsAnErrorResultAsAFailure(t *testing.T) {
+func TestRecoverTreatsADispatchWithoutAJobAsAFailure(t *testing.T) {
 	store := newTestStore(t)
 	seedSession(t, store, recoverableSession(sessionA))
 	provider := growthProvider(10, 12)
 	provider.resumeFn = func(sessionID, _ string) (claude.ResumeResult, error) {
-		return claude.ResumeResult{RequestedSessionID: sessionID, IsError: true, Result: "still limited\nsecond line"}, nil
+		return claude.ResumeResult{RequestedSessionID: sessionID}, nil
 	}
 	manager := testManager(t, store, provider, nil)
 
@@ -757,8 +780,8 @@ func TestRecoverTreatsAnErrorResultAsAFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("Recover = nil error, want the resume failure")
 	}
-	if !errors.Is(err, claude.ErrResumeFailed) {
-		t.Errorf("error = %v, want ErrResumeFailed", err)
+	if !errors.Is(err, claude.ErrNoBackgroundJob) {
+		t.Errorf("error = %v, want ErrNoBackgroundJob", err)
 	}
 	if outcome.State != StateRetryWait {
 		t.Errorf("outcome state = %s, want RETRY_WAIT", outcome.State)
@@ -1171,8 +1194,9 @@ func TestRecoverKeepsGoingAfterAnUnprovenResume(t *testing.T) {
 	store := newTestStore(t)
 	seedSession(t, store, recoverableSession(sessionA))
 	provider := growthProvider(10, 12)
-	provider.resumeFn = func(_ string, _ string) (claude.ResumeResult, error) {
-		return claude.ResumeResult{RequestedSessionID: sessionA, SessionID: sessionB, Verified: false}, nil
+	// A job that reports no continuation session leaves the resume unproven.
+	provider.jobFn = func(_ int, jobID string) (claude.AgentEntry, error) {
+		return finishedJob(jobID, ""), nil
 	}
 	manager := testManager(t, store, provider, nil)
 
@@ -1370,8 +1394,11 @@ func TestGrew(t *testing.T) {
 
 func TestCommandPreviewAndFormattingHelpers(t *testing.T) {
 	preview := commandPreview(sessionA, "continue please")
-	if !strings.Contains(preview, "claude -p --resume "+sessionA) {
-		t.Errorf("commandPreview = %q, want the resume command", preview)
+	if !strings.Contains(preview, "claude --resume "+sessionA+" --bg") {
+		t.Errorf("commandPreview = %q, want the background dispatch ccresu issues", preview)
+	}
+	if strings.Contains(preview, "-p") || strings.Contains(preview, "--output-format") {
+		t.Errorf("commandPreview = %q, want no print-mode flag: `--bg` and `--print` conflict", preview)
 	}
 	if !strings.Contains(preview, "15-byte continuation message") {
 		t.Errorf("commandPreview = %q, want the message summarised", preview)

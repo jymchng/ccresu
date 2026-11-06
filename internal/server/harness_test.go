@@ -190,19 +190,28 @@ func (h *harness) makeRecoverable(id string) {
 		Session:    resumed,
 		Transcript: claude.TranscriptInfo{Path: "/tmp/t.jsonl", Size: 400, Lines: 9},
 	}
-	h.provider.ResumeResults[id] = claude.ResumeResult{
-		RequestedSessionID: id,
-		SessionID:          id,
-		Verified:           true,
-		Result:             "continued",
-		Subtype:            "success",
-	}
+	// A resume is a background dispatch: it creates a job, and the job is what
+	// the verifier follows. The callback registers that job as already finished
+	// and grows the transcript, which is what a real dispatch looks like by the
+	// time verification reads it back.
+	h.provider.ResumeResults[id] = claude.ResumeResult{RequestedSessionID: id}
 	h.provider.OnResume = func(context.Context, string, string) (claude.ResumeResult, error) {
+		result := h.provider.ResumeResults[id]
+		result.RequestedSessionID = id
+		result.JobID = claude.FakeJobID(id)
+		result.ContinuationSessionID = id
+		h.provider.SetJob(claude.AgentEntry{
+			StateID:   result.JobID,
+			SessionID: id,
+			CWD:       "/work/project",
+			Kind:      "background",
+			State:     "done",
+		})
 		h.provider.Statuses[id] = claude.SessionStatus{
 			Session:    resumed,
 			Transcript: claude.TranscriptInfo{Path: "/tmp/t.jsonl", Size: 8192, Lines: 64},
 		}
-		return h.provider.ResumeResults[id], nil
+		return result, nil
 	}
 }
 

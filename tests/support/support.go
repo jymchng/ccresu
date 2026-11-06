@@ -359,16 +359,28 @@ func (p *GrowingProvider) ResumeSession(_ context.Context, id, message string) (
 	p.mu.Lock()
 	p.resumes = append(p.resumes, ResumeCall{SessionID: id, Message: message})
 	p.mu.Unlock()
-	// The CLI reports the requested id back, which is the proof that the
-	// original conversation continued rather than a new one starting.
+	// The dispatch creates a background job; the fake reports the job and the
+	// conversation it continues, and keeps the same session id so a test's
+	// transcript fixtures remain valid.
 	return claude.ResumeResult{
-		RequestedSessionID: id,
-		SessionID:          id,
-		Verified:           true,
-		Result:             "continued the paused goal",
-		Subtype:            "success",
-		NumTurns:           1,
-		Command:            append([]string{"claude"}, claude.ResumeArgs(id, message)...),
+		RequestedSessionID:    id,
+		JobID:                 claude.FakeJobID(id),
+		ContinuationSessionID: id,
+		Command:               append([]string{"claude"}, claude.ResumeArgs(id, message)...),
+	}, nil
+}
+
+// BackgroundJob implements claude.SessionProvider.
+//
+// The fake's job is already finished when it is asked about, so a verification
+// runs straight to the transcript check instead of waiting for a state change.
+func (p *GrowingProvider) BackgroundJob(_ context.Context, jobID string) (claude.AgentEntry, error) {
+	return claude.AgentEntry{
+		StateID:   jobID,
+		SessionID: p.Session.ID,
+		CWD:       p.Session.ProjectPath,
+		Kind:      "background",
+		State:     "done",
 	}, nil
 }
 

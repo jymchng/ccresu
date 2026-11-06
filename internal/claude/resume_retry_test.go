@@ -31,7 +31,7 @@ func noJobMatchingOutput(arg string) Output {
 func resumeCalls(calls []Call) []Call {
 	var out []Call
 	for _, call := range calls {
-		if len(call.Args) > 0 && call.Args[0] == "-p" {
+		if len(call.Args) > 0 && call.Args[0] == "--resume" {
 			out = append(out, call)
 		}
 	}
@@ -98,7 +98,7 @@ func (s *resumeScript) handle(call Call) (Output, error) {
 		if hook != nil {
 			return hook(attempt)
 		}
-		return Output{Stdout: []byte(testResumeJSON)}, nil
+		return Output{Stdout: []byte(testDispatchOutput)}, nil
 	}
 }
 
@@ -136,7 +136,7 @@ func TestResumeStopsABackgroundSessionAndResumesAgain(t *testing.T) {
 		if attempt == 1 {
 			return backgroundRefusalOutput(), nil
 		}
-		return Output{Stdout: []byte(testResumeJSON)}, nil
+		return Output{Stdout: []byte(testDispatchOutput)}, nil
 	}}
 	cli, execer := newScriptedResumeCLI(t, script, nil)
 
@@ -144,14 +144,12 @@ func TestResumeStopsABackgroundSessionAndResumesAgain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resume() error = %v, want success after the stop", err)
 	}
-	if !result.Verified {
-		t.Error("Verified = false, want true: the conversation must be the same one")
+	if result.JobID != testBackgroundJobID {
+		t.Errorf("JobID = %q, want %q: the retried dispatch must report its own job",
+			result.JobID, testBackgroundJobID)
 	}
-	if result.SessionID != testSessionID {
-		t.Errorf("SessionID = %q, want %q", result.SessionID, testSessionID)
-	}
-	if result.Result != "continued the goal" {
-		t.Errorf("Result = %q, want the retried turn's text", result.Result)
+	if result.RequestedSessionID != testSessionID {
+		t.Errorf("RequestedSessionID = %q, want %q", result.RequestedSessionID, testSessionID)
 	}
 
 	calls := execer.Calls()
@@ -165,7 +163,7 @@ func TestResumeStopsABackgroundSessionAndResumesAgain(t *testing.T) {
 	if first != second {
 		t.Errorf("retried argv differs:\n first = %q\nsecond = %q", first, second)
 	}
-	want := []string{"-p", "--resume", testSessionID, "--output-format", "json", "keep going"}
+	want := []string{"--resume", testSessionID, "--bg", "keep going"}
 	if first != strings.Join(want, "\x00") {
 		t.Errorf("argv = %q, want %q", resumes[0].Args, want)
 	}
@@ -186,7 +184,7 @@ func TestResumeStopsABackgroundSessionAndResumesAgain(t *testing.T) {
 
 	// The attempt row is built from result.Command, so it must still show the
 	// one resume command and never the stop.
-	if got := strings.Join(result.Command, " "); got != "claude -p --resume "+testSessionID+" --output-format json keep going" {
+	if got := strings.Join(result.Command, " "); got != "claude --resume "+testSessionID+" --bg keep going" {
 		t.Errorf("result.Command = %q, want the single resume command", got)
 	}
 }
@@ -202,7 +200,7 @@ func TestResumeNeverPassesTheSessionIDToStop(t *testing.T) {
 		if attempt == 1 {
 			return backgroundRefusalOutput(), nil
 		}
-		return Output{Stdout: []byte(testResumeJSON)}, nil
+		return Output{Stdout: []byte(testDispatchOutput)}, nil
 	}}
 	cli, execer := newScriptedResumeCLI(t, script, nil)
 
@@ -267,8 +265,8 @@ func TestResumeStillFailsWhenTheSessionStaysInTheBackground(t *testing.T) {
 	if err == nil {
 		t.Fatal("Resume() error = nil, want the refusal to surface")
 	}
-	if result.Verified {
-		t.Error("Verified = true on a failure, want false")
+	if result.JobID != "" {
+		t.Errorf("JobID = %q on a failed dispatch, want empty", result.JobID)
 	}
 	if !IsSessionRunningInBackground(err) {
 		t.Errorf("error %v lost the background marker", err)
@@ -317,8 +315,8 @@ func TestResumeReportsTheOriginalErrorWhenStopFails(t *testing.T) {
 	if got := len(stopCalls(calls)); got != 1 {
 		t.Errorf("stop invoked %d times, want 1: %v", got, calls)
 	}
-	if result.Verified {
-		t.Error("Verified = true on a failure, want false")
+	if result.JobID != "" {
+		t.Errorf("JobID = %q on a failed dispatch, want empty", result.JobID)
 	}
 }
 
@@ -371,7 +369,7 @@ func TestResumeLogsTheStop(t *testing.T) {
 		if attempt == 1 {
 			return backgroundRefusalOutput(), nil
 		}
-		return Output{Stdout: []byte(testResumeJSON)}, nil
+		return Output{Stdout: []byte(testDispatchOutput)}, nil
 	}}
 	cli, _ := newScriptedResumeCLI(t, script, logger)
 
@@ -385,7 +383,7 @@ func TestResumeLogsTheStop(t *testing.T) {
 	if !strings.Contains(logged, testSessionID) {
 		t.Errorf("log %q does not name the session", logged)
 	}
-	if !strings.Contains(logged, "resuming again") {
+	if !strings.Contains(logged, "dispatching again") {
 		t.Errorf("log %q does not record the stop-then-resume decision", logged)
 	}
 	// The job name is what was actually passed to `claude stop`, so the log has

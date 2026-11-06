@@ -278,7 +278,7 @@ type verificationDTO struct {
 // toVerificationDTO converts a verification result.
 func toVerificationDTO(verification recovery.Verification) verificationDTO {
 	return verificationDTO{
-		SessionIDPreserved: verification.SessionIDPreserved,
+		SessionIDPreserved: verification.ContinuationConfirmed,
 		TranscriptGrew:     verification.TranscriptGrew,
 		Proven:             verification.Proven,
 		LinesBefore:        verification.LinesBefore,
