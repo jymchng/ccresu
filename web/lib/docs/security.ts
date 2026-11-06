@@ -19,7 +19,7 @@ export const securityDoc: DocPage = {
     {
       kind: "ul",
       items: [
-        "Exactly one command is ever built: `claude -p --resume <session-id> --output-format json \"<message>\"`, with the session id and message passed as separate arguments, never through a shell.",
+        "Exactly one command is ever built: `claude --resume <session-id> --bg \"<message>\"`, with the session id and message passed as separate arguments, never through a shell.",
         "No pty is allocated and no keystrokes are injected, so ccresu cannot type into a terminal you are using.",
         "A session id is validated before use, so a crafted id cannot become a flag or a path traversal.",
         "The API has no endpoint that executes a command: recovery goes through the recovery manager, and settings are validated configuration fields.",

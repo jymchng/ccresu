@@ -19,7 +19,7 @@ export const limitationsDoc: DocPage = {
       items: [
         "It does not lift, reset or bypass usage limits. It waits for the reset time the message reports, and nothing more.",
         "It cannot resume a session type the CLI cannot resume. Such a session is marked UNRECOVERABLE and left alone.",
-        "It resumes in print mode (`claude -p --resume`), so the resumed work continues non-interactively. If you want to keep typing in that conversation, attach to it yourself afterwards.",
+        "It dispatches the resume into a background job (`claude --resume <session-id> --bg`), so the work continues in that job instead of in your terminal. If you want to keep typing in that conversation, attach to it yourself afterwards.",
         "It is a local tool: one machine, one user, one home directory. Session discovery reads that machine's Claude Code state.",
         "It ships no web dashboard. The interfaces are the CLI and the REST/SSE API, and this site is documentation only.",
       ],

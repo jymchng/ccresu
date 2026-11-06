@@ -14,7 +14,7 @@ const guarantees = [
     icon: ShieldCheck,
     title: "No keystroke automation",
     description:
-      "Resume runs as `claude -p --resume <session-id>` with the message as an argument. No pty, no simulated typing, no fork.",
+      "Resume dispatches `claude --resume <session-id> --bg` with the message as an argument. No pty, no simulated typing, no fork.",
   },
   {
     icon: CircleSlash,

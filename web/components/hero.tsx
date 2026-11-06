@@ -35,7 +35,7 @@ export function Hero() {
             resumes <strong className="text-foreground">the same</strong>{" "}
             conversation with {" "}
             <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em]">
-              claude -p --resume
+              claude --resume --bg
             </code>{" "}
             — preserving history, working directory and active goal — and
             verifies the resume actually happened.
@@ -98,8 +98,9 @@ recovery:      yes (max attempts 10)
 
 $ ccresu history 4d1f9c2a\nWAITING_FOR_RESET  reset at 12:00 Europe/Berlin
 RESET_TIME_REACHED  limit cleared
-RESUMING            claude -p --resume 4d1f9c2a
-RESUMED             same session, transcript grew`}</code>
+RESUMING            claude --resume 4d1f9c2a --bg
+WORKING             job 93874eb3, following it
+RESUMED             continuation named, transcript grew`}</code>
             </pre>
           </div>
         </div>

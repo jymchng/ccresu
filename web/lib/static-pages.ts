@@ -50,7 +50,7 @@ export const aboutPage: StaticPage = {
       id: "what-it-is",
       heading: "What ccresu is",
       paragraphs: [
-        "Claude Code stops a session when you reach a usage limit. The work is not lost \u2014 the session is on disk \u2014 but nothing resumes it until you come back, read the reset time and type into the terminal yourself. ccresu closes that gap: it reads the limit message, works out when the limit actually resets, waits for that moment, and then resumes the same session with `claude -p --resume <session-id>` with the continuation message as the last argument.",
+        "Claude Code stops a session when you reach a usage limit. The work is not lost \u2014 the session is on disk \u2014 but nothing resumes it until you come back, read the reset time and type into the terminal yourself. ccresu closes that gap: it reads the limit message, works out when the limit actually resets, waits for that moment, and then dispatches the same session into a background job with `claude --resume <session-id> --bg '<continuation message>'`, the message as the last argument.",
         "Resuming is only half of it. ccresu then inspects the transcript to confirm the conversation really continued, and records the attempt. If the resume was rejected \u2014 because the window had not opened yet, or because the same session was already running in a background agent \u2014 the attempt is retried on a schedule instead of being reported as a success it never had.",
         "It runs as a CLI you invoke, or as a user-level daemon that watches for interruptions in the background. Both share one SQLite database and one configuration file.",
       ],
@@ -61,7 +61,7 @@ export const aboutPage: StaticPage = {
       bullets: [
         "It does not lift, bypass or reset a quota. It reads the reset time, waits for it, and acts afterwards.",
         "It does not simulate keystrokes or allocate a pseudo-terminal. A resume is one `claude` process with one argv element per value.",
-        "It does not fork, rewrite or replay your conversation. The same session id is resumed.",
+        "It does not fork, rewrite or replay your conversation. The job continues it, and the session id the job reports is recorded as the continuation.",
         "It does not host anything. State is a local file, the optional API binds `127.0.0.1`, and the binary ships no web UI.",
       ],
     },

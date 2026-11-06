@@ -969,6 +969,11 @@ func (a *App) reportOutcome(rt *Runtime, outcome recovery.Outcome) error {
 
 // describeVerification renders the proof that the original conversation
 // continued, so a failed resume is never mistaken for a successful one.
+//
+// The wording names what is actually proven: the job reported the session it
+// continues, and that continuation's transcript grew. It used to say "session id
+// preserved", which was the print-mode proof and is no longer even evaluable --
+// a background job continues the conversation under its own session id.
 func describeVerification(outcome recovery.Outcome) string {
 	verification := outcome.Verification
 	if !verification.Proven {
@@ -977,7 +982,7 @@ func describeVerification(outcome recovery.Outcome) string {
 		}
 		return "not proven"
 	}
-	return "proven: session id preserved and transcript grew"
+	return "proven: the job named its continuation and that transcript grew"
 }
 
 // requireRecovery returns the recovery manager or a clear error when automatic

@@ -1,5 +1,5 @@
 
-== pass 1: discover, opt in, then `ccresu recover` each session
+== pass 1: discover, opt in, and let the daemon plan the wait
 reconcile pass complete (2 sessions)
 reconcile pass complete (2 sessions)
 --- recover aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa
@@ -7,33 +7,49 @@ session:       aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa
 state:         RESUMED
 resumed:       yes
 attempt:       1
-verification:  proven: session id preserved and transcript grew
+verification:  proven: the job named its continuation and that transcript grew
 when:          (captured-at)
 --- recover bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb
-ccresu: recover bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb: recovery: session bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb ended its cycle in DISCOVERED: resume session bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb: claude: claude executable unavailable: claude -p --resume failed (exit 1): Invalid API key · Please run /login: claude -p --resume bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb --output-format json Continue working on the existing active goal from where execution was interrupted by the usage limit. Review the current state, avoid repeating completed work, and continue until the goal is completed.: exit status 1
+ccresu: recover bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb: recovery: session bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb ended its cycle in DISCOVERED: resume session bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb: claude: claude executable unavailable: claude --resume --bg failed (exit 1): Invalid API key · Please run /login: claude --resume bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb --bg Continue working on the existing active goal from where execution was interrupted by the usage limit. Review the current state, avoid repeating completed work, and continue until the goal is completed.: exit status 1
 ok    recover A exits 0
 ok    session A ends RESUMED
-ok    recover A proves the conversation continued
+ok    recover A proves the continuation grew
+ok    A records the job the dispatch created
+ok    A records the continuation the job reported
 ok    recover B is refused (exit 1)
 ok    session B is rediscovered
-ok    the resume ran exactly twice for A
+ok    the dispatch ran twice for A (refused, then stopped and repeated)
 ok    one stop call cleared the background agent
 ok    the stop named the eight-hex job, not the session
 ok    the session UUID was never passed to claude stop
-ok    both resumes used byte-identical arguments
-ok    the calls run resume, stop, resume
-ok    history records the stop-then-resume success
-ok    the audit row keeps the one resume command
-ok    session id was preserved
+ok    both dispatches used byte-identical arguments
+ok    no call passed -p
+ok    no call passed --output-format
+ok    the stub was never handed a retired flag
+ok    claude stop refuses a session UUID (exit 1)
+ok    the refusal names the argument
+ok    the audit row keeps the dispatched command
+ok    the audit row reports the continuation
+ok    the continuation was confirmed
 ok    the transcript grew
 
 == the stub claude call log (A only)
-CALL-p--resumeaaaaaaaa-1111-4111-8111-aaaaaaaaaaaa--output-formatjsonContinue working on the existing active goal from where execution was interrupted by the usage limit. Review the current state, avoid repeating completed work, and continue until the goal is completed.
+CALL--resumeaaaaaaaa-1111-4111-8111-aaaaaaaaaaaa--bgContinue working on the existing active goal from where execution was interrupted by the usage limit. Review the current state, avoid repeating completed work, and continue until the goal is completed.
 CALLstopaaaaaaaa
-CALL-p--resumeaaaaaaaa-1111-4111-8111-aaaaaaaaaaaa--output-formatjsonContinue working on the existing active goal from where execution was interrupted by the usage limit. Review the current state, avoid repeating completed work, and continue until the goal is completed.
+CALL--resumeaaaaaaaa-1111-4111-8111-aaaaaaaaaaaa--bgContinue working on the existing active goal from where execution was interrupted by the usage limit. Review the current state, avoid repeating completed work, and continue until the goal is completed.
+CALLstopaaaaaaaa-1111-4111-8111-aaaaaaaaaaaa
 
-== pass 2: the retired commands are gone
+== pass 2: the next limit arrives in the continuation transcript
+reconcile pass complete (3 sessions)
+ok    the second cycle dispatched at the continuation's id
+ok    the loop dispatched once per cycle
+ok    session A ends the second cycle RESUMED
+ok    A tracks the newest continuation
+ok    the abandoned original id was never resumed twice more
+ok    the second attempt records its own command
+
+== pass 3: the retired commands are gone
 ok    ccresu reset is an unknown command
 ok    ccresu sessions clear is an unknown subcommand
 
-PASSED: the background session was stopped, resumed and verified end to end
+PASSED: the dispatched job was followed, verified, and the loop came round again

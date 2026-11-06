@@ -275,7 +275,7 @@ type Step = {
 
 const STOP_RESUME_STEPS: readonly Step[] = [
   {
-    command: ['claude -p --resume <id>', '--output-format json "<message>"'],
+    command: ['claude --resume <id> --bg', '"<message>"'],
     note: [
       "refused: the session is still attached",
       "to Claude Code's background agent",
@@ -289,10 +289,10 @@ const STOP_RESUME_STEPS: readonly Step[] = [
     ],
   },
   {
-    command: ['claude -p --resume <id>', '--output-format json "<message>"'],
+    command: ['claude --resume <id> --bg', '"<message>"'],
     note: [
       "byte-identical arguments, same attempt:",
-      "the result becomes the attempt's result",
+      "the job it reports becomes the attempt's result",
     ],
   },
 ];
@@ -417,7 +417,7 @@ function StopThenResume({ titleId, descriptionId, label, description }: DiagramP
         fontSize="9.5"
         fill="var(--muted-foreground)"
       >
-        verified: same session id, transcript grew
+        verified: continuation named, transcript grew
       </text>
     </svg>
   );

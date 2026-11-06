@@ -27,7 +27,10 @@ describe("content integrity", () => {
   });
 
   it("documents the verified resume command, not a guessed one", () => {
-    expect(text).toContain("claude -p --resume");
+    expect(text).toContain("claude --resume <session-id> --bg");
+    // The retired print-mode invocation must not be advertised anywhere. The
+    // probe that shows why it is retired is quoted for the reader, not offered.
+    expect(text).not.toContain('claude -p --resume <session-id> --output-format json');
     expect(text).toContain("claude agents --json");
     expect(text).not.toContain("claude --resume-fork");
   });
@@ -49,22 +52,24 @@ describe("content integrity", () => {
     );
     // The vector that is executed, in that order, message last.
     expect(code).toContain(
-      '"-p", "--resume", sessionID, "--output-format", "json", message',
+      '"--resume", sessionID, "--bg", message',
     );
     // The audit preview must put the message where the real one goes: last.
     expect(code + JSON.stringify(doc?.blocks)).toContain(
-      "--output-format json <N-byte continuation message>",
+      "--bg <N-byte continuation message>",
     );
     expect(code + JSON.stringify(doc?.blocks)).toContain("TestResumeArgsExact");
   });
 
-  it("documents that a resume is never dispatched with --bg", () => {
+  it("documents why the resume no longer passes -p", () => {
     const doc = getDoc("recovery");
     const body = JSON.stringify(doc?.blocks ?? []);
 
-    expect(body).toContain("Why the resume never asks for `--bg`");
+    expect(body).toContain("Why the resume no longer passes `-p`");
+    // The probe that settled it is kept: -p and --bg are mutually exclusive.
     expect(body).toContain("--bg and --print conflict");
-    expect(body).toContain("TestResumeArgsNeverPassBackground");
+    expect(body).toContain("TestResumeArgsExact");
+    expect(body).not.toContain("TestResumeArgsNeverPassBackground");
   });
 
   it("narrates the background-agent recovery and the operator reset", () => {
@@ -74,9 +79,11 @@ describe("content integrity", () => {
     expect(body).toContain("DISCOVERED");
     expect(body).toContain("ccresu retry");
     expect(body).toContain("keeps the attempt row");
-    // The reproduce-then-fix contrast is documented, not just the happy path.
-    expect(body).toContain("--pre-fix");
-    expect(body).toContain("00692e3");
+    // The loop is documented, not just the happy path: the second cycle
+    // resumes the continuation rather than the abandoned original id.
+    expect(body).toContain("continuation");
+    expect(body).toContain("backgrounded");
+    expect(body).not.toContain("--pre-fix");
   });
 
   it("keeps the site on the GitHub Pages base path", () => {

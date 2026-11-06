@@ -93,8 +93,8 @@ describe("documentation", () => {
     ).toBeInTheDocument();
 
     const body = document.body.textContent ?? "";
-    expect(body).toContain('"-p", "--resume", sessionID, "--output-format", "json", message');
-    expect(body).toContain("--output-format json <N-byte continuation message>");
+    expect(body).toContain('"--resume", sessionID, "--bg", message');
+    expect(body).toContain("--bg <N-byte continuation message>");
     expect(body).toContain("claude stop <job-id>");
   });
 

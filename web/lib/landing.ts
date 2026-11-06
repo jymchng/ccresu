@@ -42,14 +42,14 @@ export const features: readonly Feature[] = [
     icon: Cpu,
     title: "Resumes the same session",
     description:
-      "Runs the documented `claude -p --resume <session-id>` with a continuation message. No forking, no new conversation, no keystroke injection.",
+      "Dispatches the documented `claude --resume <session-id> --bg <message>` and follows the job it creates. No forking, no new conversation, no keystroke injection.",
     detail: "Conversation history, working directory and active goal are preserved.",
   },
   {
     icon: CircleCheckBig,
     title: "Proves the resume happened",
     description:
-      "A launch is not a recovery. ccresu verifies the session id is unchanged and the transcript grew before it records RESUMED.",
+      "A dispatch is not a recovery. ccresu waits for the job to stop working, records the continuation it reports, and requires that continuation's transcript to grow before it records RESUMED.",
     detail: "Verification timeout and health checks are configurable.",
   },
   {
@@ -111,12 +111,12 @@ export const workflow: readonly WorkflowStep[] = [
     title: "Resume",
     command: "ccresu recover <session-id>",
     description:
-      "After the reset, checks the session and the limit, then resumes with `claude -p --resume` in the original working directory.",
+      "After the reset, checks the session and the limit, then dispatches `claude --resume <id> --bg` in the original working directory.",
   },
   {
     title: "Verify",
     command: "ccresu status",
     description:
-      "Confirms the same session id still exists with a longer transcript before recording RESUMED, and notifies you if Telegram is configured.",
+      "Follows the job until it stops working, confirms the continuation's transcript grew, records RESUMED, and notifies you if Telegram is configured.",
   },
 ];

@@ -42,7 +42,7 @@ export const telegramDoc: DocPage = {
         ["limit detected", "A usage-limit banner was matched and recorded."],
         ["waiting", "The session is waiting for its reset time (off by default: it is the noisiest event)."],
         ["recovery started", "A resume attempt is about to run."],
-        ["recovery success", "The resume was verified: same session id, longer transcript."],
+        ["recovery success", "The resume was verified: the job named its continuation and that continuation's transcript grew."],
         ["recovery failure", "An attempt failed and another one is scheduled."],
         ["permanent failure", "The attempt budget is spent or the error is not retryable."],
         ["session completed", "The session finished normally, so no recovery is needed."],

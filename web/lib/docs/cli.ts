@@ -91,7 +91,7 @@ export const cliDoc: DocPage = {
       kind: "note",
       tone: "info",
       title: "A background session is stopped, not abandoned",
-      text: "When `claude -p --resume` refuses because the session is still attached to Claude Code's background agent (`That session is running in the background (837eaaea) …`), ccresu runs `claude stop <job-id>` — the eight lower-case hex job name the refusal itself prints (`837eaaea`), not the session UUID; `claude stop` resolves job names only and answers a UUID with `No job matching` and exit 1 — and repeats the identical resume once inside the same attempt. The conversation is kept — same session id, same transcript — and the stop is logged rather than recorded as the attempt's command. If the stop fails, or the second resume refuses again, the original error is reported unchanged.",
+      text: "When `claude --resume <id> --bg` refuses because the session is still attached to Claude Code's background agent (`That session is running in the background (837eaaea) …`), ccresu runs `claude stop <job-id>` — the eight lower-case hex job name the refusal itself prints (`837eaaea`), not the session UUID; `claude stop` resolves job names only and answers a UUID with `No job matching` and exit 1 — and repeats the identical dispatch once inside the same attempt. The conversation is kept — the same transcript, continued by the job under its own session id — and the stop is logged rather than recorded as the attempt's command. If the stop fails, or the second dispatch refuses again, the original error is reported unchanged.",
     },
     {
       kind: "note",
