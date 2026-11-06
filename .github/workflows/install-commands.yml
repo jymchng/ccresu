@@ -124,9 +124,12 @@ jobs:
           bash -c "$command"
           installed="$("$HOME/.local/bin/ccresu" version)"
           printf 'installed: %s\n' "$installed"
-          version="$(printf '%s\n' "$installed" | awk '{print $2}')"
+          # `ccresu version` prints five lines; the version is the one on the
+          # first. Taking field 2 of every line would collect the commit, the
+          # build date, the Go version and the platform as well.
+          version="$(printf '%s\n' "$installed" | sed -n '1s/^ccresu //p')"
           if [ "$version" != "$pinned" ]; then
-            printf 'the pinned one-liner installed %s, expected %s\n' "$version" "$pinned" >&2
+            printf 'the pinned one-liner installed %s, expected %s\n' "${version:-nothing recognisable}" "$pinned" >&2
             exit 1
           fi
 
