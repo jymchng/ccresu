@@ -764,7 +764,7 @@ func TestServeRunsUntilTheSignalArrives(t *testing.T) {
 	done := make(chan int, 1)
 	go func() { done <- h.run("serve") }()
 
-	waitForRun(t, func() bool {
+	waitForRun(t, "serve to start its server", func() bool {
 		server.mu.Lock()
 		defer server.mu.Unlock()
 		return server.runs == 1
@@ -865,19 +865,25 @@ func TestGlobalFlagParsing(t *testing.T) {
 	}
 }
 
-// waitForRun blocks until condition holds, failing the test after two seconds.
-func waitForRun(t *testing.T, condition func() bool) {
+// waitForRunBudget is how long waitForRun waits before failing. It is
+// deliberately generous: the poll only has to outlast a scheduling stall on a
+// loaded machine, not the work being awaited. The condition still decides pass
+// or fail, so a larger budget cannot turn a broken daemon into a passing test —
+// a daemon that never wakes fails here however long the budget is.
+const waitForRunBudget = 15 * time.Second
+
+// waitForRun blocks until condition holds, failing the test when the budget runs
+// out. want names what is being awaited, so a timeout reports which condition
+// never happened and how long it waited; a bare deadline cannot be told apart
+// from a real failure once it reaches CI.
+func waitForRun(t *testing.T, want string, condition func() bool) {
 	t.Helper()
-	deadline := time.After(2 * time.Second)
-	for {
-		if condition() {
-			return
+	start := time.Now()
+	for !condition() {
+		if elapsed := time.Since(start); elapsed >= waitForRunBudget {
+			t.Fatalf("condition %q was not met within %s", want, elapsed.Round(time.Millisecond))
 		}
-		select {
-		case <-deadline:
-			t.Fatal("condition was not met within two seconds")
-		case <-time.After(time.Millisecond):
-		}
+		time.Sleep(time.Millisecond)
 	}
 }
 

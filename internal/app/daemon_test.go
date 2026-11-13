@@ -408,10 +408,10 @@ func TestDaemonRunStopsWhenTheContextEnds(t *testing.T) {
 
 	// The first pass runs immediately: a daemon must not wait an interval before
 	// looking at anything.
-	waitForRun(t, func() bool { return daemon.Steps() >= 1 })
+	waitForRun(t, "the daemon to run its first pass", func() bool { return daemon.Steps() >= 1 })
 
 	h.clock.Advance(2 * time.Minute)
-	waitForRun(t, func() bool { return daemon.Steps() >= 2 })
+	waitForRun(t, "the daemon to wake on the advanced clock", func() bool { return daemon.Steps() >= 2 })
 
 	cancel()
 	select {
@@ -441,7 +441,7 @@ func TestDaemonRunReportsADrainFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- daemon.Run(ctx) }()
-	waitForRun(t, func() bool { return h.notifier.runCount() == 1 })
+	waitForRun(t, "the notifier to drain once", func() bool { return h.notifier.runCount() == 1 })
 	cancel()
 
 	select {
@@ -559,7 +559,7 @@ func TestCmdDaemonStopsOnASignal(t *testing.T) {
 	h := newHarness(t)
 	done := make(chan int, 1)
 	go func() { done <- h.run("daemon") }()
-	waitForRun(t, func() bool { return strings.Contains(h.stdout.String(), "daemon started") })
+	waitForRun(t, "the daemon command to report that it started", func() bool { return strings.Contains(h.stdout.String(), "daemon started") })
 	h.signals <- os.Interrupt
 
 	select {
