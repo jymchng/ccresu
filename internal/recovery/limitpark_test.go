@@ -3,6 +3,7 @@ package recovery
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -205,5 +206,92 @@ func TestRefusalBannerPrefersTheCLIsOwnOutput(t *testing.T) {
 				t.Errorf("refusalBanner = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestARefusedAttemptsOwnWritesDoNotProveAResume pins the baseline against the
+// other half of the misreport. `claude -p --resume` appends its refusal to the
+// transcript before exiting, so the file grows even though nothing was resumed.
+// If that growth were measured against the pre-attempt snapshot, the next status
+// check would take the "the session had already resumed after the limit reset"
+// shortcut and report a refused resume as a success.
+//
+// The failed attempt's own lines are therefore absorbed into the stored
+// baseline, and only growth beyond them can prove the session continued by
+// itself.
+func TestARefusedAttemptsOwnWritesDoNotProveAResume(t *testing.T) {
+	store := newTestStore(t)
+	provider := &providerStub{}
+	// The transcript carries the base conversation plus one line for every
+	// refused attempt, because the CLI appends its refusal before exiting. Once
+	// a resume has been invoked the session also still looks running. That is
+	// exactly the shape that used to be read as "it resumed on its own": growth
+	// since the pre-attempt snapshot, with nothing else changed.
+	provider.statusFn = func(_ int, sessionID string) (claude.SessionStatus, error) {
+		resumes := provider.resumeCount()
+		lines := int64(100 + resumes)
+		status := statusFor(sessionID, lines, lines*100)
+		status.Running = resumes > 0
+		return status, nil
+	}
+	provider.resumeFn = func(string, string) (claude.ResumeResult, error) {
+		return claude.ResumeResult{}, refusedResume()
+	}
+	manager := testManager(t, store, provider, func(cfg *Config) {
+		cfg.LimitPark = func(context.Context, string, string) (Wait, error) {
+			return Wait{}, nil
+		}
+	})
+	session := seedSession(t, store, recoverableSession("1347e5db-a9fb-42eb-b92a-82256bd5aa68"))
+
+	if _, err := manager.Recover(context.Background(), session.ID); err == nil {
+		t.Fatalf("first Recover err = nil, want the refusal")
+	}
+	stored, err := store.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("read session: %v", err)
+	}
+	if stored.TranscriptLines != 101 {
+		t.Errorf("baseline lines = %d, want 101: the refused attempt's own write must be absorbed",
+			stored.TranscriptLines)
+	}
+
+	// The reset arrives, exactly as the daemon's schedule would announce it.
+	if _, err := store.TransitionSession(context.Background(), session.ID, StateResetTimeReached,
+		"the scheduled reset time has arrived", 0); err != nil {
+		t.Fatalf("move to RESET_TIME_REACHED: %v", err)
+	}
+
+	outcome, err := manager.Recover(context.Background(), session.ID)
+	if err == nil {
+		t.Fatalf("second Recover err = nil, want the second refusal; outcome = %+v", outcome)
+	}
+	if outcome.Resumed {
+		t.Errorf("outcome.Resumed = true; the only growth was the refused attempt's own output")
+	}
+	stored, err = store.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("read session: %v", err)
+	}
+	if stored.State != StateWaitingForReset {
+		t.Errorf("state = %s, want %s", stored.State, StateWaitingForReset)
+	}
+
+	transitions, err := store.ListTransitions(context.Background(), session.ID, 0)
+	if err != nil {
+		t.Fatalf("list transitions: %v", err)
+	}
+	for _, transition := range transitions {
+		if strings.Contains(transition.Reason, "already resumed") {
+			t.Errorf("a refused resume was recorded as an independent resumption: %s -> %s (%s)",
+				transition.FromState, transition.ToState, transition.Reason)
+		}
+	}
+
+	provider.mu.Lock()
+	resumes := len(provider.resumes)
+	provider.mu.Unlock()
+	if resumes != 2 {
+		t.Errorf("resumes = %d, want 2: the pass after the reset must ask again", resumes)
 	}
 }

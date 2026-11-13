@@ -522,6 +522,17 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 	class := Classify(cause)
 	outcome.Verification = verification
 
+	// A resume that failed may still have written to the transcript: the CLI
+	// appends its refusal, its error or a partial turn before exiting. Those
+	// lines are the attempt's own work, not evidence that the conversation
+	// continued by itself, so the stored baseline is advanced past them before
+	// anything is decided. Otherwise the next status check sees growth it
+	// caused itself and takes the "the session had already resumed after the
+	// limit reset" shortcut, which reports a refused resume as a success.
+	if attempt.ID != 0 {
+		m.absorbAttemptWrites(ctx, outcome.SessionID)
+	}
+
 	// A refusal is not a failed attempt. The CLI ran, said the usage window has
 	// not reset, and named when it will: the whole answer is to park the session
 	// until then. It is handled before the retry policy is consulted so no
@@ -951,6 +962,42 @@ func grew(baseline Baseline, status claude.SessionStatus) bool {
 		return false
 	}
 	return status.Transcript.Lines > baseline.TranscriptLines
+}
+
+// absorbAttemptWrites advances the stored transcript baseline past whatever the
+// failed attempt itself wrote.
+//
+// A resume that fails still touches the transcript: the CLI appends its
+// refusal, its error, or the beginning of a turn it then abandoned. Those lines
+// belong to the attempt, not to the conversation continuing by itself, so the
+// baseline is moved to the post-attempt observation and the "the session had
+// already resumed after the limit reset" shortcut keeps meaning what it says.
+//
+// The re-read is deliberately a fresh status rather than an estimate: ccresu
+// cannot know how many lines a refused command wrote, and guessing would either
+// hide real growth or keep counting the attempt's own. A re-read that fails
+// leaves the old baseline in place and says so, because a stale baseline that is
+// reported is better than one that is silently rewritten.
+func (m *Manager) absorbAttemptWrites(ctx context.Context, sessionID string) {
+	status, err := m.provider.GetSessionStatus(ctx, sessionID)
+	if err != nil {
+		m.log.Warn("re-read the transcript after a failed attempt",
+			"session", sessionID, "error", err)
+		return
+	}
+	if status.Transcript.Lines <= 0 {
+		// Nothing to absorb: an unreadable transcript proves nothing either way.
+		return
+	}
+	path := status.Transcript.Path
+	if path == "" {
+		path = status.Session.TranscriptPath
+	}
+	if err := m.store.SetSessionTranscriptMetrics(ctx, sessionID, path,
+		status.Transcript.Size, status.Transcript.Lines); err != nil {
+		m.log.Warn("record the transcript after a failed attempt",
+			"session", sessionID, "error", err)
+	}
 }
 
 // commandPreview renders the resume command recorded with an attempt.

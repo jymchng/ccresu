@@ -387,3 +387,46 @@ func TestARefusedResumeIsRecordedAsAWaitAtTheManager(t *testing.T) {
 		t.Errorf("state = %s, want a waiting state (WAITING_FOR_RESET)\n%s", session.State, got)
 	}
 }
+
+// TestARefusedAttemptsOwnWritesAreNotProofOfResumption drives the second half of
+// the misreport through the daemon. A refused `claude -p --resume` still appends
+// its refusal to the transcript, so the file has grown by the time the reset
+// arrives. That growth is the attempt's own: the pass after the reset must ask
+// again, not declare the session RESUMED / "already resumed" and stop.
+func TestARefusedAttemptsOwnWritesAreNotProofOfResumption(t *testing.T) {
+	// grow makes every refused attempt append a line to the transcript, which is
+	// what the real CLI does when it prints its banner into the conversation.
+	f := newUsageLimitFixture(t, true)
+	f.steps(t, 5)
+
+	before := f.session(t)
+	if before.State != storage.StateWaitingForReset {
+		t.Fatalf("state = %s, want %s before the reset\n%s",
+			before.State, storage.StateWaitingForReset, f.describe(t))
+	}
+	if lines := before.TranscriptLines; lines != 8471 {
+		t.Errorf("baseline lines = %d, want 8471: the refused attempt's own write must be absorbed", lines)
+	}
+
+	// The reset instant the banner named arrives.
+	f.h.clock.Advance(22 * time.Hour)
+	f.steps(t, 1)
+
+	got := f.describe(t)
+	session := f.session(t)
+	if session.State == storage.StateResumed {
+		t.Errorf("state = RESUMED, want the wait: the only growth is the refused attempt's own output\n%s", got)
+	}
+	if session.State != storage.StateWaitingForReset {
+		t.Errorf("state = %s, want %s\n%s", session.State, storage.StateWaitingForReset, got)
+	}
+	if out := f.inspect(t); strings.Contains(out, "already resumed") {
+		t.Errorf("inspect claims the session resumed on its own:\n%s", out)
+	}
+	if resumes := f.script.resumeCount(); resumes != 2 {
+		t.Errorf("resume invocations = %d, want 2: the pass after the reset must ask again\n%s", resumes, got)
+	}
+	if attempts := len(f.attempts(t)); attempts != 2 {
+		t.Errorf("attempts = %d, want 2\n%s", attempts, got)
+	}
+}
