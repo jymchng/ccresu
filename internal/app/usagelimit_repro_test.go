@@ -338,3 +338,47 @@ func TestTheRefusedResumeIsCurrentlyMisreported(t *testing.T) {
 		t.Errorf("latest usage limit err = %v, want %v (nothing recorded today)", err, storage.ErrNotFound)
 	}
 }
+
+// TestARefusedResumeIsRecordedAsAMissingBinary pins the same defect one layer
+// down, at the manager, so the fix is not mistaken for a daemon-loop patch: a
+// single Recover call on a rediscovered session turns the CLI's usage-limit
+// refusal into "claude executable unavailable", which the retry policy then
+// classifies as permanent.
+//
+// Like the test above it records today's behaviour and is inverted once the
+// refusal is recognised as a wait.
+func TestARefusedResumeIsRecordedAsAMissingBinary(t *testing.T) {
+	f := newUsageLimitFixture(t, false)
+	ctx := context.Background()
+
+	// DISCOVERED is where a refused attempt leaves a session today, and where the
+	// daemon rediscovers it; Recover accepts it directly.
+	if _, err := f.h.store.TransitionSession(ctx, f.id, storage.StateDiscovered,
+		"returned to discovery for the reproduction", 0); err != nil {
+		t.Fatalf("move to DISCOVERED: %v", err)
+	}
+
+	outcome, err := f.h.rt.Recovery.Recover(ctx, f.id)
+	if err == nil {
+		t.Fatalf("Recover err = nil, want the refusal; outcome = %+v", outcome)
+	}
+	got := f.describe(t)
+
+	if resumes := f.script.resumeCount(); resumes != 1 {
+		t.Fatalf("resume invocations = %d, want 1 for one Recover call\n%s", resumes, got)
+	}
+	session := f.session(t)
+	if !strings.Contains(session.LastError, "claude: claude executable unavailable") {
+		t.Errorf("last error = %q, want today's misreport\n%s", session.LastError, got)
+	}
+	if session.State != storage.StateDiscovered {
+		t.Errorf("state = %s, want today's %s\n%s", session.State, storage.StateDiscovered, got)
+	}
+	if class := recovery.Classify(err); class != recovery.ClassPermanent {
+		t.Errorf("class = %s, want today's %s (a refused resume must not be permanent)\n%s",
+			class, recovery.ClassPermanent, got)
+	}
+	if recovery.Retryable(err) {
+		t.Errorf("Retryable = true, want today's false for a permanent classification")
+	}
+}
