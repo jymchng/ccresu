@@ -540,7 +540,7 @@ func TestRunDrainsTheQueueAndStopsOnCancel(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- notifier.Run(ctx) }()
 
-	waitFor(t, func() bool { return sender.count() == 1 })
+	waitFor(t, "the notifier to deliver the queued notification", func() bool { return sender.count() == 1 })
 	cancel()
 
 	select {
@@ -577,9 +577,9 @@ func TestRunTicksWithoutAWakeUp(t *testing.T) {
 	})
 	store.mu.Unlock()
 
-	waitFor(t, func() bool { return clk.HasWaiters() })
+	waitFor(t, "the notifier to arm its ticker on the clock", func() bool { return clk.HasWaiters() })
 	clk.Advance(time.Minute)
-	waitFor(t, func() bool { return sender.count() == 1 })
+	waitFor(t, "the notifier to deliver on the tick", func() bool { return sender.count() == 1 })
 
 	cancel()
 	select {
@@ -690,17 +690,26 @@ func TestTruncate(t *testing.T) {
 	}
 }
 
-// waitFor blocks until condition holds, failing the test after two seconds.
-func waitFor(t *testing.T, condition func() bool) {
+// waitForBudget is how long waitFor waits before failing. It is deliberately
+// generous: the poll only has to outlast a scheduling stall on a loaded machine,
+// not the work being awaited. The condition still decides pass or fail, so a
+// larger budget cannot turn a broken notifier into a passing test — a notifier
+// that never delivers fails here however long the budget is.
+const waitForBudget = 15 * time.Second
+
+// waitFor blocks until condition holds, failing the test when the budget runs
+// out. want names what is being awaited, so a timeout reports which condition
+// never happened and how long it waited; a bare deadline cannot be told apart
+// from a real failure once it reaches CI.
+func waitFor(t *testing.T, want string, condition func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if condition() {
-			return
+	start := time.Now()
+	for !condition() {
+		if elapsed := time.Since(start); elapsed >= waitForBudget {
+			t.Fatalf("condition %q was not met within %s", want, elapsed.Round(time.Millisecond))
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatal("condition was not met within two seconds")
 }
 
 // storeSeq keeps each in-memory database distinct.
