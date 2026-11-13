@@ -161,6 +161,9 @@ func newUsageLimitFixture(t *testing.T, grow bool) *usageLimitFixture {
 		MaxAttempts:         3,
 		VerificationTimeout: -1,
 		HealthCheckInterval: -1,
+		// The production seam: the refusal is planned by the detector and the
+		// scheduler, exactly as the daemon does it.
+		LimitPark: limitParker(h.store, h.rt.Scheduler, h.rt.Detector, h.clock, nil),
 	})
 	if err != nil {
 		t.Fatalf("recovery manager: %v", err)
@@ -291,7 +294,9 @@ func TestARefusedResumeParksTheSessionUntilTheNextReset(t *testing.T) {
 
 	out := f.inspect(t)
 	for _, want := range []string{
-		"state:        WAITING_FOR_RESET",
+		// The padding is `field`'s: "state:" is padded to 14 columns, then one
+		// space, so the value starts in column 16.
+		"state:         WAITING_FOR_RESET",
 		"Latest usage limit",
 		"10am (Europe/Berlin)",
 		"waiting for the usage limit to reset",

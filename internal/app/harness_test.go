@@ -206,20 +206,6 @@ func newHarness(t *testing.T) *harness {
 	}
 
 	provider := claude.NewFakeProvider()
-	manager, err := recovery.New(recovery.Config{
-		Store:       store,
-		Provider:    provider,
-		Clock:       clk,
-		Enabled:     true,
-		MaxAttempts: 3,
-		// A fake clock never advances on its own, so the verification poll must
-		// be "check once" instead of "wait for the transcript to grow".
-		VerificationTimeout: -1,
-		HealthCheckInterval: -1,
-	})
-	if err != nil {
-		t.Fatalf("recovery manager: %v", err)
-	}
 	sched, err := scheduler.New(scheduler.Config{
 		Clock: clk,
 		Store: scheduler.NewStorageStore(store),
@@ -230,6 +216,24 @@ func newHarness(t *testing.T) *harness {
 	limitDetector, err := detector.New(detector.Options{Clock: clk})
 	if err != nil {
 		t.Fatalf("detector: %v", err)
+	}
+	manager, err := recovery.New(recovery.Config{
+		Store:       store,
+		Provider:    provider,
+		Clock:       clk,
+		Enabled:     true,
+		MaxAttempts: 3,
+		// A fake clock never advances on its own, so the verification poll must
+		// be "check once" instead of "wait for the transcript to grow".
+		VerificationTimeout: -1,
+		HealthCheckInterval: -1,
+		// The daemon always supplies the refusal parker, so the harness does too:
+		// a refusal that is not planned would leave the session waiting with no
+		// schedule, which is not a state production can reach.
+		LimitPark: limitParker(store, sched, limitDetector, clk, nil),
+	})
+	if err != nil {
+		t.Fatalf("recovery manager: %v", err)
 	}
 
 	cfg := config.Defaults()

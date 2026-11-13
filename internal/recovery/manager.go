@@ -84,6 +84,11 @@ type Config struct {
 	// LimitRecheck is an optional pre-resume limit check. Nil means the
 	// scheduler already confirmed the reset.
 	LimitRecheck LimitRecheck
+	// LimitPark records a usage-limit refusal and plans the wait until the
+	// reset. Nil means a refusal is still reported as a wait, but no schedule
+	// and no usage-limit row are written, so the wait ends only when something
+	// else re-plans it; the daemon always supplies one.
+	LimitPark LimitPark
 }
 
 // Manager runs recoveries for one process.
@@ -104,6 +109,7 @@ type Manager struct {
 	message     string
 	verifier    Verifier
 	limitCheck  LimitRecheck
+	limitPark   LimitPark
 
 	locks *sessionLocks
 	sem   chan struct{}
@@ -176,6 +182,7 @@ func New(cfg Config) (*Manager, error) {
 		message:     message,
 		verifier:    verifier,
 		limitCheck:  cfg.LimitRecheck,
+		limitPark:   cfg.LimitPark,
 		locks:       newSessionLocks(),
 		sem:         make(chan struct{}, maxConcurrent),
 	}, nil
@@ -236,6 +243,14 @@ type Outcome struct {
 	// Delay is how long the caller should wait before the next attempt. It is
 	// set only when State is RETRY_WAIT.
 	Delay time.Duration
+	// Wait is how long the session must wait before ccresu looks again. It is
+	// set only when State is WAITING_FOR_RESET because a resume was refused by a
+	// usage limit: the refusal names when the work may continue, so there is
+	// nothing to retry in the meantime.
+	Wait time.Duration
+	// WaitUntil is the instant Wait ends: the reset the refusal named, or the
+	// first poll when it named none. Zero when no wait was planned.
+	WaitUntil time.Time
 	// Resumed reports that the original conversation was proven to continue,
 	// either because ccresu resumed it or because it had already resumed.
 	Resumed bool
@@ -507,6 +522,14 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 	class := Classify(cause)
 	outcome.Verification = verification
 
+	// A refusal is not a failed attempt. The CLI ran, said the usage window has
+	// not reset, and named when it will: the whole answer is to park the session
+	// until then. It is handled before the retry policy is consulted so no
+	// backoff can turn a refusal into another resume.
+	if class == ClassLimitInForce {
+		return m.park(ctx, state, outcome, attempt, cause)
+	}
+
 	// A zero attempt id means no resume was issued: the failure came from a
 	// pre-resume check, and the budget it did not spend is read back from the
 	// store instead of copied from a row that does not exist.
@@ -573,6 +596,52 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 	_ = m.store.SetSessionError(ctx, outcome.SessionID, truncate(cause.Error()))
 	outcome.State = state.current
 	return outcome, &cycleEndError{SessionID: outcome.SessionID, State: target, Cause: cause}
+}
+
+// park waits out a usage-limit refusal instead of retrying it.
+//
+// The refusal is the most informative failure ccresu can get: the CLI ran, the
+// conversation is intact, and the banner usually names the instant the work may
+// continue. So the session is parked in WAITING_FOR_RESET, the banner is what it
+// records, and the wait is planned by the injected parker — the detector
+// interprets the banner, the scheduler persists the wait, and the usage_limits
+// row records what the CLI said. No attempt budget is consulted: what ends this
+// wait is the reset, not a count of tries.
+//
+// A parker that cannot plan does not turn the refusal back into a retry. The
+// session still waits, with the banner as its last error, because resuming it
+// again would ask the same question a second time; the failure is logged, and
+// the next discovery of the session re-plans it.
+func (m *Manager) park(ctx context.Context, state *stateWalker, outcome Outcome,
+	attempt storage.RecoveryAttempt, cause error) (Outcome, error) {
+	banner := refusalBanner(cause)
+	var wait Wait
+	if m.limitPark == nil {
+		m.log.Warn("a resume was refused by a usage limit but no parker is configured; waiting without a schedule",
+			"session", outcome.SessionID)
+	} else if planned, err := m.limitPark(ctx, outcome.SessionID, banner); err != nil {
+		m.log.Warn("plan the wait after a usage-limit refusal",
+			"session", outcome.SessionID, "error", err)
+	} else {
+		wait = planned
+	}
+
+	reason := "the usage limit has not reset yet: " + truncate(banner)
+	if err := state.move(StateWaitingForReset, reason, attempt.ID); err != nil {
+		return Outcome{SessionID: outcome.SessionID, State: state.current}, err
+	}
+	_ = m.store.SetSessionError(ctx, outcome.SessionID, truncate(banner))
+	outcome.State = state.current
+	outcome.Wait = wait.Delay
+	outcome.WaitUntil = wait.At
+	return outcome, &LimitInForceError{
+		SessionID: outcome.SessionID,
+		Banner:    banner,
+		ResetAt:   wait.At,
+		Known:     wait.Known,
+		Wait:      wait.Delay,
+		Cause:     cause,
+	}
 }
 
 // preResumeTarget is where a failure reported before the resume is issued ends.

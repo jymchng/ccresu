@@ -405,6 +405,13 @@ func (d *Daemon) actOnSchedules(ctx context.Context) error {
 			UsageLimitID: sched.UsageLimitID,
 		})
 		switch {
+		case errors.Is(recoverErr, recovery.ErrLimitNotCleared):
+			// The resume was refused because the limit is still in force, and the
+			// manager has already recorded the refusal and saved the wait it
+			// names. Advancing here would overwrite that schedule with the stale
+			// one this pass loaded, so the fresh wait is left alone.
+			rt.Log.Info("resume refused by the usage limit; waiting for the reset",
+				"session", sched.SessionID)
 		case recoverErr != nil && !errors.Is(recoverErr, recovery.ErrNotEligible):
 			// Keep the schedule and back off: the limit may not have cleared yet.
 			if _, err := rt.Scheduler.Advance(ctx, sched, now); err != nil {

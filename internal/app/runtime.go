@@ -136,12 +136,9 @@ func BuildRuntime(ctx context.Context, cfg *config.Config, clk clock.Clock, log 
 		return nil, err
 	}
 
-	manager, err := recoveryFromConfig(cfg, store, provider, clk, log)
-	if err != nil {
-		_ = store.Close()
-		return nil, err
-	}
-
+	// The scheduler and the detector are built first: the recovery manager takes
+	// the refusal parker, which needs both, so the manager cannot be assembled
+	// before the pieces that give it something to plan with.
 	sched, err := scheduler.FromConfig(cfg, clk, scheduler.NewStorageStore(store))
 	if err != nil {
 		_ = store.Close()
@@ -149,6 +146,13 @@ func BuildRuntime(ctx context.Context, cfg *config.Config, clk clock.Clock, log 
 	}
 
 	limitDetector, err := detectorFromConfig(cfg, clk)
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+
+	manager, err := recoveryFromConfig(cfg, store, provider, clk, log,
+		limitParker(store, sched, limitDetector, clk, log))
 	if err != nil {
 		_ = store.Close()
 		return nil, err
@@ -189,7 +193,7 @@ func BuildRuntime(ctx context.Context, cfg *config.Config, clk clock.Clock, log 
 //
 // The mapping is kept identical on purpose; TestRecoveryFromConfigMatches is the
 // guard against the two drifting apart.
-func recoveryFromConfig(cfg *config.Config, store *storage.Store, provider claude.SessionProvider, clk clock.Clock, log *slog.Logger) (*recovery.Manager, error) {
+func recoveryFromConfig(cfg *config.Config, store *storage.Store, provider claude.SessionProvider, clk clock.Clock, log *slog.Logger, park recovery.LimitPark) (*recovery.Manager, error) {
 	rec := cfg.Recovery
 	return recovery.New(recovery.Config{
 		Store:               store,
@@ -203,6 +207,7 @@ func recoveryFromConfig(cfg *config.Config, store *storage.Store, provider claud
 		ContinuationMessage: cfg.Claude.ContinuationMessage,
 		VerificationTimeout: rec.VerificationTimeout.Duration,
 		HealthCheckInterval: rec.HealthCheckInterval.Duration,
+		LimitPark:           park,
 	})
 }
 
