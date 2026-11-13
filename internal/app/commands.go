@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"runtime"
 	"strings"
 	"time"
@@ -217,6 +218,8 @@ func (a *App) cmdSessions(ctx context.Context, args []string) error {
 	fs := a.flags("sessions", sessionsUsage)
 	all := fs.Bool("all", false, "include disabled and settled sessions")
 	limit := fs.Int("limit", 0, "maximum sessions to list (0 means all)")
+	forceTUI := fs.Bool("tui", false, "open the interactive browser even when stdout is not a terminal")
+	noTUI := fs.Bool("no-tui", false, "print the table even when stdout is a terminal")
 	var states stringList
 	fs.Var(&states, "state", "only show this state (repeatable)")
 	if err := a.parseFlags(fs, args); err != nil {
@@ -227,6 +230,12 @@ func (a *App) cmdSessions(ctx context.Context, args []string) error {
 	}
 	if *limit < 0 {
 		return usagef("--limit must not be negative")
+	}
+	// Decided before the runtime is opened, so a contradictory pair of flags
+	// fails as a usage error instead of after touching the database.
+	useTUI, err := a.resolveSessionsUI(*forceTUI, *noTUI)
+	if err != nil {
+		return err
 	}
 
 	rt, release, err := a.openRuntime(ctx)
@@ -246,6 +255,12 @@ func (a *App) cmdSessions(ctx context.Context, args []string) error {
 			return usagef("unknown state %q", raw)
 		}
 		filter.States = append(filter.States, state)
+	}
+
+	if useTUI {
+		// The browser re-reads the store on every action, so it gets the filter
+		// rather than this already-loaded page.
+		return a.runSessionBrowser(ctx, rt, browserOptions{All: *all, States: filter.States, Limit: *limit})
 	}
 
 	sessions, err := rt.Store.ListSessions(ctx, filter)
@@ -408,7 +423,15 @@ func (a *App) inspectSession(ctx context.Context, command string, args []string)
 		return err
 	}
 	defer release()
+	return a.writeSessionDetail(ctx, rt, id, a.stdout)
+}
 
+// writeSessionDetail prints everything ccresu knows about one session to w.
+//
+// It is separated from inspectSession so the interactive sessions browser can
+// render the very same page: pressing Enter on a row shows this output rather
+// than a second, thinner view that could drift from `sessions status`.
+func (a *App) writeSessionDetail(ctx context.Context, rt *Runtime, id string, w io.Writer) error {
 	session, err := rt.Store.GetSession(ctx, id)
 	if err != nil {
 		return fmt.Errorf("session %s: %w", id, err)
@@ -440,7 +463,7 @@ func (a *App) inspectSession(ctx context.Context, command string, args []string)
 	next := recovery.NextAttemptFor(session, scheduleArg, now)
 
 	if a.json {
-		return a.writeJSON(a.stdout, map[string]any{
+		return a.writeJSON(w, map[string]any{
 			"session":      session,
 			"usage_limit":  optional(limitErr, limit),
 			"attempt":      optional(attemptErr, attempt),
@@ -450,77 +473,77 @@ func (a *App) inspectSession(ctx context.Context, command string, args []string)
 		})
 	}
 
-	a.field(a.stdout, "session", session.ID)
-	a.field(a.stdout, "state", session.State)
-	a.field(a.stdout, "enabled", yesNo(session.Enabled))
-	a.field(a.stdout, "recoverable", yesNo(session.Recoverable))
+	a.field(w, "session", session.ID)
+	a.field(w, "state", session.State)
+	a.field(w, "enabled", yesNo(session.Enabled))
+	a.field(w, "recoverable", yesNo(session.Recoverable))
 	if session.Reason != "" {
-		a.field(a.stdout, "reason", session.Reason)
+		a.field(w, "reason", session.Reason)
 	}
 	if session.LastError != "" {
-		a.field(a.stdout, "last error", session.LastError)
+		a.field(w, "last error", session.LastError)
 	}
-	a.field(a.stdout, "project", emptyDash(session.ProjectPath))
-	a.field(a.stdout, "transcript", emptyDash(session.TranscriptPath))
-	a.field(a.stdout, "type", session.Type)
-	a.field(a.stdout, "last seen", formatTime(session.LastSeenAt, loc))
+	a.field(w, "project", emptyDash(session.ProjectPath))
+	a.field(w, "transcript", emptyDash(session.TranscriptPath))
+	a.field(w, "type", session.Type)
+	a.field(w, "last seen", formatTime(session.LastSeenAt, loc))
 
 	// The next attempt is its own block, above the raw records, because it is the
 	// question an operator actually opens `inspect` to answer.
-	fmt.Fprintln(a.stdout, "")
-	fmt.Fprintln(a.stdout, "Next attempt")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Next attempt")
 	if next.Scheduled {
-		a.field(a.stdout, "at", formatTime(next.At, time.UTC)+" ("+recovery.HumanizeUntil(next.At, now)+")")
+		a.field(w, "at", formatTime(next.At, time.UTC)+" ("+recovery.HumanizeUntil(next.At, now)+")")
 	} else {
-		a.field(a.stdout, "at", "none")
+		a.field(w, "at", "none")
 	}
-	a.field(a.stdout, "why", next.Reason)
+	a.field(w, "why", next.Reason)
 
 	if limitErr == nil {
-		fmt.Fprintln(a.stdout, "")
-		fmt.Fprintln(a.stdout, "Latest usage limit")
-		a.field(a.stdout, "type", limit.LimitType)
-		a.field(a.stdout, "detected", formatTime(limit.DetectedAt, loc))
+		fmt.Fprintln(w, "")
+		fmt.Fprintln(w, "Latest usage limit")
+		a.field(w, "type", limit.LimitType)
+		a.field(w, "detected", formatTime(limit.DetectedAt, loc))
 		reset := "-"
 		if !limit.ResetAt.IsZero() {
 			reset = formatTime(limit.ResetAt, loc)
 		}
-		a.field(a.stdout, "resets", reset)
+		a.field(w, "resets", reset)
 		if limit.ResetRaw != "" {
-			a.field(a.stdout, "raw", limit.ResetRaw)
+			a.field(w, "raw", limit.ResetRaw)
 		}
-		a.field(a.stdout, "confidence", fmt.Sprintf("%.2f", limit.Confidence))
+		a.field(w, "confidence", fmt.Sprintf("%.2f", limit.Confidence))
 	}
 
 	if attemptErr == nil {
-		fmt.Fprintln(a.stdout, "")
-		fmt.Fprintln(a.stdout, "Latest attempt")
-		a.field(a.stdout, "number", attempt.AttemptNumber)
-		a.field(a.stdout, "state", attempt.State)
-		a.field(a.stdout, "started", formatTime(attempt.StartedAt, loc))
-		a.field(a.stdout, "finished", formatTime(attempt.FinishedAt, loc))
+		fmt.Fprintln(w, "")
+		fmt.Fprintln(w, "Latest attempt")
+		a.field(w, "number", attempt.AttemptNumber)
+		a.field(w, "state", attempt.State)
+		a.field(w, "started", formatTime(attempt.StartedAt, loc))
+		a.field(w, "finished", formatTime(attempt.FinishedAt, loc))
 		if attempt.Command != "" {
-			a.field(a.stdout, "command", attempt.Command)
+			a.field(w, "command", attempt.Command)
 		}
 		if attempt.Error != "" {
-			a.field(a.stdout, "error", attempt.Error)
+			a.field(w, "error", attempt.Error)
 		}
 	}
 
 	if scheduleErr == nil {
-		fmt.Fprintln(a.stdout, "")
-		fmt.Fprintln(a.stdout, "Schedule")
-		a.field(a.stdout, "due", formatTime(schedule.DueAt(), loc))
-		a.field(a.stdout, "unknown reset", yesNo(schedule.Unknown))
-		a.field(a.stdout, "polls", schedule.Attempts)
+		fmt.Fprintln(w, "")
+		fmt.Fprintln(w, "Schedule")
+		a.field(w, "due", formatTime(schedule.DueAt(), loc))
+		a.field(w, "unknown reset", yesNo(schedule.Unknown))
+		a.field(w, "polls", schedule.Attempts)
 		if schedule.ResetRaw != "" {
-			a.field(a.stdout, "phrase", schedule.ResetRaw)
+			a.field(w, "phrase", schedule.ResetRaw)
 		}
 	}
 
 	if len(transitions) > 0 {
-		fmt.Fprintln(a.stdout, "")
-		fmt.Fprintln(a.stdout, "Recent transitions")
+		fmt.Fprintln(w, "")
+		fmt.Fprintln(w, "Recent transitions")
 		rows := make([][]string, 0, len(transitions))
 		for _, transition := range transitions {
 			rows = append(rows, []string{
@@ -529,7 +552,7 @@ func (a *App) inspectSession(ctx context.Context, command string, args []string)
 				truncateText(transition.Reason, 48),
 			})
 		}
-		a.table(a.stdout, []string{"WHEN", "TRANSITION", "REASON"}, rows)
+		a.table(w, []string{"WHEN", "TRANSITION", "REASON"}, rows)
 	}
 	return nil
 }
@@ -541,7 +564,7 @@ const (
 )
 
 // sessionsUsage is the documented form of the sessions command.
-const sessionsUsage = "sessions [--all] [--state STATE]... [--limit N] | sessions status <session-id> | sessions delete <session-id>"
+const sessionsUsage = "sessions [--all] [--state STATE]... [--limit N] [--tui|--no-tui] | sessions status <session-id> | sessions delete <session-id>"
 
 // sessionsSubcommand finds the subcommand in a `ccresu sessions` argument list.
 //
@@ -693,7 +716,6 @@ func (a *App) reportAlreadyDeleted(id string, tombstone storage.DeletedSession) 
 		id, formatTime(tombstone.DeletedAt, time.UTC), id)
 	return nil
 }
-
 
 // nextAttemptReport is the JSON form of a resolved next attempt. It carries both
 // the machine-readable instant and the humanised countdown, so a script needs no
@@ -955,7 +977,6 @@ func (a *App) cmdEnable(ctx context.Context, args []string) error {
 func (a *App) cmdDisable(ctx context.Context, args []string) error {
 	return a.setEnabled(ctx, args, false)
 }
-
 
 // setEnabled implements enable and disable.
 func (a *App) setEnabled(ctx context.Context, args []string, enabled bool) error {

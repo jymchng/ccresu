@@ -103,6 +103,13 @@ type Deps struct {
 	// DefaultConfigPath overrides where the configuration is looked for. Nil
 	// means config.DefaultPath.
 	DefaultConfigPath func() (string, error)
+	// IsTerminal reports whether a writer is an interactive terminal. Nil means
+	// isTerminalWriter, which asks the file itself. It is what decides whether
+	// `ccresu sessions` opens the browser or prints the table a script can read.
+	IsTerminal func(io.Writer) bool
+	// TUIInput supplies the keystrokes of the interactive browser. Nil means
+	// os.Stdin.
+	TUIInput io.Reader
 }
 
 // App is one CLI invocation: parsed global flags plus the injected environment.
@@ -112,6 +119,11 @@ type App struct {
 	stdout io.Writer
 	stderr io.Writer
 	clock  clock.Clock
+	// isTerminal and tuiInput are the sessions browser's environment: whether
+	// stdout can be a full screen, and where its keystrokes come from. Both are
+	// injected so the browser is testable without a pty.
+	isTerminal func(io.Writer) bool
+	tuiInput   io.Reader
 
 	configPath string
 	// serveAddr is the --addr override for `serve`; empty means the configured
@@ -168,6 +180,12 @@ func newApp(deps Deps, build BuildInfo, stdout, stderr io.Writer) *App {
 	if deps.DefaultConfigPath == nil {
 		deps.DefaultConfigPath = config.DefaultPath
 	}
+	if deps.IsTerminal == nil {
+		deps.IsTerminal = isTerminalWriter
+	}
+	if deps.TUIInput == nil {
+		deps.TUIInput = os.Stdin
+	}
 	if build.Version == "" {
 		build.Version = "dev"
 	}
@@ -178,11 +196,13 @@ func newApp(deps Deps, build BuildInfo, stdout, stderr io.Writer) *App {
 		build.BuildDate = "unknown"
 	}
 	return &App{
-		deps:   deps,
-		build:  build,
-		stdout: stdout,
-		stderr: stderr,
-		clock:  deps.Clock,
+		deps:       deps,
+		build:      build,
+		stdout:     stdout,
+		stderr:     stderr,
+		clock:      deps.Clock,
+		isTerminal: deps.IsTerminal,
+		tuiInput:   deps.TUIInput,
 	}
 }
 
