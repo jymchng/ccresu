@@ -24,6 +24,16 @@ const (
 	// failure still returns the session to DISCOVERED, where the next discovery
 	// cycle re-reads its transcript and decides afresh.
 	ClassPermanent Class = "permanent"
+	// ClassLimitInForce means the CLI ran and refused the resume because the
+	// account's usage window has not reset yet.
+	//
+	// It is neither a failure of the attempt nor a reason to wait for a backoff:
+	// the refusal names when the work may continue, so the only useful answer is
+	// to park the session until that instant. Calling it retryable is what made
+	// ccresu resume the same paused session every reconcile pass; calling it
+	// permanent is what made it look like a broken binary and sent the session
+	// back to DISCOVERED. It is a wait, so it waits.
+	ClassLimitInForce Class = "limit-in-force"
 	// ClassUnrecoverable means ccresu has no verified way to continue the
 	// session at all.
 	ClassUnrecoverable Class = "unrecoverable"
@@ -36,7 +46,7 @@ const (
 // Valid reports whether c is a known class.
 func (c Class) Valid() bool {
 	switch c {
-	case ClassRetryable, ClassPermanent, ClassUnrecoverable, ClassCanceled:
+	case ClassRetryable, ClassPermanent, ClassLimitInForce, ClassUnrecoverable, ClassCanceled:
 		return true
 	default:
 		return false
@@ -44,6 +54,10 @@ func (c Class) Valid() bool {
 }
 
 // Retryable reports whether the policy may repeat the attempt.
+//
+// A limit refusal is deliberately not retryable: repeating it now would be the
+// hot loop that produced sixty refused resumes in half an hour. What ends the
+// wait is the reset instant the refusal names, not the attempt budget.
 func (c Class) Retryable() bool { return c == ClassRetryable }
 
 // State returns the state the session moves to when an attempt fails this way.
@@ -53,10 +67,16 @@ func (c Class) Retryable() bool { return c == ClassRetryable }
 // transcript and finds the next reset time. There is deliberately no terminal
 // failure state, because a resume that failed is not evidence that the
 // conversation is gone.
+//
+// The exception is a limit refusal, which parks the session in
+// WAITING_FOR_RESET: the conversation is fine and the reset is known, so
+// rediscovery would only re-ask a question that has already been answered.
 func (c Class) State() State {
 	switch c {
 	case ClassUnrecoverable:
 		return StateUnrecoverable
+	case ClassLimitInForce:
+		return StateWaitingForReset
 	case ClassRetryable, ClassCanceled:
 		// Worth another attempt on the current schedule, so it waits.
 		return StateRetryWait
@@ -131,10 +151,16 @@ var retryableMarkers = []string{
 //  1. A cancelled context is ClassCanceled, whatever else the error says.
 //  2. Typed sentinels win over text: an unrecoverable session is unrecoverable
 //     even if the message also mentions a network.
-//  3. Authentication/permission text is permanent.
-//  4. Transport text, and any error that looks like a network-level failure, is
+//  3. A usage-limit refusal is a wait, and it is decided before any text marker
+//     is consulted. The banner is prose, and prose is exactly what the marker
+//     lists guess from: "usage limit reached for this account" is a permanent
+//     marker, so a refusal that carried those words would otherwise be
+//     abandoned as an account block. The typed sentinel is the fact; the
+//     markers are the guess.
+//  4. Authentication/permission text is permanent.
+//  5. Transport text, and any error that looks like a network-level failure, is
 //     retryable.
-//  5. Anything left is retryable, bounded by the attempt budget.
+//  6. Anything left is retryable, bounded by the attempt budget.
 func Classify(err error) Class {
 	if err == nil {
 		return ClassRetryable
@@ -144,6 +170,9 @@ func Classify(err error) Class {
 	}
 	if errors.Is(err, claude.ErrUnrecoverable) || errors.Is(err, ErrUnrecoverable) {
 		return ClassUnrecoverable
+	}
+	if errors.Is(err, claude.ErrUsageLimitInForce) {
+		return ClassLimitInForce
 	}
 	for _, sentinel := range nonRetryable {
 		if errors.Is(err, sentinel) {

@@ -346,13 +346,16 @@ func TestARefusedResumeIsRecordedAsAWaitAtTheManager(t *testing.T) {
 	if strings.Contains(session.LastError, "executable unavailable") {
 		t.Errorf("last error still claims a missing binary: %q\n%s", session.LastError, got)
 	}
-	// The retry policy may repeat a refusal; treating it as permanent is what
-	// sent the session back to discovery instead of waiting for the reset.
-	if class := recovery.Classify(err); class != recovery.ClassRetryable {
-		t.Errorf("class = %s, want %s for a refusal\n%s", class, recovery.ClassRetryable, got)
+	// A refusal is its own class: not permanent (the conversation is fine), not
+	// retryable (repeating it now is the hot loop), but a wait until the reset.
+	if class := recovery.Classify(err); class != recovery.ClassLimitInForce {
+		t.Errorf("class = %s, want %s for a refusal\n%s", class, recovery.ClassLimitInForce, got)
 	}
-	if !recovery.Retryable(err) {
-		t.Errorf("Retryable = false, want true for a refusal\n%s", got)
+	if recovery.Retryable(err) {
+		t.Errorf("Retryable = true, want false: a refusal waits for the reset, it is not retried\n%s", got)
+	}
+	if class := recovery.Classify(err); class == recovery.ClassPermanent {
+		t.Errorf("class = %s, a refusal must never be permanent\n%s", class, got)
 	}
 	// A refused resume is a wait, not a rediscovery: the manager must not hand
 	// the session back to the discovery loop while the limit is in force.

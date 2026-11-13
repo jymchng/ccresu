@@ -52,6 +52,12 @@ var ErrInvalidTransition = errors.New("recovery: invalid state transition")
 // resumed, limit not actually cleared) is recorded instead of being forced
 // through the happy path or silently dropped.
 //
+// RESUMING -> WAITING_FOR_RESET is the refusal edge: the CLI ran, said the usage
+// limit is still in force and named the next reset. That is the same wait the
+// session was already in, reached by an attempt that spent budget, so it returns
+// to the waiting state rather than to RETRY_WAIT, where a backoff would ask the
+// same question again a minute later.
+//
 // There is no terminal failure state. A session that cannot be resumed is not
 // broken for ever: the daemon rediscovers it, reads its transcript again, and
 // finds its next reset time. Every state that permits automatic work therefore
@@ -122,12 +128,13 @@ var transitions = map[State]map[State]struct{}{
 		StateDiscovered:      {},
 	},
 	StateResuming: {
-		StateResumed:        {},
-		StateRetryWait:      {},
-		StateDiscovered:     {},
-		StateUnrecoverable:  {},
-		StateUserTerminated: {},
-		StateDisabled:       {},
+		StateResumed:         {},
+		StateRetryWait:       {},
+		StateWaitingForReset: {}, // the resume was refused: the limit is still in force
+		StateDiscovered:      {},
+		StateUnrecoverable:   {},
+		StateUserTerminated:  {},
+		StateDisabled:        {},
 	},
 	StateRetryWait: {
 		StateCheckingSession: {},

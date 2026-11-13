@@ -22,6 +22,7 @@ func TestClassValidAndState(t *testing.T) {
 	}{
 		{ClassRetryable, true, true, StateRetryWait},
 		{ClassPermanent, true, false, StateDiscovered},
+		{ClassLimitInForce, true, false, StateWaitingForReset},
 		{ClassUnrecoverable, true, false, StateUnrecoverable},
 		{ClassCanceled, true, false, StateRetryWait},
 		{Class("who"), false, false, StateDiscovered},
@@ -60,6 +61,29 @@ func TestClassify(t *testing.T) {
 		{"session not found", claude.ErrSessionNotFound, ClassPermanent},
 		{"store not found", storage.ErrNotFound, ClassPermanent},
 		{"wrapped sentinel", fmt.Errorf("resume: %w", claude.ErrCLIUnavailable), ClassPermanent},
+		// A limit refusal is its own class, decided by the sentinel and not by
+		// the words in the banner.
+		{"limit refusal", fmt.Errorf("claude -p --resume failed (exit 1): %w", claude.ErrUsageLimitInForce), ClassLimitInForce},
+		{"bare limit refusal", claude.ErrUsageLimitInForce, ClassLimitInForce},
+		// The banner is prose, and the permanent markers below are guesses made
+		// from prose. The typed sentinel wins: a refusal that mentions the
+		// account block, an auth failure or a reset transport is still a wait.
+		{"refusal beats the account-limit marker",
+			fmt.Errorf("usage limit reached for this account: %w", claude.ErrUsageLimitInForce), ClassLimitInForce},
+		{"refusal beats the auth markers",
+			fmt.Errorf("unauthorized: invalid api key: %w", claude.ErrUsageLimitInForce), ClassLimitInForce},
+		{"refusal beats the billing marker",
+			fmt.Errorf("credit balance is too low: %w", claude.ErrUsageLimitInForce), ClassLimitInForce},
+		{"refusal beats the retryable markers",
+			fmt.Errorf("connection reset: %w", claude.ErrUsageLimitInForce), ClassLimitInForce},
+		// ErrCLIUnavailable keeps its meaning: it is not a refusal, so a real
+		// exec failure is still permanent.
+		{"cli unavailable beside a limit noun",
+			fmt.Errorf("%w: usage limit reached", claude.ErrCLIUnavailable), ClassPermanent},
+		// An untyped banner is prose only: it stays a guess, and the permanent
+		// account-block marker keeps its current meaning.
+		{"untyped account limit stays permanent", errors.New("usage limit reached for this account"), ClassPermanent},
+		{"untyped window banner is retryable", errors.New("Claude usage limit reached. Your limit will reset at 10am"), ClassRetryable},
 		{"invalid api key", errors.New("request failed: Invalid API key"), ClassPermanent},
 		{"auth error", errors.New("{\"type\":\"authentication_error\"}"), ClassPermanent},
 		{"unauthorized", errors.New("HTTP 401 Unauthorized"), ClassPermanent},
@@ -100,6 +124,40 @@ func TestRetryable(t *testing.T) {
 	}
 	if Retryable(claude.ErrCLIUnavailable) {
 		t.Error("a missing CLI must not be retryable")
+	}
+	if Retryable(claude.ErrUsageLimitInForce) {
+		t.Error("a limit refusal must not be retryable: the reset decides when to try again")
+	}
+}
+
+// TestALimitRefusalNeverRoutesToDiscovered is the routing half of the contract.
+//
+// The class decides where a failed attempt leaves the session, and for a refusal
+// that must be the wait: not DISCOVERED, which re-reads the transcript and
+// schedules the next reset as if nothing had been learnt, and not RETRY_WAIT,
+// which spends the budget asking the same question on a backoff.
+func TestALimitRefusalNeverRoutesToDiscovered(t *testing.T) {
+	refusal := fmt.Errorf("resume session abc: %w", claude.ErrUsageLimitInForce)
+	class := Classify(refusal)
+
+	if class == ClassPermanent {
+		t.Fatal("a limit refusal classified as permanent: the conversation is fine, only the window is closed")
+	}
+	if got := class.State(); got != StateWaitingForReset {
+		t.Errorf("class.State() = %s, want %s", got, StateWaitingForReset)
+	}
+	// The attempt budget must not change that: a refusal at the last attempt of
+	// a cycle is still a wait, because the next useful moment is the reset, not
+	// the next cycle.
+	for _, attempts := range []int{0, 1, 9, 10, 99} {
+		if got := targetFor(class, attempts, 10); got != StateWaitingForReset {
+			t.Errorf("targetFor(%s, %d attempts, 10 max) = %s, want %s",
+				class, attempts, got, StateWaitingForReset)
+		}
+	}
+	// And the edge it needs must exist, or the manager cannot record it.
+	if !CanTransition(StateResuming, StateWaitingForReset) {
+		t.Error("RESUMING has no edge to WAITING_FOR_RESET: the refusal cannot be recorded")
 	}
 }
 

@@ -62,6 +62,28 @@ func TestHappyPathEdgesAreLegal(t *testing.T) {
 	}
 }
 
+// TestARefusedResumeReturnsToTheWait pins the refusal edge: a resume the CLI
+// refuses because the limit is still in force goes back to WAITING_FOR_RESET.
+// Before the edge existed the machine had nowhere to record the refusal, so the
+// manager fell back to RETRY_WAIT and asked the same question again on a backoff.
+func TestARefusedResumeReturnsToTheWait(t *testing.T) {
+	if !CanTransition(StateResuming, StateWaitingForReset) {
+		t.Fatal("RESUMING -> WAITING_FOR_RESET is not legal; a refused resume has nowhere to go")
+	}
+	if err := ValidateTransition(StateResuming, StateWaitingForReset); err != nil {
+		t.Fatalf("ValidateTransition(RESUMING, WAITING_FOR_RESET) = %v, want nil", err)
+	}
+	if Terminal(StateResuming) {
+		t.Error("RESUMING must not be terminal")
+	}
+	if !Pending(StateWaitingForReset) {
+		t.Error("WAITING_FOR_RESET must stay pending, so a restarted daemon picks the wait up")
+	}
+	if !Pending(StateResuming) {
+		t.Error("RESUMING must stay pending")
+	}
+}
+
 func TestDiscoveryIsReachableFromEveryLiveState(t *testing.T) {
 	// A failed attempt and a spent attempt budget both return the session to
 	// DISCOVERED, and the budget guard runs before any check, so it can find the
