@@ -339,6 +339,19 @@ func TestARefusedResumeParksTheSessionUntilTheNextReset(t *testing.T) {
 	if !strings.Contains(attempts[0].Error, "usage limit reached") {
 		t.Errorf("attempt error = %q, want the banner:\n%s", attempts[0].Error, out)
 	}
+	// The rendered detail must agree with the row: an operator reads `finished`
+	// and the attempt's error there, so an open row (finished: -) or a rewritten
+	// error would still be the defect even with the database correct.
+	if got, ok := inspectField(out, "Latest attempt", "finished"); !ok {
+		t.Errorf("inspect printed no attempt block:\n%s", out)
+	} else if got == "-" || got == "" {
+		t.Errorf("inspect attempt finished = %q, want a timestamp:\n%s", got, out)
+	}
+	if got, ok := inspectField(out, "Latest attempt", "error"); !ok {
+		t.Errorf("inspect printed no attempt error:\n%s", out)
+	} else if !strings.Contains(got, "usage limit reached") {
+		t.Errorf("inspect attempt error = %q, want the banner:\n%s", got, out)
+	}
 	if strings.Contains(out, "interrupted by a process restart") {
 		t.Errorf("the refusal was rewritten as a restart:\n%s", out)
 	}
@@ -527,4 +540,26 @@ func TestARefusedResumeIsBoundedToTheResetWindow(t *testing.T) {
 	if state := f.session(t).State; state != storage.StateWaitingForReset {
 		t.Errorf("state = %s, want %s after the second refusal", state, storage.StateWaitingForReset)
 	}
+}
+
+// inspectField returns the value of the field `name` in the section of the
+// rendered detail that starts at the heading `section`.
+//
+// inspect pads field names to a fixed width, so the value is whatever follows
+// the first colon; matching on the padded name would tie the test to that width.
+func inspectField(out, section, name string) (string, bool) {
+	lines := strings.Split(out, "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) != section {
+			continue
+		}
+		for _, field := range lines[i+1:] {
+			trimmed := strings.TrimLeft(field, " ")
+			if !strings.HasPrefix(trimmed, name+":") {
+				continue
+			}
+			return strings.TrimSpace(strings.TrimPrefix(trimmed, name+":")), true
+		}
+	}
+	return "", false
 }
