@@ -58,7 +58,7 @@ Run at `HEAD` on a clean tree:
 | Website tests | `npm run test` | 18 files, 143 tests pass |
 | Website build | `npm run build` | static export, 15 routes |
 
-Suite size: 83 Go test files, 777 test functions, plus 18 web test files.
+Suite size: 83 Go test files, 779 test functions, plus 18 web test files.
 
 Per-package statement coverage, from `go test ./... -cover`:
 
@@ -73,13 +73,24 @@ Per-package statement coverage, from `go test ./... -cover`:
 | `internal/clock` | 93.3% | — |
 | `internal/recovery` | 97.7% | ≥90% |
 | `internal/claude` | 90.6% | ≥80% |
-| `internal/server` | 87.9% | ≥80% |
+| `internal/server` | 88.0% | ≥80% |
 | `internal/storage` | 85.8% | ≥85% |
 | `internal/app` | 84.1% | ≥80% |
 | `cmd/ccresu` | 100.0% | — |
 | `tests/e2e` | no statements (behavioural) | — |
 | `tests/integration` | no statements (behavioural) | — |
 | `tests/support` | 0.0% (fixture package) | — |
+
+Two rows move between runs, and the table quotes the aggregate `go test ./... -cover`
+run rather than a lucky one. `internal/app` reports 84.0%, 84.1% or 84.2%: the
+lines that differ sit inside the daemon's stage functions — `Step`,
+`actOnSchedules` and `recoverPending` in `daemon.go` — where a branch is reached
+only when a test's timing goes one way. `internal/scheduler` reports 96.0% or
+96.2% because `MemoryStore.LoadSchedules` sorts a slice built from a map, so its
+comparator takes different branches depending on the iteration order. Every other
+row held to the tenth across repeated runs, with one near-miss: `internal/server`
+measured 88.0% in isolation and in eight of nine aggregate runs, and 87.8% once
+when the whole suite was competing for the machine.
 
 The 88.8% total is statement-weighted over everything `go test ./...` reports in
 a clean checkout: the twelve `internal/` packages, `cmd/ccresu` (100.0%, two

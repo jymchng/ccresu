@@ -53,7 +53,7 @@ allowlist (`server.allowed_origins`).
 | PUT | `/settings` | token | Upsert one setting (`{"key": ..., "value": ...}`). |
 | GET | `/telegram/status` | — | Delivery state of the notification queue. |
 | GET | `/config` | — | Effective configuration, with secrets redacted. |
-| POST | `/test` | token | Send a test notification. |
+| POST | `/test` | token | Read-only self-test: reports the database, recovery and claude checks, plus telegram when asked with `{"telegram": true}`. Sends no message and resumes nothing, so it proves configuration rather than delivery. |
 
 A path that exists but is called with the wrong method answers `405` with a
 correct `Allow` header rather than a misleading `404`.

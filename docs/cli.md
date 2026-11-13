@@ -21,8 +21,9 @@ leading `~` is expanded in all three, and everything derived from the file — s
 as the API token beside it — follows the file actually in use.
 
 Exit codes: `0` ok, `1` failure, `2` usage, `3` not found, `4` not eligible (the
-session exists but this request could not be carried out — settled, disabled,
-already running, or parked until its usage limit resets), `130` interrupted.
+session exists but this request could not be carried out — for example settled,
+disabled, already running, out of attempts, or parked until its usage limit
+resets), `130` interrupted.
 
 ## Commands
 
