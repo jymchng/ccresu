@@ -28,8 +28,8 @@ Exit codes: `0` ok, `1` failure, `2` usage, `3` not found, `4` not eligible,
 | Command | Usage | What it does |
 | --- | --- | --- |
 | `daemon` | `daemon [--once] [--interval DURATION]` | Runs the watchdog loop until interrupted. `--once` performs a single reconcile pass and exits; `--interval` overrides `claude.discovery_interval`. |
-| `status` | `status` | Summarises session, schedule and notification state. Its `sessions` line is the **total** row count, and its `listing` line says how many of those a bare `sessions` shows. |
-| `sessions` | `sessions [--all] [--state STATE]... [--limit N] [--tui] [--no-tui]` | Lists discovered sessions. On a terminal this opens the interactive browser; a pipe, a redirect or `--json` gets the table exactly as before. A bare listing is **enabled only** and says so in the footer; `--all` includes disabled and settled ones; `--state` is repeatable; `--limit 0` means all. |
+| `status` | `status` | One screen of the persisted state: `sessions` (`N total, M enabled`), `listing` (what a bare `sessions` shows), `pending`, `schedules`, `next wake` when one is due, `telegram`, `recovery` (`yes (max attempts 10)`), `now`, then a `STATE`/`SESSIONS` histogram. The queued-notification count is `pending_notifications` in `--json`. |
+| `sessions` | `sessions [--all] [--state STATE]... [--limit N] [--tui] [--no-tui]` | Lists discovered sessions: `SESSION` (short id), `STATE`, `NEXT ATTEMPT`, `ENABLED`, `RECOVERABLE`, `PROJECT`, `LAST SEEN`, `NOTE` (the session's reason, else its last error, truncated to 40). On a terminal this opens the interactive browser; a pipe, a redirect or `--json` gets the table exactly as before. A bare listing is **enabled only** and says so in the footer; `--all` includes disabled and settled ones; `--state` is repeatable; `--limit 0` means all. |
 | `sessions status` | `sessions status <session-id>` | Everything known about one session: state, paths, the next attempt, the latest usage limit, the latest attempt, any pending wait and recent transitions. Identical to `inspect`, which is kept as an alias. |
 | `sessions delete` | `sessions delete <session-id>` | Removes the session from ccresu: the row, its attempts, transitions, usage limits, pending wait and notifications. Nothing under `~/.claude` is touched — the conversation stays where it is. A tombstone keeps discovery from re-creating the session; `ccresu enable <id>` undoes it. Deleting twice is a success, not an error. |
 | `inspect` | `inspect <session-id>` | Everything known about one session. The same code as `sessions status`. |
@@ -37,7 +37,7 @@ Exit codes: `0` ok, `1` failure, `2` usage, `3` not found, `4` not eligible,
 | `retry` | `retry <session-id>` | Retries a session whose attempt budget is spent. |
 | `enable` | `enable <session-id>` | Allows ccresu to recover a session. It is also the undo for `sessions delete`: a deleted session is restored (tombstone removed, row re-created in `DISCOVERED`) before it is enabled. |
 | `disable` | `disable <session-id>` | Stops ccresu from recovering a session. |
-| `history` | `history <session-id> [--limit N]` | Attempts and state transitions (default `--limit 50`). |
+| `history` | `history <session-id> [--limit N]` | Every attempt (`#`, `STATE`, `STARTED`, `FINISHED`, `RESULT`, `ERROR`) and the state transitions (`WHEN`, `TRANSITION`, `REASON`). `--limit` bounds the transitions only, default 50; the attempts are always all of them. |
 | `config` | `config init [PATH] [--force]` / `config validate [PATH]` / `config show` | Creates the configuration from the shipped example, validates a file, or prints the effective one. |
 | `doctor` | `doctor` | Checks the environment ccresu runs in. |
 | `serve` | `serve [--addr HOST:PORT]` | Runs the local REST/SSE API (default `server.host:server.port`). |
@@ -48,11 +48,11 @@ Exit codes: `0` ok, `1` failure, `2` usage, `3` not found, `4` not eligible,
 ### Browse sessions interactively
 
 On a terminal, `ccresu sessions` opens a full-screen browser instead of printing
-the table. The columns are the table's; the only difference is that `SESSION`
-carries the short id, because a 36-character UUID does not fit a fixed-width
-screen. The point is that triaging a night's worth of sessions no longer means
-copying ids between commands: every action the CLI has is one keystroke away, and
-it applies to the row the cursor is on.
+the table. The columns are the table's except `RECOVERABLE`, which the browser
+leaves out, and `SESSION` carries the short id, because a 36-character UUID does
+not fit a fixed-width screen. The point is that triaging a night's worth of
+sessions no longer means copying ids between commands: every action the CLI has
+is one keystroke away, and it applies to the row the cursor is on.
 
 ```console
 $ ccresu sessions --all
@@ -263,12 +263,25 @@ $ ccresu inspect 4d1f9c2a-7e35-4b18-9a6f-2c8d0e1f3a45
 
 `inspect` leads with **when the next attempt is due and why** — an absolute UTC
 instant plus a countdown (`at: 2026-11-04 19:29:00 UTC (in 45s)`), or `none` with
-the reason (`session is not enabled`, `attempt budget spent; use 'ccresu retry'`,
-`no usage limit detected yet`). A session parked by a refused resume instead shows
-the reset the CLI named, with `why: waiting for the usage limit to reset`. It then
-shows the last usage limit, the resolved reset instant with the zone it was
-written in, the schedule and the notification state — enough to explain why a
-wait is where it is.
+the reason. The reasons are the daemon's own words: `session is not enabled`,
+`no usage limit detected yet`, `returned to discovery; ccresu will re-read the
+transcript and schedule the next reset` (where a failed attempt and a spent
+attempt budget both leave it), `recovery in progress`, `already resumed`,
+`session completed`, `session was terminated`, `session cannot be recovered`.
+A session waiting on a reset shows the instant it was given, with `why:` either
+`waiting for the usage limit to reset` — the reset the CLI named — or
+`polling until the usage limit clears` when the banner carried no time, which is
+why the instant is a poll rather than the reset you read in the message. A
+session in `RETRY_WAIT` shows its stored instant with
+`why: retrying after a failed attempt`.
+
+Above that block are the session's own columns (`state`, `enabled`,
+`recoverable`, `reason`, `last error`, `project`, `transcript`, `type`,
+`last seen`); below it, in order, come `Latest usage limit` (`type`, `detected`,
+`resets`, `raw` — the phrase as the CLI wrote it, zone included — and
+`confidence`), `Latest attempt` (`number`, `state`, `started`, `finished`,
+`command`, `error`), `Schedule` (`due`, `unknown reset`, `polls`, `phrase`) and
+the last five `Recent transitions` (`WHEN`, `TRANSITION`, `REASON`).
 
 `sessions` carries the same answer as its `NEXT ATTEMPT` column: `in 2h14m` while
 a wait is pending, `none (<reason>)` when nothing is scheduled. Both read the
@@ -360,8 +373,13 @@ $ ccresu enable  4d1f9c2a-...
 $ ccresu history 4d1f9c2a-... --limit 20
 ```
 
-Attempts come with the two proofs (session id preserved, transcript grew) and
-the transitions come with their recorded reason.
+Each transition carries the reason it was recorded with, which is the audit
+trail for a wait. The two proofs live on the attempt, not in the table:
+`ccresu recover` prints them as
+`verification: proven: session id preserved and transcript grew` (or
+`not proven: …`, naming what is missing), and `ccresu history --json` carries
+them per attempt as `SessionIDVerified` and `TranscriptGrew`. The human attempt
+table shows `RESULT` (`in progress`, `succeeded`, `failed`) instead.
 
 ### Machine-readable output
 

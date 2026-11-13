@@ -9,16 +9,62 @@ daemon, the CLI and the optional local HTTP API are the whole surface.
 
 ## How it works
 
-1. The daemon scans the sessions Claude Code has written and records them in its
-   store.
-2. Sessions that stopped on a usage limit are detected, and the reset time is used
-   to schedule a recovery.
-3. When the schedule is due, ccresu resumes the session with the same session ID.
-4. Every attempt is recorded, so you can inspect what happened, retry a session
-   whose attempts are spent, or disable a session entirely.
+One interruption passes through seven stages. [recovery.md](recovery.md) is the
+mechanism reference for each of them; [architecture.md](architecture.md) shows
+how the packages and tables fit together.
 
-Recovery is opt-in per session (`ccresu enable` / `ccresu disable`) and bounded by
-an attempt budget configured globally.
+1. **Discovery.** The daemon asks Claude Code what is running
+   (`claude agents --json`) and also reads the transcripts under
+   `~/.claude/projects/` and the per-session directories under
+   `~/.claude/session-env/`. Each session is stored with the source that found
+   it — `agents`, `transcript` or `session-env` — and starts in `DISCOVERED`.
+2. **Detection.** The newest 25 transcript lines are normalised and scored
+   against 19 built-in patterns. Guards demote text that is *about* a limit
+   rather than a report of one (a quoted, negated, fenced or conditional
+   phrase), and a score below `0.5` is not a limit. The explicit non-limit
+   verdicts — auth failure, invalid key, network error, user cancellation,
+   normal completion — are recognised in their own right, so they are never
+   resumed after a reset.
+3. **The usage-limit record.** A detection becomes one `usage_limits` row: the
+   banner verbatim, the resolved reset instant, the zone and phrase the CLI
+   wrote, and the detector's confidence. A reset learned later is written as a
+   new row, not as an in-place rewrite.
+4. **The schedule.** The reset instant becomes one `schedules` row per session,
+   an upsert, so a session that hits its limit twice replaces its stale wait
+   with the new one. When the banner named no usable time the row is marked
+   `unknown_reset` and ccresu polls instead — 5m, 10m, 20m, then every 30m —
+   rather than guessing. Both the instant and the poll count are persisted, so a
+   restart continues the same wait instead of starting it again.
+5. **The resume.** When the schedule is due the session walks
+   `WAITING_FOR_RESET → RESET_TIME_REACHED → CHECKING_SESSION → CHECKING_LIMIT →
+   RESUMING`, and ccresu runs
+   `claude -p --resume <session-id> --output-format json <message>` — the same
+   session id, with the continuation message last.
+6. **Verification.** Exit code 0 is not proof. The resume counts only when the
+   reported session id matches the stored one **and** the transcript has grown
+   past the stored baseline; the wait for that growth is bounded by 120s and
+   re-checked every 10s. Only then is the attempt closed as a success and the
+   session marked `RESUMED`.
+7. **A refusal is a wait, not a failure.** If the CLI answers the resume with
+   the limit banner, the attempt is finished with that banner, the banner is
+   recorded as a usage limit, and the session returns to `WAITING_FOR_RESET`
+   until the reset it named. It is not retried, and the attempt budget is not
+   consulted: what ends the wait is the reset, not a count of tries. A failure
+   that cannot be retried on this schedule returns the session to `DISCOVERED`,
+   where the next discovery pass re-reads the transcript and schedules the next
+   reset; a transient one waits in `RETRY_WAIT` and is tried again with backoff.
+
+Every stage appends to the audit trail — a `state_transitions` row per state
+change and a `recovery_attempts` row per resume — which is what
+`ccresu history` and `ccresu inspect` replay.
+
+Recovery is on by default (`recovery.enabled`). `ccresu disable` switches it off
+for one session: the daemon records that as a decision instead of retrying, and
+`ccresu enable` undoes it — as it also undoes `ccresu sessions delete`. Retries
+within one cycle are bounded by the attempt budget
+(`recovery.max_attempts`, ten) with a backoff of 30s doubling to 15m, and a
+spent budget returns the session to `DISCOVERED` rather than to a failure state:
+there is no terminal failure state.
 
 ## Build and install
 
@@ -52,8 +98,10 @@ For the full walkthrough — installation, discovery, a limit being detected, th
 scheduled resume and the manual actions — see [tutorial.md](tutorial.md).
 
 `ccresu status` gives a one-screen summary of the persisted state: how many
-sessions are known, what state they are in, how many recoveries and notifications
-are queued, and when the next schedule is due.
+sessions are known and how many of those are enabled, what state they are in, how
+many recoveries are pending and how many schedules exist, and when the next wake
+is due. The queued-notification count is not on that screen; it is
+`pending_notifications` in `ccresu status --json`.
 
 ```sh
 ccresu status
