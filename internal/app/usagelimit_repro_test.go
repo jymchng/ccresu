@@ -305,49 +305,15 @@ func TestARefusedResumeParksTheSessionUntilTheNextReset(t *testing.T) {
 	}
 }
 
-// TestTheRefusedResumeIsCurrentlyMisreported records today's behaviour, exactly
-// as the operator reported it, so the defect is reproduced rather than
-// described. It is the ledger the fix must invert: once a refused resume parks
-// the session, this test is rewritten to assert WAITING_FOR_RESET.
-func TestTheRefusedResumeIsCurrentlyMisreported(t *testing.T) {
-	f := newUsageLimitFixture(t, true)
-	f.steps(t, 2)
-
-	got := f.describe(t)
-	session := f.session(t)
-
-	// 1. The refusal is recorded as a missing binary.
-	if !strings.Contains(session.LastError, "claude: claude executable unavailable") {
-		t.Fatalf("last error = %q, want today's misreport\n%s", session.LastError, got)
-	}
-	// 2. The failed attempt's own transcript write is read as progress, so the
-	//    session is declared resumed while the limit is still in force.
-	if session.State != storage.StateResumed {
-		t.Fatalf("state = %s, want today's %s\n%s", session.State, storage.StateResumed, got)
-	}
-	// 3. The operator is told there is nothing to wait for.
-	out := f.inspect(t)
-	for _, want := range []string{"why:           already resumed", "at:            none"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("inspect output missing %q:\n%s", want, out)
-		}
-	}
-	// 4. No usage limit covers the current window, because the refusal never
-	//    reached the detector.
-	if _, err := f.h.store.LatestUsageLimit(context.Background(), f.id); !errors.Is(err, storage.ErrNotFound) {
-		t.Errorf("latest usage limit err = %v, want %v (nothing recorded today)", err, storage.ErrNotFound)
-	}
-}
-
-// TestARefusedResumeIsRecordedAsAMissingBinary pins the same defect one layer
+// TestARefusedResumeIsRecordedAsAWaitAtTheManager pins the same defect one layer
 // down, at the manager, so the fix is not mistaken for a daemon-loop patch: a
-// single Recover call on a rediscovered session turns the CLI's usage-limit
-// refusal into "claude executable unavailable", which the retry policy then
-// classifies as permanent.
+// single Recover call on a rediscovered session used to turn the CLI's
+// usage-limit refusal into "claude executable unavailable", which the retry
+// policy then classified as permanent.
 //
-// Like the test above it records today's behaviour and is inverted once the
-// refusal is recognised as a wait.
-func TestARefusedResumeIsRecordedAsAMissingBinary(t *testing.T) {
+// The refusal is now a wait: the error names the condition, the banner is what
+// the session records, and the retry policy may repeat the attempt.
+func TestARefusedResumeIsRecordedAsAWaitAtTheManager(t *testing.T) {
 	f := newUsageLimitFixture(t, false)
 	ctx := context.Background()
 
@@ -368,17 +334,29 @@ func TestARefusedResumeIsRecordedAsAMissingBinary(t *testing.T) {
 		t.Fatalf("resume invocations = %d, want 1 for one Recover call\n%s", resumes, got)
 	}
 	session := f.session(t)
-	if !strings.Contains(session.LastError, "claude: claude executable unavailable") {
-		t.Errorf("last error = %q, want today's misreport\n%s", session.LastError, got)
+	if !errors.Is(err, claude.ErrUsageLimitInForce) {
+		t.Errorf("error = %v, want claude.ErrUsageLimitInForce\n%s", err, got)
 	}
-	if session.State != storage.StateDiscovered {
-		t.Errorf("state = %s, want today's %s\n%s", session.State, storage.StateDiscovered, got)
+	if errors.Is(err, claude.ErrCLIUnavailable) {
+		t.Errorf("error = %v, must not claim the executable was unavailable\n%s", err, got)
 	}
-	if class := recovery.Classify(err); class != recovery.ClassPermanent {
-		t.Errorf("class = %s, want today's %s (a refused resume must not be permanent)\n%s",
-			class, recovery.ClassPermanent, got)
+	if !strings.Contains(session.LastError, "usage limit reached") {
+		t.Errorf("last error = %q, want the refusal banner\n%s", session.LastError, got)
 	}
-	if recovery.Retryable(err) {
-		t.Errorf("Retryable = true, want today's false for a permanent classification")
+	if strings.Contains(session.LastError, "executable unavailable") {
+		t.Errorf("last error still claims a missing binary: %q\n%s", session.LastError, got)
+	}
+	// The retry policy may repeat a refusal; treating it as permanent is what
+	// sent the session back to discovery instead of waiting for the reset.
+	if class := recovery.Classify(err); class != recovery.ClassRetryable {
+		t.Errorf("class = %s, want %s for a refusal\n%s", class, recovery.ClassRetryable, got)
+	}
+	if !recovery.Retryable(err) {
+		t.Errorf("Retryable = false, want true for a refusal\n%s", got)
+	}
+	// A refused resume is a wait, not a rediscovery: the manager must not hand
+	// the session back to the discovery loop while the limit is in force.
+	if session.State == storage.StateDiscovered {
+		t.Errorf("state = %s, want a waiting state (WAITING_FOR_RESET)\n%s", session.State, got)
 	}
 }
