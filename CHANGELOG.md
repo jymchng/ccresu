@@ -4,6 +4,37 @@ All notable changes to ccresu are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A resume refused by a usage limit parks the session until the reset it
+  names.** `claude -p --resume` that runs and exits non-zero with a usage-limit
+  banner is recognised as a refusal instead of being reported as
+  `claude: claude executable unavailable`. The session moves
+  `RESUMING → WAITING_FOR_RESET`, the banner is recorded as a `usage_limits` row
+  (the CLI's own words, the resolved reset instant, the zone and phrase it was
+  written in), the schedule is saved at that instant — or at the first poll when
+  the banner names none — and `last error` carries the banner. No further resume
+  is issued in the meantime: five reconcile passes inside one reset window issue
+  exactly one `claude -p --resume`, and the next one is issued after the reset.
+- **A refused attempt is no longer reported as `RESUMED` / "already resumed".**
+  The failed attempt's own transcript writes are absorbed into the stored
+  baseline, so growth the refusal itself caused can never satisfy the "the
+  session had already resumed after the limit reset" shortcut.
+- **A refused attempt is closed with the refusal.** The attempt row the CLI
+  answered is finished (`finished`, `success: false`, error = the banner) rather
+  than left open for the next recovery to rewrite as "interrupted by a process
+  restart" over a parked session.
+- **`ErrCLIUnavailable` means the process never started.** A `claude --version`
+  probe or any other invocation that ran and exited non-zero now reports its exit
+  code and captured output instead of claiming the binary is missing; the
+  sentinel is reserved for a missing binary and a cancelled context.
+- **The daemon only leaves a due schedule alone when the refusal planned a
+  wait.** The pre-resume limit check and a refusal whose parker could not plan
+  still advance the poll, so an unknown-reset schedule cannot be retried on every
+  pass.
+
 ## [0.5.0] - 2026-11-13
 
 ### Added

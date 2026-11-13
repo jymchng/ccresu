@@ -156,6 +156,8 @@ DISCOVERED → RUNNING → USAGE_LIMIT_DETECTED → WAITING_FOR_RESET → RESET_
                                                                  RESUMING ──────→ RESUMED
                                                                     ↓
                                                     RETRY_WAIT / DISCOVERED
+
+RESUMING ──→ WAITING_FOR_RESET    (the resume was refused: the limit is still in force)
 ```
 
 `DISCOVERED` is both the start and the retry state: a failed attempt, and a spent
@@ -172,7 +174,7 @@ edge is rejected with `ErrInvalidTransition`. The interesting ones:
 | `WAITING_FOR_RESET` | itself (unknown-reset re-poll or a restart), `RESET_TIME_REACHED`, `DISCOVERED`, `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED` |
 | `CHECKING_SESSION` | `CHECKING_LIMIT`, `RESUMED` (it resumed on its own), `RETRY_WAIT` (the status check itself failed), `DISCOVERED` |
 | `CHECKING_LIMIT` | `RESUMING`, `RETRY_WAIT`, `WAITING_FOR_RESET` (the limit is still in force), `DISCOVERED` |
-| `RESUMING` | `RESUMED`, `RETRY_WAIT`, `DISCOVERED` |
+| `RESUMING` | `RESUMED`, `WAITING_FOR_RESET` (the resume was refused because the limit is still in force), `RETRY_WAIT`, `DISCOVERED` |
 | `RETRY_WAIT` | `CHECKING_SESSION`, `WAITING_FOR_RESET`, `DISCOVERED` |
 | `RESUMED` | `RUNNING`, `COMPLETED`, `USER_TERMINATED`, `DISABLED` — never straight back to `RESUMING` |
 
@@ -185,6 +187,11 @@ again by a stray tick.
 with exponential backoff plus jitter (`initial_delay` 30s, ×2, capped at
 `max_delay` 15m, ±`jitter` 15%). Anything else — a non-retryable failure, or an
 exhausted budget — sends the session back to `DISCOVERED`.
+
+A resume the CLI **refused** because the limit is still in force is neither: it is
+not a failure to retry and not a success to celebrate, so it parks the session in
+`WAITING_FOR_RESET` until the reset the banner named — see [When the resume is
+refused because the limit is still in force](#when-the-resume-is-refused-because-the-limit-is-still-in-force).
 
 There is no terminal failure state. A session that cannot be resumed is not
 broken for ever: it is waiting for its limit to clear, or for a condition that
@@ -262,8 +269,12 @@ If the stop itself fails, or the second resume refuses again (or fails any other
 way), the **original** failure is returned untouched. Nothing loops, the
 classification is unchanged, and the session is dealt with exactly as any other
 failed resume: it returns to `DISCOVERED`, where the next discovery pass reads the
-transcript again and schedules the next reset. `ccresu retry <session-id>` and
-`ccresu recover <session-id> --force` are there if you want it tried right now.
+transcript again and schedules the next reset — unless the failure is the usage
+limit itself, which parks the session in `WAITING_FOR_RESET` instead (see [When the
+resume is refused because the limit is still in
+force](#when-the-resume-is-refused-because-the-limit-is-still-in-force)).
+`ccresu retry <session-id>` and `ccresu recover <session-id> --force` are there if
+you want it tried right now.
 
 Once a session has been stopped this way, the next resume is a normal resume
 again: the background agent no longer holds it, so there is no stop to issue.
@@ -273,12 +284,105 @@ again: the background agent no longer holds it, so there is no stop to issue.
 A session that could not be resumed used to end in a state that only an operator
 could clear. It no longer does. `DISCOVERED` is not a failure: it is the queue the
 daemon reads from, and every failed resume and every spent budget puts the
-session back in it with its attempt history intact.
+session back in it with its attempt history intact. A usage-limit refusal is the
+one failure that does not go there: it is not a failure at all, so it waits in
+`WAITING_FOR_RESET` for the reset the CLI named.
 
 If a session really is finished, `ccresu disable <session-id>` is the honest way
 to say so, and `ccresu sessions delete <session-id>` stops tracking it — see
 [cli.md](cli.md). Nothing about a failed attempt destroys the conversation: the
 transcript, the session id and the audit trail are all untouched.
+
+## When the resume is refused because the limit is still in force
+
+The other refusal is the plain one: the five-hour or weekly window has not reset
+yet, so the CLI answers the resume with the banner and exit code 1.
+
+```console
+Claude usage limit reached. Your limit will reset at 10am (Europe/Berlin).
+```
+
+This is not a failed resume, and it must not be retried. The conversation is
+intact, nothing about the session is wrong, and asking again before 10am can only
+produce the same sentence — which is exactly what used to happen: the refusal was
+reported as `claude: claude executable unavailable`, classified as a permanent
+failure, and the daemon resumed the session roughly forty times in half an hour.
+Now the attempt ends in a wait:
+
+1. The refusal is recognised from the CLI's own output — stdout as well as the
+   stderr tail, carried on the adapter's `*CLIError` — and classified
+   `limit-in-force` (`recovery.ClassLimitInForce`). The class is decided before
+   any permanent or retryable marker, so a banner that also contains words like
+   "limit reached" is a wait, never `PERMANENT` and never `DISCOVERED`.
+   `ErrCLIUnavailable` keeps its own meaning: the process never started.
+2. The attempt the CLI answered is **finished with the refusal** — `success:
+   false`, error = the banner, state `WAITING_FOR_RESET`. Leaving it open would
+   let the next recovery close it as "interrupted by a process restart", which is
+   not what happened.
+3. The banner is recorded as a **usage limit**: the row keeps the CLI's own words
+   verbatim (bounded to 2000 bytes), the resolved reset instant, the zone and
+   phrase the CLI wrote (`raw`), and the detector's confidence — the same shape a
+   limit detected from the transcript produces, so `ccresu inspect` describes one
+   kind of wait, not two.
+4. The **wait is planned**: the schedule is saved at the reset instant the banner
+   named, or at the first poll (with the usual backoff) when it named none.
+5. The session moves `RESUMING → WAITING_FOR_RESET` with the reason
+   `the usage limit has not reset yet: <banner>`, and `last error` is set to the
+   banner itself.
+
+No further resume is issued in the meantime. The daemon leaves a due schedule
+alone only when the refusal actually planned a wait — a `*LimitInForceError` with
+a reset instant. The pre-resume limit check and a refusal whose parker could not
+plan still advance the poll, so an unknown-reset schedule cannot be retried on
+every pass. The bound is asserted end to end: five reconcile passes inside one
+window issue exactly one `claude -p --resume`, and the second is issued after the
+reset instant arrives.
+
+The refused attempt's own transcript writes are absorbed into the stored
+baseline. The CLI appends its refusal to the conversation, so the file has grown
+by the time the reset comes; that growth is the attempt's own work and cannot
+satisfy the "the session had already resumed after the limit reset" shortcut, so
+a refused cycle never ends in `RESUMED` or "already resumed".
+
+What an operator sees:
+
+```console
+$ ccresu inspect 1347e5db-a9fb-42eb-b92a-82256bd5aa68
+session:       1347e5db-a9fb-42eb-b92a-82256bd5aa68
+state:         WAITING_FOR_RESET
+enabled:       yes
+recoverable:   yes
+last error:    Claude usage limit reached. Your limit will reset at 10am (Europe/Berlin).
+project:       /home/you/projects/demo
+transcript:    /home/you/.claude/projects/-home-you-projects-demo/1347e5db-….jsonl
+type:          headless
+last seen:     2026-01-06 14:58:11 +08
+
+Next attempt
+at:            2026-01-06 09:00:00 UTC (in 2h1m)
+why:           waiting for the usage limit to reset
+
+Latest usage limit
+type:          other
+detected:      2026-01-06 14:58:11 +08
+resets:        2026-01-06 17:00:00 +08
+raw:           10am (Europe/Berlin)
+confidence:    0.95
+
+Latest attempt
+number:        1
+state:         WAITING_FOR_RESET
+started:       2026-01-06 14:58:11 +08
+finished:      2026-01-06 14:58:14 +08
+command:       claude -p --resume 1347e5db-… --output-format json <201-byte continuation message>
+error:         Claude usage limit reached. Your limit will reset at 10am (Europe/Berlin).
+…
+```
+
+`at` is the reset instant the banner named, not a backoff: the session is waiting
+for the window, not for a retry, and `why` says so. `ccresu recover <id>` still
+works if you want the question asked right now — if the limit has not cleared the
+CLI refuses again and the session is parked again with the same banner.
 
 ## Proving it end to end
 
@@ -342,7 +446,7 @@ started is not a recovery.
 | Authentication failure or invalid API key | classified as not a usage limit; never retried after a reset |
 | Network error, crashed tool, user cancellation | not a usage limit; not resumed |
 | Normal completion | recognised as completion; not resumed |
-| Limit still in force at resume time | attempt recorded, back to `WAITING_FOR_RESET` |
+| Limit still in force at resume time | the attempt is finished with the banner, the banner is recorded as a usage limit, and the session returns to `WAITING_FOR_RESET`; no further resume until the reset it named |
 | Session still attached to a background agent | `claude stop <job-id>` then the identical resume, once per attempt; if the stop fails the original refusal is reported |
 | Attempt budget spent | back to `DISCOVERED`; the next discovery pass re-reads the transcript, schedules the next reset and starts a fresh budget |
 

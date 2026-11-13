@@ -264,9 +264,11 @@ $ ccresu inspect 4d1f9c2a-7e35-4b18-9a6f-2c8d0e1f3a45
 `inspect` leads with **when the next attempt is due and why** — an absolute UTC
 instant plus a countdown (`at: 2026-11-04 19:29:00 UTC (in 45s)`), or `none` with
 the reason (`session is not enabled`, `attempt budget spent; use 'ccresu retry'`,
-`no usage limit detected yet`). It then shows the last usage limit, the resolved
-reset instant with the zone it was written in, the schedule and the notification
-state — enough to explain why a wait is where it is.
+`no usage limit detected yet`). A session parked by a refused resume instead shows
+the reset the CLI named, with `why: waiting for the usage limit to reset`. It then
+shows the last usage limit, the resolved reset instant with the zone it was
+written in, the schedule and the notification state — enough to explain why a
+wait is where it is.
 
 `sessions` carries the same answer as its `NEXT ATTEMPT` column: `in 2h14m` while
 a wait is pending, `none (<reason>)` when nothing is scheduled. Both read the
@@ -300,6 +302,50 @@ session id, same transcript — and it goes to the log rather than to the attemp
 row, so `ccresu history` still shows one resume command. If the stop fails or the
 second resume refuses again, the original error is reported unchanged, exactly as
 before. See [recovery.md](recovery.md).
+
+#### When the limit has not reset yet
+
+The other refusal is the one the limit itself causes: `claude -p --resume` exits
+1 with the banner the CLI prints.
+
+```console
+Claude usage limit reached. Your limit will reset at 10am (Europe/Berlin).
+```
+
+ccresu reads that as a wait, not as a failure — and never as
+`claude executable unavailable`. The attempt is finished with the banner, the
+banner is recorded as a usage limit (so `Latest usage limit` shows the CLI's own
+phrase next to the resolved instant), the next attempt is scheduled at the reset
+instant the banner named, and the session stays in `WAITING_FOR_RESET` until
+then. Nothing is retried in the meantime: five reconcile passes inside one window
+issue exactly one `claude -p --resume`, and the next one is issued after the
+reset.
+
+```console
+$ ccresu inspect 1347e5db-a9fb-42eb-b92a-82256bd5aa68
+state:         WAITING_FOR_RESET
+last error:    Claude usage limit reached. Your limit will reset at 10am (Europe/Berlin).
+…
+
+Next attempt
+at:            2026-01-06 09:00:00 UTC (in 2h1m)
+why:           waiting for the usage limit to reset
+
+Latest usage limit
+type:          other
+resets:        2026-01-06 17:00:00 +08
+raw:           10am (Europe/Berlin)
+confidence:    0.95
+…
+```
+
+`at` is the reset the banner named, not a backoff, and `why` names the wait, so
+the `NEXT ATTEMPT` column of `ccresu sessions` (`in 2h1m`) and the detail page
+tell the same story. When the banner names no reset time, the schedule falls back
+to the usual poll with backoff — still without resuming in the meantime.
+`ccresu recover <id>` asks the CLI again right away; if the limit has not cleared
+it refuses, and the session is parked again with the same banner. See
+[recovery.md](recovery.md).
 
 ### Stop a session from being resumed
 

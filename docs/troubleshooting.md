@@ -52,6 +52,7 @@ journalctl --user -u ccresu.service -n 100 --no-pager
 | Reset time looks wrong | The stored instant is the phrase's own zone, not the host's. `ccresu inspect` prints the resolved instant, the zone and the original phrase. A message with no reset time uses the re-poll backoff (5m doubling to 30m), so the resume is later than the banner suggests — by design. |
 | Resume never happens, state stuck at `WAITING_FOR_RESET` | The schedule row is in the future, or `monitoring.enabled`/`claude.resume_enabled` is off. `ccresu status` prints the next due time. Restarting is safe: the wait is in the database. |
 | Resume happened but the state did not move to `RESUMED` | One of the two proofs failed. `ccresu history <id>` shows `session_id_verified` and `transcript_grew` per attempt: a mangled id is `claude: resumed session id did not match the requested session`; a silent transcript is `recovery: resume could not be verified`. |
+| A limited session is resumed over and over, and `last error` says `claude: claude executable unavailable` | That was a misclassification: the CLI ran and refused with a usage-limit banner, and the refusal was read as a missing binary. A refusal now parks the session in `WAITING_FOR_RESET` until the reset it names, records the banner as a usage limit, and issues no further resume in the meantime. `ccresu history <id>` shows the repeated `RESUMING → DISCOVERED` transitions that identify the old behaviour; upgrade to a build that contains the fix (0.6.0 or later). |
 
 ## Notifications
 
