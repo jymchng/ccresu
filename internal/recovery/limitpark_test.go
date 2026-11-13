@@ -256,6 +256,18 @@ func TestARefusedAttemptsOwnWritesDoNotProveAResume(t *testing.T) {
 			stored.TranscriptLines)
 	}
 
+	// The refusal closed the attempt itself, so the row the second pass finds is
+	// already finished. Snapshotting it here is what makes the comparison below
+	// mean something: a rewrite by closeStaleAttempt would change these fields.
+	before, err := store.ListAttempts(context.Background(), session.ID, 0)
+	if err != nil {
+		t.Fatalf("list attempts after the first pass: %v", err)
+	}
+	if len(before) != 1 {
+		t.Fatalf("attempts after the first pass = %d, want 1", len(before))
+	}
+	first := before[0]
+
 	// The reset arrives, exactly as the daemon's schedule would announce it.
 	if _, err := store.TransitionSession(context.Background(), session.ID, StateResetTimeReached,
 		"the scheduled reset time has arrived", 0); err != nil {
@@ -286,6 +298,45 @@ func TestARefusedAttemptsOwnWritesDoNotProveAResume(t *testing.T) {
 			t.Errorf("a refused resume was recorded as an independent resumption: %s -> %s (%s)",
 				transition.FromState, transition.ToState, transition.Reason)
 		}
+		// The attempt was answered, so nothing about it may be rewritten as a
+		// restart, and a session waiting for a reset may not be sent back into the
+		// retry loop behind the park's back.
+		if strings.Contains(transition.Reason, "interrupted by a process restart") {
+			t.Errorf("the refused attempt was rewritten as a restart: %s -> %s (%s)",
+				transition.FromState, transition.ToState, transition.Reason)
+		}
+		if transition.ToState == StateRetryWait {
+			t.Errorf("a RETRY_WAIT was logged over a parked session: %s -> %s (%s)",
+				transition.FromState, transition.ToState, transition.Reason)
+		}
+	}
+
+	// The second pass must leave the answered attempt exactly as the refusal
+	// recorded it. This is the assertion the park's FinishAttempt exists for: with
+	// the row left open, closeStaleAttempt closes it here as "interrupted by a
+	// process restart" and the error stops being the CLI's banner.
+	after, err := store.ListAttempts(context.Background(), session.ID, 0)
+	if err != nil {
+		t.Fatalf("list attempts after the second pass: %v", err)
+	}
+	var kept *storage.RecoveryAttempt
+	for i := range after {
+		if after[i].ID == first.ID {
+			kept = &after[i]
+		}
+	}
+	if kept == nil {
+		t.Fatalf("attempt %d disappeared from the history", first.ID)
+	}
+	if !kept.FinishedAt.Equal(first.FinishedAt) {
+		t.Errorf("finished at = %s, want the original %s: the refused attempt was rewritten",
+			kept.FinishedAt, first.FinishedAt)
+	}
+	if kept.Error != first.Error {
+		t.Errorf("attempt error = %q, want the original banner %q", kept.Error, first.Error)
+	}
+	if kept.State != first.State {
+		t.Errorf("attempt state = %s, want the original %s", kept.State, first.State)
 	}
 
 	provider.mu.Lock()
