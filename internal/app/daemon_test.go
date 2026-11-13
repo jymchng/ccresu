@@ -11,6 +11,7 @@ import (
 	"github.com/jymchng/ccresu/internal/claude"
 	"github.com/jymchng/ccresu/internal/config"
 	"github.com/jymchng/ccresu/internal/detector"
+	"github.com/jymchng/ccresu/internal/recovery"
 	"github.com/jymchng/ccresu/internal/scheduler"
 	"github.com/jymchng/ccresu/internal/storage"
 	"github.com/jymchng/ccresu/internal/telegram"
@@ -571,5 +572,150 @@ func TestCmdDaemonStopsOnASignal(t *testing.T) {
 	}
 	if !strings.Contains(h.stdout.String(), "daemon stopped") {
 		t.Errorf("stdout = %q", h.stdout.String())
+	}
+}
+
+// TestDaemonLeavesAPlannedRefusalWaitAlone pins the daemon's half of the park.
+//
+// A refusal is not a schedule to advance: the manager has already replaced the
+// stale poll this pass loaded with the reset the banner named. Advancing the
+// stale copy afterwards would save it back over the fresh wait, so the session
+// would go on polling a reset it already knows.
+func TestDaemonLeavesAPlannedRefusalWaitAlone(t *testing.T) {
+	h := newHarness(t)
+	session := h.seedSession(t, canonicalSessionID, func(s *storage.Session) {
+		s.State = storage.StateWaitingForReset
+		s.TranscriptLines = 8470
+		s.TranscriptSize = 27472239
+	})
+	h.provider.Statuses[canonicalSessionID] = claude.SessionStatus{
+		Session:    claude.Session{ID: canonicalSessionID, Recoverable: true},
+		Transcript: claude.TranscriptInfo{Path: "/tmp/t.jsonl", Size: 27472239, Lines: 8470},
+	}
+	h.provider.OnResume = func(context.Context, string, string) (claude.ResumeResult, error) {
+		return claude.ResumeResult{}, &claude.CLIError{
+			What:     "claude -p --resume",
+			ExitCode: 1,
+			Stdout:   []byte(usageLimitBanner),
+			Kind:     claude.ErrUsageLimitInForce,
+		}
+	}
+
+	// An unknown-reset poll that has come due: this is the stale wait the pass
+	// loads, and the one Advance would write back.
+	if _, err := h.rt.Scheduler.Save(context.Background(), scheduler.Schedule{
+		SessionID:  session.ID,
+		Unknown:    true,
+		NextPollAt: harnessBaseTime.Add(-time.Minute),
+		Attempts:   3,
+	}); err != nil {
+		t.Fatalf("save schedule: %v", err)
+	}
+
+	daemon := NewDaemon(h.rt, time.Minute)
+	if err := daemon.Step(context.Background()); err != nil {
+		t.Fatalf("step: %v", err)
+	}
+
+	schedules, err := h.rt.Scheduler.Restore(context.Background())
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if len(schedules) != 1 {
+		t.Fatalf("schedules = %d, want the planned wait", len(schedules))
+	}
+	got := schedules[0]
+	want := time.Date(2026, 1, 6, 9, 0, 0, 0, time.UTC)
+	if got.Unknown {
+		t.Errorf("the stale poll overwrote the planned wait: %+v", got)
+	}
+	if !got.ResetAt.Equal(want) {
+		t.Errorf("reset at = %s, want the instant the banner named (%s)", got.ResetAt, want)
+	}
+	if got.Attempts != 0 {
+		t.Errorf("polls = %d, want 0: the plan replaced the poll, it was not advanced", got.Attempts)
+	}
+	if got.UsageLimitID == 0 {
+		t.Error("the planned wait lost its usage-limit row")
+	}
+}
+
+// TestDaemonAdvancesThePollWhenTheLimitHasNotCleared covers the other half of
+// the same branch: the pre-resume limit check reports ErrLimitNotCleared without
+// planning anything, so no schedule was written and the due poll is still the
+// only wait there is. It must be advanced, otherwise an unknown-reset schedule
+// stays due and every pass asks the same question again.
+func TestDaemonAdvancesThePollWhenTheLimitHasNotCleared(t *testing.T) {
+	h := newHarness(t)
+	session := h.seedSession(t, canonicalSessionID, func(s *storage.Session) {
+		s.State = storage.StateWaitingForReset
+		s.TranscriptLines = 8470
+		s.TranscriptSize = 27472239
+	})
+	h.provider.Statuses[canonicalSessionID] = claude.SessionStatus{
+		Session:    claude.Session{ID: canonicalSessionID, Recoverable: true},
+		Transcript: claude.TranscriptInfo{Path: "/tmp/t.jsonl", Size: 27472239, Lines: 8470},
+	}
+	manager, err := recovery.New(recovery.Config{
+		Store:               h.store,
+		Provider:            h.provider,
+		Clock:               h.clock,
+		Enabled:             true,
+		MaxAttempts:         3,
+		VerificationTimeout: -1,
+		HealthCheckInterval: -1,
+		LimitPark:           limitParker(h.store, h.rt.Scheduler, h.rt.Detector, h.clock, nil),
+		// The limit has not cleared: the manager says so and plans nothing.
+		LimitRecheck: func(context.Context, string) (bool, error) { return false, nil },
+	})
+	if err != nil {
+		t.Fatalf("recovery manager: %v", err)
+	}
+	h.rt.Recovery = manager
+
+	if _, err := h.rt.Scheduler.Save(context.Background(), scheduler.Schedule{
+		SessionID:  session.ID,
+		Unknown:    true,
+		NextPollAt: harnessBaseTime.Add(-time.Minute),
+		Attempts:   2,
+	}); err != nil {
+		t.Fatalf("save schedule: %v", err)
+	}
+
+	daemon := NewDaemon(h.rt, time.Minute)
+	if err := daemon.Step(context.Background()); err != nil {
+		t.Fatalf("step: %v", err)
+	}
+
+	for _, call := range h.provider.Calls() {
+		if call.Name == "ResumeSession" {
+			t.Fatalf("a session whose limit has not cleared was resumed")
+		}
+	}
+
+	schedules, err := h.rt.Scheduler.Restore(context.Background())
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if len(schedules) != 1 {
+		t.Fatalf("schedules = %d, want the poll to survive", len(schedules))
+	}
+	got := schedules[0]
+	if !got.Unknown {
+		t.Errorf("the poll was replaced by a wait nothing planned: %+v", got)
+	}
+	if got.Attempts != 3 {
+		t.Errorf("polls = %d, want 3: a due poll must advance", got.Attempts)
+	}
+	if !got.NextPollAt.After(harnessBaseTime) {
+		t.Errorf("next poll at = %s, want a future instant; a due poll retries every pass", got.NextPollAt)
+	}
+
+	stored, err := h.store.GetSession(context.Background(), canonicalSessionID)
+	if err != nil {
+		t.Fatalf("re-read session: %v", err)
+	}
+	if stored.State != storage.StateWaitingForReset {
+		t.Errorf("state = %s, want %s", stored.State, storage.StateWaitingForReset)
 	}
 }

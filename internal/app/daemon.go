@@ -404,14 +404,22 @@ func (d *Daemon) actOnSchedules(ctx context.Context) error {
 			SessionID:    sched.SessionID,
 			UsageLimitID: sched.UsageLimitID,
 		})
+		// ErrLimitNotCleared says the limit is still in force; it does not say
+		// that a wait was planned. Only a refusal carries *LimitInForceError,
+		// and only a refusal whose parker succeeded carries an instant. The
+		// pre-resume limit check and a refusal whose parker could not plan
+		// write no schedule at all, so the due one this pass loaded is the only
+		// wait there is and must be advanced — otherwise an unknown-reset
+		// schedule stays due and every pass retries it.
+		var refusal *recovery.LimitInForceError
+		replanned := errors.As(recoverErr, &refusal) && !refusal.ResetAt.IsZero()
 		switch {
-		case errors.Is(recoverErr, recovery.ErrLimitNotCleared):
-			// The resume was refused because the limit is still in force, and the
-			// manager has already recorded the refusal and saved the wait it
+		case replanned:
+			// The manager has already recorded the refusal and saved the wait it
 			// names. Advancing here would overwrite that schedule with the stale
 			// one this pass loaded, so the fresh wait is left alone.
 			rt.Log.Info("resume refused by the usage limit; waiting for the reset",
-				"session", sched.SessionID)
+				"session", sched.SessionID, "at", refusal.ResetAt)
 		case recoverErr != nil && !errors.Is(recoverErr, recovery.ErrNotEligible):
 			// Keep the schedule and back off: the limit may not have cleared yet.
 			if _, err := rt.Scheduler.Advance(ctx, sched, now); err != nil {
