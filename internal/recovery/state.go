@@ -66,11 +66,11 @@ var ErrInvalidTransition = errors.New("recovery: invalid state transition")
 // continue the conversation. That is a fact about the session, not a budget.
 var transitions = map[State]map[State]struct{}{
 	StateDiscovered: {
-		StateRunning:           {},
-		StateCheckingSession:   {}, // recover and retry start by checking the session
-		StateDisabled:          {},
-		StateUnrecoverable:     {},
-		StateDiscovered:        {}, // a fresh cycle for a budget spent before discovery
+		StateRunning:         {},
+		StateCheckingSession: {}, // recover and retry start by checking the session
+		StateDisabled:        {},
+		StateUnrecoverable:   {},
+		StateDiscovered:      {}, // a fresh cycle for a budget spent before discovery
 	},
 	StateRunning: {
 		StateUsageLimitDetected: {},
@@ -80,61 +80,61 @@ var transitions = map[State]map[State]struct{}{
 		StateDiscovered:         {},
 	},
 	StateUsageLimitDetected: {
-		StateWaitingForReset:   {},
-		StateUnrecoverable:     {},
-		StateUserTerminated:    {},
-		StateDisabled:          {},
-		StateDiscovered:        {},
+		StateWaitingForReset: {},
+		StateUnrecoverable:   {},
+		StateUserTerminated:  {},
+		StateDisabled:        {},
+		StateDiscovered:      {},
 	},
 	StateWaitingForReset: {
 		// A repeat entry is legal: an unknown-reset session re-enters the
 		// waiting state after every poll, and a restart re-observes the wait.
-		StateWaitingForReset:   {},
-		StateResetTimeReached:  {},
-		StateUnrecoverable:     {},
-		StateUserTerminated:    {},
-		StateDisabled:          {},
-		StateDiscovered:        {},
+		StateWaitingForReset:  {},
+		StateResetTimeReached: {},
+		StateUnrecoverable:    {},
+		StateUserTerminated:   {},
+		StateDisabled:         {},
+		StateDiscovered:       {},
 	},
 	StateResetTimeReached: {
-		StateCheckingSession:   {},
-		StateUnrecoverable:     {},
-		StateUserTerminated:    {},
-		StateDisabled:          {},
-		StateDiscovered:        {},
+		StateCheckingSession: {},
+		StateUnrecoverable:   {},
+		StateUserTerminated:  {},
+		StateDisabled:        {},
+		StateDiscovered:      {},
 	},
 	StateCheckingSession: {
-		StateCheckingLimit:     {},
-		StateResumed:           {}, // it resumed on its own; nothing to do
-		StateRetryWait:         {}, // the status check itself failed
-		StateUnrecoverable:     {},
-		StateUserTerminated:    {},
-		StateDisabled:          {},
-		StateDiscovered:        {},
+		StateCheckingLimit:  {},
+		StateResumed:        {}, // it resumed on its own; nothing to do
+		StateRetryWait:      {}, // the status check itself failed
+		StateUnrecoverable:  {},
+		StateUserTerminated: {},
+		StateDisabled:       {},
+		StateDiscovered:     {},
 	},
 	StateCheckingLimit: {
-		StateResuming:          {},
-		StateRetryWait:         {},
-		StateWaitingForReset:   {}, // the limit is still in force
-		StateUnrecoverable:     {},
-		StateUserTerminated:    {},
-		StateDisabled:          {},
-		StateDiscovered:        {},
+		StateResuming:        {},
+		StateRetryWait:       {},
+		StateWaitingForReset: {}, // the limit is still in force
+		StateUnrecoverable:   {},
+		StateUserTerminated:  {},
+		StateDisabled:        {},
+		StateDiscovered:      {},
 	},
 	StateResuming: {
-		StateResumed:           {},
-		StateRetryWait:         {},
-		StateDiscovered:        {},
-		StateUnrecoverable:     {},
-		StateUserTerminated:    {},
-		StateDisabled:          {},
+		StateResumed:        {},
+		StateRetryWait:      {},
+		StateDiscovered:     {},
+		StateUnrecoverable:  {},
+		StateUserTerminated: {},
+		StateDisabled:       {},
 	},
 	StateRetryWait: {
-		StateCheckingSession:   {},
-		StateWaitingForReset:   {},
-		StateDiscovered:        {},
-		StateUserTerminated:    {},
-		StateDisabled:          {},
+		StateCheckingSession: {},
+		StateWaitingForReset: {},
+		StateDiscovered:      {},
+		StateUserTerminated:  {},
+		StateDisabled:        {},
 	},
 	// RESUMED is not strictly terminal — a resumed session can hit its limit
 	// again — but a second recovery is only legal after the session has been
