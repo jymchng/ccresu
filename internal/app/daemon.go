@@ -137,6 +137,7 @@ func (d *Daemon) Step(ctx context.Context) error {
 		{"detect", d.detect},
 		{"schedule", d.actOnSchedules},
 		{"recover", d.recoverPending},
+		{"complete", d.notifyCompleted},
 		{"deliver", d.deliver},
 	} {
 		if err := stage.run(ctx); err != nil {
@@ -481,6 +482,51 @@ func (d *Daemon) recoverPending(ctx context.Context) error {
 		if _, err := rt.Recovery.Recover(ctx, session.ID); err != nil &&
 			!errors.Is(err, recovery.ErrNotEligible) && !errors.Is(err, recovery.ErrAlreadyRunning) {
 			rt.Log.Warn("recover pending session", "session", session.ID, "error", err)
+		}
+	}
+	return nil
+}
+
+// notifyCompleted queues session_completed for every session that has settled as
+// COMPLETED.
+//
+// This producer lives in the daemon rather than in the recovery manager because a
+// completed session never enters the recovery engine: `recoverPending` skips
+// settled states and `Recover` refuses them, so the manager would only ever see
+// one when an operator asked about that exact session. The daemon is the component
+// that looks at every session on every pass, so it is the one that can notice the
+// settlement.
+//
+// Re-queueing is harmless and deliberate: the dedupe key is
+// `session_completed:<session id>`, so EnqueueNotification's ON CONFLICT DO NOTHING
+// writes the row once per session however often the pass runs, and a repeat simply
+// reports created=false. Nothing here can fail the pass: a notification problem is
+// logged, never returned, because it must not stop recoveries.
+func (d *Daemon) notifyCompleted(ctx context.Context) error {
+	rt := d.runtime
+	if rt.Notifier == nil || rt.Store == nil {
+		return nil
+	}
+	if !rt.Notifier.Enabled(storage.EventSessionCompleted) {
+		return nil
+	}
+	sessions, err := rt.Store.ListSessions(ctx, storage.SessionFilter{
+		States: []storage.State{storage.StateCompleted},
+	})
+	if err != nil {
+		return fmt.Errorf("list completed sessions: %w", err)
+	}
+	for _, session := range sessions {
+		if _, _, err := rt.Notifier.Notify(ctx, telegram.Request{
+			Event:     storage.EventSessionCompleted,
+			SessionID: session.ID,
+			Data: telegram.EventData{
+				SessionID:   session.ID,
+				ProjectPath: session.ProjectPath,
+				State:       string(session.State),
+			},
+		}); err != nil && !errors.Is(err, telegram.ErrDisabled) {
+			rt.Log.Warn("queue session_completed notification", "session", session.ID, "error", err)
 		}
 	}
 	return nil

@@ -51,29 +51,32 @@ To get the two values:
 ## What you get
 
 Every event is a separate switch, all `true` by default except `notify_waiting`.
-Two of them are queued today: the daemon produces `limit_detected` and
-`waiting_for_reset` from one place (`internal/app/daemon.go:344-347`). The other
-five have a config key, a subject and a complete template, but nothing enqueues
-them, so turning one on is harmless and simply never sends anything.
+All seven are produced today. The daemon queues `limit_detected` and
+`waiting_for_reset` from one place (`internal/app/daemon.go:345-347`); the four
+recovery events come from the recovery engine, which reports each milestone to an
+observer that renders and queues it (`internal/app/notifications.go`); and
+`session_completed` comes from the daemon's own `complete` stage
+(`internal/app/daemon.go:505-533`), because a completed session never enters the
+recovery engine at all.
 
 | Event | YAML key | Subject | Queued today |
 | --- | --- | --- | --- |
-| Usage limit detected | `notify_limit_detected` | Usage limit detected | yes |
+| Usage limit detected | `notify_limit_detected` | Usage limit detected | yes, on the first sighting of a banner |
 | Waiting for the reset | `notify_waiting` (default `false`) | Waiting for the usage limit to reset | yes, when the banner named no reset |
-| Recovery started | `notify_recovery_started` | Recovery started | no |
-| Recovery succeeded | `notify_recovery_success` | Recovery succeeded | no |
-| Attempt failed | `notify_recovery_failure` | Recovery attempt failed | no |
-| Permanent failure | `notify_permanent_failure` | Automatic recovery stopped | no |
-| Session completed | `notify_session_completed` | Session completed | no |
+| Recovery started | `notify_recovery_started` | Recovery started | yes, once per attempt, when the attempt row is written |
+| Recovery succeeded | `notify_recovery_success` | Recovery succeeded | yes, once per proven resume |
+| Attempt failed | `notify_recovery_failure` | Recovery attempt failed | yes, once per attempt that goes to `RETRY_WAIT` |
+| Permanent failure | `notify_permanent_failure` | Automatic recovery stopped | yes, once per failure classified `recovery.ClassPermanent` |
+| Session completed | `notify_session_completed` | Session completed | yes, once per session that settles as `COMPLETED` |
 
 `notify_waiting` is off by default, and it is not a second copy of the detection
 message: the daemon skips it whenever the reset time is known
-(`internal/app/daemon.go:351-354`), so it only arrives when the banner carried no
+(`internal/app/daemon.go:352-355`), so it only arrives when the banner carried no
 time and ccresu has to poll for the window to clear. Turn it on to hear about
 that wait as it begins.
 
-The five inert events are fully rendered — a successful recovery would look like
-this (`internal/telegram/template.go:116-124`):
+The recovery events are rendered from the milestone the engine reports, so a
+successful recovery looks like this (`internal/telegram/template.go:116-124`):
 
 ```text
 Recovery succeeded
@@ -83,12 +86,15 @@ The original conversation resumed and its transcript grew.
 Duration: 2m14s
 ```
 
-What is missing is the producer, not the message. `notify_permanent_failure` is
-worth calling out because its name invites the wrong reading: it belongs to a
-failure classified permanent (`recovery.ClassPermanent`), and a spent attempt
-budget is not one — that returns the session to `DISCOVERED`, where the daemon
-re-reads the transcript and plans the next reset
-(`internal/recovery/manager.go:353-359`).
+Two things are deliberately not announced. A usage-limit refusal is a wait with a
+known end rather than a failure, so it raises no `recovery_failure`: the
+`limit_detected` and `waiting_for_reset` messages already described it. And
+`notify_permanent_failure` is worth calling out because its name invites the
+wrong reading: it belongs to a failure classified permanent
+(`recovery.ClassPermanent`), and a spent attempt budget is not one — that returns
+the session to `DISCOVERED`, where the daemon re-reads the transcript and plans
+the next reset (`internal/recovery/manager.go:353-359`), so it is a pause in a
+cycle rather than a verdict about the conversation.
 
 ## Escaping and length
 
@@ -158,7 +164,7 @@ Both routes are documented in [api.md](api.md).
 | `403 bot was blocked by the user` | The chat blocked the bot; unblock it and send `/start`. |
 | `429` repeatedly | Telegram is rate limiting the bot; the queue keeps the message and backs off. |
 | Nothing arrives, `enabled: false` | The switch is off: `ccresu config validate` prints `telegram: no`. |
-| Nothing arrives, one event missing | Only `limit_detected` and `waiting_for_reset` are produced today; the other five `notify_*` switches are inert. For those two, the switch is off — and `notify_waiting` stays silent when the reset time is known. |
+| Nothing arrives, one event missing | Check that event's switch first: `notify_waiting` is off by default, and it stays silent even when on if the banner named a reset time. `notify_recovery_failure` is deliberately not sent for a usage-limit refusal (that is a wait, reported by `notify_limit_detected`), and `notify_permanent_failure` only fires for a failure classified `recovery.ClassPermanent` — a spent attempt budget returns the session to `DISCOVERED` and announces nothing. `notify_session_completed` needs a session that has actually settled as `COMPLETED`. |
 
 The token is a credential: it is registered with the log redactor at startup, so
 it is scrubbed from every log line and error string, and it is masked in

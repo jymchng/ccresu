@@ -217,6 +217,10 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatalf("detector: %v", err)
 	}
+	// The notifier is built before the manager because the manager takes the
+	// milestone observer, exactly as BuildRuntime wires them: a harness whose
+	// manager had no observer would make every notification test assert nothing.
+	notifier := &fakeNotifier{}
 	manager, err := recovery.New(recovery.Config{
 		Store:       store,
 		Provider:    provider,
@@ -231,6 +235,10 @@ func newHarness(t *testing.T) *harness {
 		// a refusal that is not planned would leave the session waiting with no
 		// schedule, which is not a state production can reach.
 		LimitPark: limitParker(store, sched, limitDetector, clk, nil),
+		// The observer logs its own failures instead of returning them, so it gets
+		// the same discarded logger the runtime carries: a test that deliberately
+		// breaks the notifier should not print to the suite's output.
+		Observer: notificationObserver(notifier, slog.New(slog.NewTextHandler(io.Discard, nil))),
 	})
 	if err != nil {
 		t.Fatalf("recovery manager: %v", err)
@@ -246,7 +254,6 @@ func newHarness(t *testing.T) *harness {
 	cfg.Storage.Path = filepath.Join(t.TempDir(), "state", "ccresu.db")
 	cfg.Telegram.Enabled = false
 
-	notifier := &fakeNotifier{}
 	h := &harness{
 		store:       store,
 		provider:    provider,

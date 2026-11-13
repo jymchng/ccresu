@@ -151,14 +151,25 @@ func BuildRuntime(ctx context.Context, cfg *config.Config, clk clock.Clock, log 
 		return nil, err
 	}
 
-	manager, err := recoveryFromConfig(cfg, store, provider, clk, log,
-		limitParker(store, sched, limitDetector, clk, log))
+	// The notifier is built before the manager because the manager takes the
+	// milestone observer, which queues through it. Building it here also means a
+	// broken Telegram configuration is reported before a single recovery runs,
+	// rather than halfway through one.
+	notifier, err := telegram.NewFromConfig(cfg, store, clk, log)
 	if err != nil {
 		_ = store.Close()
 		return nil, err
 	}
+	// A disabled notifier must reach the observer as a nil interface, not as a
+	// typed nil: the same trap the Runtime field guards against below.
+	var queue Notifier
+	if notifier != nil {
+		queue = notifier
+	}
 
-	notifier, err := telegram.NewFromConfig(cfg, store, clk, log)
+	manager, err := recoveryFromConfig(cfg, store, provider, clk, log,
+		limitParker(store, sched, limitDetector, clk, log),
+		notificationObserver(queue, log))
 	if err != nil {
 		_ = store.Close()
 		return nil, err
@@ -188,12 +199,12 @@ func BuildRuntime(ctx context.Context, cfg *config.Config, clk clock.Clock, log 
 }
 
 // recoveryFromConfig mirrors recovery.FromConfig and additionally installs the
-// structured logger, which FromConfig cannot take without changing its verified
-// signature.
+// structured logger and the milestone observer, which FromConfig cannot take
+// without changing its verified signature.
 //
 // The mapping is kept identical on purpose; TestRecoveryFromConfigMatches is the
 // guard against the two drifting apart.
-func recoveryFromConfig(cfg *config.Config, store *storage.Store, provider claude.SessionProvider, clk clock.Clock, log *slog.Logger, park recovery.LimitPark) (*recovery.Manager, error) {
+func recoveryFromConfig(cfg *config.Config, store *storage.Store, provider claude.SessionProvider, clk clock.Clock, log *slog.Logger, park recovery.LimitPark, observer recovery.Observer) (*recovery.Manager, error) {
 	rec := cfg.Recovery
 	return recovery.New(recovery.Config{
 		Store:               store,
@@ -208,6 +219,11 @@ func recoveryFromConfig(cfg *config.Config, store *storage.Store, provider claud
 		VerificationTimeout: rec.VerificationTimeout.Duration,
 		HealthCheckInterval: rec.HealthCheckInterval.Duration,
 		LimitPark:           park,
+		// The observer is the notification producer: it is passed in rather than
+		// built here so this function stays a pure mapping of configuration onto
+		// policy, and so a caller with no notifier passes nil and announces
+		// nothing.
+		Observer: observer,
 	})
 }
 

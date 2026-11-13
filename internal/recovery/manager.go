@@ -89,6 +89,11 @@ type Config struct {
 	// and no usage-limit row are written, so the wait ends only when something
 	// else re-plans it; the daemon always supplies one.
 	LimitPark LimitPark
+	// Observer receives every recovery milestone, so a caller can tell an
+	// operator that an attempt started, succeeded, failed or stopped for good.
+	// Nil means nothing is announced: the recovery runs identically either way,
+	// which is why the notifications cannot stand in its path.
+	Observer Observer
 }
 
 // Manager runs recoveries for one process.
@@ -110,6 +115,7 @@ type Manager struct {
 	verifier    Verifier
 	limitCheck  LimitRecheck
 	limitPark   LimitPark
+	observer    Observer
 
 	locks *sessionLocks
 	sem   chan struct{}
@@ -183,9 +189,28 @@ func New(cfg Config) (*Manager, error) {
 		verifier:    verifier,
 		limitCheck:  cfg.LimitRecheck,
 		limitPark:   cfg.LimitPark,
+		observer:    cfg.Observer,
 		locks:       newSessionLocks(),
 		sem:         make(chan struct{}, maxConcurrent),
 	}, nil
+}
+
+// announce reports a milestone to the installed observer, if any.
+//
+// It is called on the recovery goroutine and returns immediately when no
+// observer is installed, so a deployment without notifications pays nothing for
+// the hook. Nothing here can fail the recovery: the observer returns no error
+// and its own failures are its business (see Observer).
+func (m *Manager) announce(ctx context.Context, kind MilestoneKind, outcome Outcome, cause error) {
+	if m.observer == nil {
+		return
+	}
+	m.observer(ctx, Milestone{
+		Kind:        kind,
+		Outcome:     outcome,
+		MaxAttempts: m.maxAttempts,
+		Cause:       cause,
+	})
 }
 
 // FromConfig builds a Manager from the application configuration.
@@ -419,6 +444,10 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 		outcome.State = state.current
 		outcome.Verification = verification
 		outcome.Resumed = true
+		// The conversation is proven to continue, so this is a success even
+		// though ccresu issued no resume: announcing it here is what keeps
+		// "recovery succeeded" from meaning "ccresu ran a command".
+		m.announce(ctx, MilestoneSucceeded, outcome, nil)
 		return outcome, nil
 	}
 	baseline = merged
@@ -453,6 +482,11 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 		return Outcome{SessionID: sessionID, State: state.current}, fmt.Errorf("record attempt: %w", err)
 	}
 	outcome.Attempt = attempt
+	// The attempt row exists, so a resume is genuinely under way. Announcing it
+	// here rather than at the caller is what makes "started" true: the daemon
+	// only sees outcomes, and a CLI `ccresu recover` never goes through the
+	// daemon at all.
+	m.announce(ctx, MilestoneStarted, outcome, nil)
 
 	result, resumeErr := m.provider.ResumeSession(ctx, sessionID, message)
 	if resumeErr != nil {
@@ -500,6 +534,7 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 	}
 	outcome.State = state.current
 	outcome.Resumed = true
+	m.announce(ctx, MilestoneSucceeded, outcome, nil)
 	return outcome, nil
 }
 
@@ -595,6 +630,10 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 		_ = m.store.SetSessionError(ctx, outcome.SessionID, truncate(cause.Error()))
 		outcome.State = state.current
 		outcome.Delay = delay
+		// The session is in RETRY_WAIT and ccresu will try again by itself, so
+		// this is the "attempt failed, still working on it" message. A refusal
+		// never reaches here: park() handles ClassLimitInForce above.
+		m.announce(ctx, MilestoneFailed, outcome, cause)
 		return outcome, &RetryError{
 			SessionID: outcome.SessionID, Attempt: attemptNumber, Max: m.maxAttempts,
 			Delay: delay, Cause: cause,
@@ -606,6 +645,16 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 	}
 	_ = m.store.SetSessionError(ctx, outcome.SessionID, truncate(cause.Error()))
 	outcome.State = state.current
+	// Only a positively permanent failure is announced as "automatic recovery
+	// stopped". A spent attempt budget also lands in DISCOVERED, but that is a
+	// pause in a cycle — the next discovery re-reads the transcript and starts a
+	// fresh budget — so calling it a verdict would raise a false alarm every
+	// night. An unrecoverable session is not announced here either: it is a fact
+	// about the conversation rather than a failed attempt, and the operator reads
+	// it from the state.
+	if class == ClassPermanent {
+		m.announce(ctx, MilestonePermanent, outcome, cause)
+	}
 	return outcome, &cycleEndError{SessionID: outcome.SessionID, State: target, Cause: cause}
 }
 
