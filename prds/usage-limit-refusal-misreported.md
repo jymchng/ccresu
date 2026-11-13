@@ -214,10 +214,10 @@ kept the loop alive.
 | `2610aeb` | `CLIError` carries exit code + both streams; `ErrUsageLimitInForce`; the prompt is no longer echoed | R1, R2 |
 | `52e7c85`, `05f1b7a` | Version probe follows the same rule; the now-false characterisations of the bug are retired | R1, R2 |
 | `b502f15` | `ClassLimitInForce`, decided before the prose markers; routes to `WAITING_FOR_RESET`; `RESUMING → WAITING_FOR_RESET` edge | R3, R4 |
+| `771c49f` | The refusal is parked: `LimitPark` plans the wait (the detector reads the banner, the scheduler persists it), the banner becomes `last_error` and a `usage_limits` row, and the daemon stops advancing the stale schedule | R5, R7 |
 
-Remaining: R5 (manager parks, records the limit row, schedules the reset), R6
-(the false-progress shortcut), R7 (bounding to one resume per window), R8
-(contract guards), documentation, and the release.
+Remaining: R6 (the false-progress shortcut), R8 (contract guards), documentation,
+and the release.
 
 ## 9. Open questions
 
