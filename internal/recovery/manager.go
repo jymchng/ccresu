@@ -615,6 +615,26 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 func (m *Manager) park(ctx context.Context, state *stateWalker, outcome Outcome,
 	attempt storage.RecoveryAttempt, cause error) (Outcome, error) {
 	banner := refusalBanner(cause)
+
+	// The attempt the CLI answered is finished before the wait is planned: it ran,
+	// it refused, and saying so is the truth about it. Leaving the row open would
+	// make the next Recover close it as "interrupted by a process restart" and
+	// record a RETRY_WAIT transition over a session that is parked, which is a
+	// false account of an attempt that has already been answered.
+	if attempt.ID != 0 {
+		verification := outcome.Verification
+		if _, err := m.store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
+			State:             StateWaitingForReset,
+			Success:           false,
+			Error:             truncate(banner),
+			SessionIDVerified: boolPtr(verification.SessionIDPreserved),
+			TranscriptGrew:    boolPtr(verification.TranscriptGrew),
+			FinishedAt:        m.now(),
+		}); err != nil {
+			m.log.Warn("record the refused attempt", "session", outcome.SessionID, "error", err)
+		}
+	}
+
 	var wait Wait
 	if m.limitPark == nil {
 		m.log.Warn("a resume was refused by a usage limit but no parker is configured; waiting without a schedule",

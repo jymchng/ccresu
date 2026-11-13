@@ -109,6 +109,29 @@ func TestARefusedResumeIsParkedUntilTheReset(t *testing.T) {
 	if stored.LastError != refusalBannerText {
 		t.Errorf("last error = %q, want the banner %q", stored.LastError, refusalBannerText)
 	}
+
+	// The attempt the CLI answered must be closed by the pass that saw the
+	// refusal. An open row would be rewritten by the next Recover as "interrupted
+	// by a process restart", which is not what happened.
+	attempts, err := store.ListAttempts(context.Background(), session.ID, 0)
+	if err != nil {
+		t.Fatalf("list attempts: %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("attempts = %d, want 1", len(attempts))
+	}
+	if attempts[0].FinishedAt.IsZero() {
+		t.Error("the refused attempt was left open; it must be finished by the refusal")
+	}
+	if attempts[0].Success == nil || *attempts[0].Success {
+		t.Errorf("attempt success = %v, want a recorded failure", attempts[0].Success)
+	}
+	if attempts[0].State != StateWaitingForReset {
+		t.Errorf("attempt state = %s, want %s", attempts[0].State, StateWaitingForReset)
+	}
+	if attempts[0].Error != refusalBannerText {
+		t.Errorf("attempt error = %q, want the banner %q", attempts[0].Error, refusalBannerText)
+	}
 }
 
 // TestAParkerThatCannotPlanStillParksTheSession pins the ordering: the wait is

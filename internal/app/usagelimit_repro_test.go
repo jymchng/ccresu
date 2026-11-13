@@ -305,6 +305,25 @@ func TestARefusedResumeParksTheSessionUntilTheNextReset(t *testing.T) {
 			t.Errorf("inspect output missing %q:\n%s", want, out)
 		}
 	}
+	// The refused attempt is finished by the pass that saw the refusal, with the
+	// banner as its error: an open row would be rewritten by the next Recover as
+	// "interrupted by a process restart", which is not what happened.
+	attempts := f.attempts(t)
+	if len(attempts) == 0 {
+		t.Fatalf("no attempt rows:\n%s", out)
+	}
+	if attempts[0].FinishedAt.IsZero() {
+		t.Errorf("the refused attempt was left open:\n%s", out)
+	}
+	if attempts[0].Success == nil || *attempts[0].Success {
+		t.Errorf("attempt success = %v, want a recorded failure:\n%s", attempts[0].Success, out)
+	}
+	if !strings.Contains(attempts[0].Error, "usage limit reached") {
+		t.Errorf("attempt error = %q, want the banner:\n%s", attempts[0].Error, out)
+	}
+	if strings.Contains(out, "interrupted by a process restart") {
+		t.Errorf("the refusal was rewritten as a restart:\n%s", out)
+	}
 	if strings.Contains(out, "already resumed") {
 		t.Errorf("inspect still claims the session resumed:\n%s", out)
 	}
