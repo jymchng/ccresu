@@ -113,7 +113,10 @@ jobs:
         run: |
           ./staging/ccresu version
           ./staging/ccresu --help > /dev/null
-          ./staging/ccresu version | grep -q " $VERSION$"
+          # Captured, not piped. This step runs without `pipefail`, so a SIGPIPE
+          # here would be swallowed rather than fatal — but it is the same trap,
+          # and adding `pipefail` later must not turn it into a flake.
+          grep -q " $VERSION$" <<<"$(./staging/ccresu version)"
 
       - name: Keep the archive
         uses: actions/upload-artifact@v4

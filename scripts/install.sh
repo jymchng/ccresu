@@ -485,7 +485,11 @@ if [ "$with_systemd" -eq 1 ]; then
 			# failed one.
 			if systemctl --user daemon-reload && systemctl --user enable --now "$PROGRAM.service"; then
 				log "  service:   enabled and started"
-				if ! loginctl show-user "$USER" 2>/dev/null | grep -q '^Linger=yes'; then
+				# Capture first: `loginctl ... | grep -q` closes the pipe as soon as
+				# it matches, loginctl dies of SIGPIPE, and `pipefail` makes this
+				# `if !` fire even on a machine that has lingering enabled.
+				linger="$(loginctl show-user "$USER" 2>/dev/null || true)"
+				if ! grep -q '^Linger=yes' <<<"$linger"; then
 					warn "the user manager stops at logout; enable lingering with: sudo loginctl enable-linger $USER"
 				fi
 			else

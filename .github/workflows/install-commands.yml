@@ -75,8 +75,15 @@ jobs:
           set -euo pipefail
           binary="$HOME/.local/bin/ccresu"
           test -x "$binary"
-          "$binary" version
-          "$binary" version | grep -Eq '^ccresu [0-9]+\.[0-9]+\.[0-9]+$'
+          # Capture first, match second. `version | grep -Eq` lets grep exit as
+          # soon as the first line matches and close the pipe, so the remaining
+          # four lines (commit, built, go, platform) die of SIGPIPE and
+          # `pipefail` turns exit 141 into a failed step. It only bites when the
+          # writer loses the race, which is why it passed for months and then
+          # failed a docs-only commit.
+          reported="$("$binary" version)"
+          printf '%s\n' "$reported"
+          grep -Eq '^ccresu [0-9]+\.[0-9]+\.[0-9]+$' <<<"$reported"
           # A piped install must leave the configuration the page promises.
           test -f "$HOME/.config/ccresu/config.yaml"
           printf 'installed: %s\n' "$binary"
@@ -102,7 +109,9 @@ jobs:
           HOME="$(mktemp -d)"
           output="$(bash -c "$command")"
           printf '%s\n' "$output"
-          printf '%s\n' "$output" | grep -q "dry-run"
+          # Same trap as the version step: match the captured text instead of
+          # piping into a reader that may close the pipe early.
+          grep -q "dry-run" <<<"$output"
           test ! -e "$HOME/.local/bin/ccresu"
 
       - name: The pinned one-liner installs the version it names
