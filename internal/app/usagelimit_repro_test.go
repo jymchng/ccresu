@@ -430,3 +430,84 @@ func TestARefusedAttemptsOwnWritesAreNotProofOfResumption(t *testing.T) {
 		t.Errorf("attempts = %d, want 2\n%s", attempts, got)
 	}
 }
+
+// TestARefusedResumeIsBoundedToTheResetWindow is the end-to-end contract the
+// defect report asked for: one refusal per reset window, a page an operator can
+// read, and a second attempt only once the reset the banner named has arrived.
+//
+// The count is the point. Before the fix the daemon resumed the paused session
+// roughly forty times in half an hour; a refusal now parks the session, and the
+// only thing that ends the wait is the instant the CLI named.
+func TestARefusedResumeIsBoundedToTheResetWindow(t *testing.T) {
+	f := newUsageLimitFixture(t, false)
+	resetAt := time.Date(2026, 1, 6, 9, 0, 0, 0, time.UTC)
+	resetText := "2026-01-06 09:00:00 UTC"
+
+	// Five reconcile passes inside the window: the CLI is asked once.
+	f.steps(t, 5)
+	if resumes := f.script.resumeCount(); resumes != 1 {
+		t.Fatalf("resume invocations after five passes = %d, want exactly 1\n%s",
+			resumes, f.describe(t))
+	}
+
+	out := f.inspect(t)
+	for _, want := range []string{
+		"state:         WAITING_FOR_RESET",
+		"at:            " + resetText,
+		"why:           waiting for the usage limit to reset",
+		"Latest usage limit",
+		"resets:        " + resetText,
+		"raw:           10am (Europe/Berlin)",
+		usageLimitBanner,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("inspect output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "claude executable unavailable") {
+		t.Errorf("inspect still blames a missing binary:\n%s", out)
+	}
+	if strings.Contains(out, "at:            none") {
+		t.Errorf("inspect reports no next attempt while the session is waiting:\n%s", out)
+	}
+
+	// The row carries the CLI's own words, not only the phrase it parsed, so a
+	// later reader can check the reset time against what was said.
+	limit, err := f.h.store.LatestUsageLimit(context.Background(), f.id)
+	if err != nil {
+		t.Fatalf("latest usage limit: %v", err)
+	}
+	if limit.RawMessage != usageLimitBanner {
+		t.Errorf("usage limit raw message = %q, want the banner %q", limit.RawMessage, usageLimitBanner)
+	}
+	if !limit.ResetAt.Equal(resetAt) {
+		t.Errorf("usage limit resets at %s, want %s", limit.ResetAt, resetAt)
+	}
+
+	// `sessions status` is the same page: the two spellings may never drift.
+	code, statusOut, stderr := f.h.exec(t, "sessions", "status", f.id)
+	if code != ExitOK {
+		t.Fatalf("sessions status exit = %d (stderr %q)", code, stderr)
+	}
+	if statusOut != out {
+		t.Errorf("sessions status and inspect disagree:\n--- sessions status ---\n%s\n--- inspect ---\n%s",
+			statusOut, out)
+	}
+
+	// The reset arrives. The next pass asks exactly once more, and the passes
+	// after it wait for the next reset the same banner names.
+	f.h.clock.Advance(22 * time.Hour)
+	f.steps(t, 1)
+	if resumes := f.script.resumeCount(); resumes != 2 {
+		t.Fatalf("resume invocations after the reset = %d, want exactly 2\n%s",
+			resumes, f.describe(t))
+	}
+	f.steps(t, 3)
+	if resumes := f.script.resumeCount(); resumes != 2 {
+		t.Errorf("resume invocations = %d, want the second wait to hold\n%s",
+			resumes, f.describe(t))
+	}
+	if state := f.session(t).State; state != storage.StateWaitingForReset {
+		t.Errorf("state = %s, want %s after the second refusal", state, storage.StateWaitingForReset)
+	}
+}
