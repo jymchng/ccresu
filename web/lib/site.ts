@@ -76,7 +76,7 @@ export function checksumsUrl(version: string): string {
  * renders a coherent page — and so the fallback is a single obvious constant to
  * bump rather than a number scattered through the content.
  */
-export const fallbackReleaseVersion = "0.3.0";
+export const fallbackReleaseVersion = "0.5.0";
 
 export const installPlatforms: ReadonlyArray<{
   os: Platform;
