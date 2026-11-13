@@ -103,6 +103,7 @@ An optional `details` array carries field-level messages.
 | 404 | `not_found` | Unknown route, session or resource. |
 | 405 | `method_not_allowed` | Path exists, method does not. |
 | 409 | `not_eligible` | Session is settled, disabled or unrecoverable. |
+| 409 | `limit_not_cleared` | The usage limit has not reset yet: the session is parked in `WAITING_FOR_RESET` and resumes when the window reopens. Retry after the session's next attempt rather than treating it as failed. |
 | 413 | `payload_too_large` | Body above the limit (1 MiB by default). |
 | 415 | `unsupported_media_type` | Missing or wrong `Content-Type`. |
 | 429 | `too_many_requests` | Rate limited. |

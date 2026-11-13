@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/jymchng/ccresu/internal/claude"
 	"github.com/jymchng/ccresu/internal/config"
+	"github.com/jymchng/ccresu/internal/recovery"
 	"github.com/jymchng/ccresu/internal/storage"
 )
 
@@ -363,6 +365,42 @@ func TestRecoverReportsIneligibleAndUnavailable(t *testing.T) {
 	noEngine.do(http.MethodGet, "/recoveries", nil).expect(http.StatusServiceUnavailable)
 }
 
+// TestRecoverReportsALimitRefusalAsItsOwnCode proves a usage-limit refusal is a
+// 409 carrying limit_not_cleared rather than a 500.
+//
+// The refusal is not a failure: the CLI ran, the conversation is intact and the
+// banner says when the work may continue, so the session is parked in
+// WAITING_FOR_RESET. It is also not not_eligible: the session was eligible and
+// the attempt was made, so a client that reads not_eligible as "settled,
+// disabled or unrecoverable" would draw the wrong conclusion. The condition is a
+// wait with an end, and the code says so.
+func TestRecoverReportsALimitRefusalAsItsOwnCode(t *testing.T) {
+	h := newHarness(t)
+	h.makeRecoverable(sessionID)
+	banner := "Claude AI usage limit reached. Your limit will reset at 3pm (America/New_York)."
+	h.provider.OnResume = func(context.Context, string, string) (claude.ResumeResult, error) {
+		return claude.ResumeResult{}, fmt.Errorf("%w: %s", claude.ErrUsageLimitInForce, banner)
+	}
+
+	refused := h.do(http.MethodPost, "/sessions/"+sessionID+"/recover", nil)
+	refused.expect(http.StatusConflict)
+	if code := refused.errorOf().Code; code != codeLimitNotCleared {
+		t.Errorf("code = %q, want %q", code, codeLimitNotCleared)
+	}
+	if message := refused.errorOf().Message; !strings.Contains(message, "usage limit") {
+		t.Errorf("message = %q, want it to name the usage limit", message)
+	}
+
+	parked, err := h.store.GetSession(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("read session: %v", err)
+	}
+	if parked.State != storage.StateWaitingForReset {
+		t.Errorf("state = %s, want %s: a refusal is a wait, not a failure",
+			parked.State, storage.StateWaitingForReset)
+	}
+}
+
 // TestRecoverUnknownSession proves a 404, not a 409, for an unknown id.
 func TestRecoverUnknownSession(t *testing.T) {
 	h := newHarness(t)
@@ -651,6 +689,13 @@ func TestMapError(t *testing.T) {
 		{context.Canceled, http.StatusServiceUnavailable, codeUnavailable},
 		{context.DeadlineExceeded, http.StatusServiceUnavailable, codeUnavailable},
 		{errors.New("something unexpected"), http.StatusInternalServerError, codeInternal},
+		// A limit refusal reaches the mapping in two shapes and both are the
+		// same answer: the bare sentinel from the pre-resume limit check, and
+		// the refusal itself, which reports the sentinel through Is.
+		{recovery.ErrLimitNotCleared, http.StatusConflict, codeLimitNotCleared},
+		{fmt.Errorf("check usage limit: %w", recovery.ErrLimitNotCleared), http.StatusConflict, codeLimitNotCleared},
+		{&recovery.LimitInForceError{SessionID: sessionID, Banner: "usage limit reached"},
+			http.StatusConflict, codeLimitNotCleared},
 	}
 	for _, testCase := range cases {
 		mapped := mapError(testCase.err)

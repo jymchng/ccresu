@@ -41,6 +41,7 @@ const (
 	codeMethod          = "method_not_allowed"
 	codeInvalid         = "invalid_argument"
 	codeNotEligible     = "not_eligible"
+	codeLimitNotCleared = "limit_not_cleared"
 	codeTooLarge        = "payload_too_large"
 	codeUnsupportedType = "unsupported_media_type"
 	codeRateLimited     = "too_many_requests"
@@ -67,6 +68,20 @@ func errInvalid(message string, details ...string) *apiError {
 // operation, which is the same distinction the CLI draws with exit code 4.
 func errNotEligible(message string) *apiError {
 	return &apiError{Status: http.StatusConflict, Code: codeNotEligible, Message: message}
+}
+
+// errLimitNotCleared reports a resume that was refused because the usage limit
+// has not reset yet.
+//
+// It is deliberately its own code rather than not_eligible. The session is
+// eligible and the attempt was made, so "settled, disabled or unrecoverable"
+// would be the wrong reading; and unlike a state refusal this condition has a
+// known end — the reset instant — so a script can branch on the code and ask
+// again after it instead of treating the session as finished. It is a 409
+// because the request conflicts with the state the account is in, not with the
+// request itself.
+func errLimitNotCleared(message string) *apiError {
+	return &apiError{Status: http.StatusConflict, Code: codeLimitNotCleared, Message: message}
 }
 
 // errInternal reports an unexpected server-side failure. The underlying error is
@@ -97,6 +112,12 @@ func mapError(err error) *apiError {
 		errors.Is(err, recovery.ErrDisabled),
 		errors.Is(err, recovery.ErrUnrecoverable):
 		return errNotEligible(err.Error())
+	case errors.Is(err, recovery.ErrLimitNotCleared):
+		// Both a refusal (*LimitInForceError, which reports the sentinel through
+		// Is) and the pre-resume limit check arrive here. Without this case they
+		// fell through to the default branch and answered 500 for the most
+		// routine outcome in the product: the window has not reopened yet.
+		return errLimitNotCleared(err.Error())
 	case errors.Is(err, storage.ErrInvalid):
 		return errInvalid(err.Error())
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):

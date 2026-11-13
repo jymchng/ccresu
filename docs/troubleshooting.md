@@ -85,6 +85,7 @@ Details and the event table are in [telegram.md](telegram.md).
 | `401 unauthorized` | Missing or wrong `Authorization: Bearer` header. The token is at `<configuration directory>/api-token` — beside the configuration file in use, so `/elsewhere/api-token` after `--config /elsewhere/config.yaml` — with mode `0600`; it is never accepted as a query parameter or cookie. |
 | `403 origin_not_allowed` | A browser caller whose Origin is not in `server.allowed_origins`. `curl` is unaffected. |
 | `409 not_eligible` | Same rule as exit code 4: the session is settled, disabled or unrecoverable. |
+| `409 limit_not_cleared` | A `POST /sessions/{id}/recover` arrived while the usage limit is still in force, so the session stays parked in `WAITING_FOR_RESET` — the routine answer, not a failure. `ccresu inspect <id>` shows the next attempt and the reset the limit named; when its `why` reads `waiting for the reset but no schedule is stored`, nothing will wake the session by itself, so run `recover` again once the limit has cleared. |
 | `413 payload_too_large` | Body above 1 MiB. |
 | `415 unsupported_media_type` | Missing or wrong `Content-Type` on a POST/PUT. |
 | `429 too_many_requests` | Above 50 requests/second (burst 100) from your address; the `Retry-After` header says how long. |
