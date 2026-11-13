@@ -747,6 +747,68 @@ The full route table, error codes, rate limiting and CORS rules are in
 Every command above supports `--json`, so the same walkthrough can be scripted
 end to end without parsing tables.
 
+## Interactive browser
+
+`ccresu sessions` on a terminal is not a printout but a browser: the same table,
+a cursor, and every action one keystroke away. That matters because the loop it
+replaces is tedious — read a short id, scroll back, retype it into `ccresu
+inspect`, `ccresu recover`, `ccresu disable` — and it is the loop you are in at
+3am when a night's worth of sessions have all hit a limit.
+
+```console
+$ ccresu sessions --all
+ccresu sessions — 3 shown (all)
+  SESSION   STATE              NEXT ATTEMPT                    ENABLED  PROJECT                  LAST SEEN                NOTE
+> 88dfd995  DISABLED           none (session is not enabled)   no       /home/you/projects/site  2026-11-13 09:34:43 +08  -
+  3f9d1c07  WAITING_FOR_RESET  in 12m40s                       yes      /home/you/projects/demo  2026-11-13 09:34:43 +08  -
+  4d1f9c2a  RUNNING            none (no usage limit detect...  yes      /home/you/projects/api   2026-11-13 09:34:43 +08  -
+
+enter detail  n new  x delete  R resume  e enable  d disable  r retry  / filter  a all  ? help  q quit
+```
+
+| Key | What it does |
+| --- | --- |
+| `j / down` | next session |
+| `k / up` | previous session |
+| `g / home` | first session |
+| `G / end` | last session |
+| `/` | filter by text (enter applies, esc cancels) |
+| `c` | clear the filter |
+| `a` | toggle --all (disabled and settled sessions) |
+| `enter / i` | session detail (the `sessions status` page) |
+| `n` | create: add the sessions discovered on disk since the last pass |
+| `e` | enable the selected session |
+| `d` | disable the selected session |
+| `r` | retry the selected session |
+| `R` | resume the selected session now (the call `ccresu recover` makes) |
+| `x` | delete the selected session (asks y/N) |
+| `?` | this key map |
+| `q / ctrl-c` | quit |
+
+`?` paints the same table on screen — the help screen and this one are both
+rendered from `tuiKeyMap`, so they cannot disagree. Each action is the command of
+the same name rather than a second implementation: `enter` shows the page
+`sessions status` prints, `R` makes the call `ccresu recover` makes, and `x`
+asks first (`delete 88dfd995-…? this forgets ccresu's row, not the
+conversation. y/N`) because deleting is the one action that discards history.
+The conversation itself is never touched: nothing under `~/.claude` is removed,
+and `ccresu enable <id>` restores the row.
+
+The browser is gated on a terminal, and the gate is not a second renderer:
+
+| Situation | What you get |
+| --- | --- |
+| `--tui` | the browser, even when stdout is a pipe |
+| `--no-tui` | the table, even on a terminal |
+| `--json` | the JSON document, even on a terminal |
+| stdout is a terminal | the browser |
+| a pipe, a redirect, a cron job | the table, byte-for-byte as before |
+
+`--tui --no-tui` and `--tui --json` are usage errors (exit `2`). The browser
+restores the alternate screen, the cursor and raw mode on every exit path,
+including `ctrl-c` and end of input, so it cannot leave your terminal broken.
+Full contract and the error messages: [docs/cli.md](docs/cli.md).
+
 ## Exit codes
 
 | Code | Meaning |

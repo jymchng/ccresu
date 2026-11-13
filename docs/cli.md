@@ -29,7 +29,7 @@ Exit codes: `0` ok, `1` failure, `2` usage, `3` not found, `4` not eligible,
 | --- | --- | --- |
 | `daemon` | `daemon [--once] [--interval DURATION]` | Runs the watchdog loop until interrupted. `--once` performs a single reconcile pass and exits; `--interval` overrides `claude.discovery_interval`. |
 | `status` | `status` | Summarises session, schedule and notification state. Its `sessions` line is the **total** row count, and its `listing` line says how many of those a bare `sessions` shows. |
-| `sessions` | `sessions [--all] [--state STATE]... [--limit N]` | Lists discovered sessions. A bare listing is **enabled only** and says so in the footer; `--all` includes disabled and settled ones; `--state` is repeatable; `--limit 0` means all. |
+| `sessions` | `sessions [--all] [--state STATE]... [--limit N] [--tui] [--no-tui]` | Lists discovered sessions. On a terminal this opens the interactive browser; a pipe, a redirect or `--json` gets the table exactly as before. A bare listing is **enabled only** and says so in the footer; `--all` includes disabled and settled ones; `--state` is repeatable; `--limit 0` means all. |
 | `sessions status` | `sessions status <session-id>` | Everything known about one session: state, paths, the next attempt, the latest usage limit, the latest attempt, any pending wait and recent transitions. Identical to `inspect`, which is kept as an alias. |
 | `sessions delete` | `sessions delete <session-id>` | Removes the session from ccresu: the row, its attempts, transitions, usage limits, pending wait and notifications. Nothing under `~/.claude` is touched — the conversation stays where it is. A tombstone keeps discovery from re-creating the session; `ccresu enable <id>` undoes it. Deleting twice is a success, not an error. |
 | `inspect` | `inspect <session-id>` | Everything known about one session. The same code as `sessions status`. |
@@ -44,6 +44,122 @@ Exit codes: `0` ok, `1` failure, `2` usage, `3` not found, `4` not eligible,
 | `version` | `version` | Prints version and build metadata. |
 
 `ccresu --version` and `ccresu --help` work without a subcommand.
+
+### Browse sessions interactively
+
+On a terminal, `ccresu sessions` opens a full-screen browser instead of printing
+the table. The columns are the table's; the only difference is that `SESSION`
+carries the short id, because a 36-character UUID does not fit a fixed-width
+screen. The point is that triaging a night's worth of sessions no longer means
+copying ids between commands: every action the CLI has is one keystroke away, and
+it applies to the row the cursor is on.
+
+```console
+$ ccresu sessions --all
+ccresu sessions — 3 shown (all)
+  SESSION   STATE              NEXT ATTEMPT                    ENABLED  PROJECT                  LAST SEEN                NOTE
+> 88dfd995  DISABLED           none (session is not enabled)   no       /home/you/projects/site  2026-11-13 09:34:43 +08  -
+  3f9d1c07  WAITING_FOR_RESET  in 12m40s                       yes      /home/you/projects/demo  2026-11-13 09:34:43 +08  -
+  4d1f9c2a  RUNNING            none (no usage limit detect...  yes      /home/you/projects/api   2026-11-13 09:34:43 +08  -
+
+enter detail  n new  x delete  R resume  e enable  d disable  r retry  / filter  a all  ? help  q quit
+```
+
+The `>` marker is the cursor. The footer repeats the everyday keys, and `?`
+paints the whole map, which is the same table as this one — both come from
+`tuiKeyMap` in `internal/app/tui.go`, so the screen and the documentation cannot
+drift apart:
+
+| Key | What it does |
+| --- | --- |
+| `j / down` | next session |
+| `k / up` | previous session |
+| `g / home` | first session |
+| `G / end` | last session |
+| `/` | filter by text (enter applies, esc cancels) |
+| `c` | clear the filter |
+| `a` | toggle --all (disabled and settled sessions) |
+| `enter / i` | session detail (the `sessions status` page) |
+| `n` | create: add the sessions discovered on disk since the last pass |
+| `e` | enable the selected session |
+| `d` | disable the selected session |
+| `r` | retry the selected session |
+| `R` | resume the selected session now (the call `ccresu recover` makes) |
+| `x` | delete the selected session (asks y/N) |
+| `?` | this key map |
+| `q / ctrl-c` | quit |
+
+Each action is the command of the same name, not a second implementation:
+`enter` renders the page `sessions status` prints, `R` makes the
+`recovery.Manager.RecoverRequest` call `ccresu recover` makes, `e` and `d` flip
+the same flag `enable` and `disable` flip, and `r` retries the way `ccresu retry`
+does. Nothing happens without a selection — with an empty or filtered-out listing
+the footer says `no session selected` and no store is touched.
+
+Two of them deserve a word:
+
+- **`x` deletes, after asking.** The confirm line names the session and says what
+  is at stake: `delete 88dfd995-…? this forgets ccresu's row, not the
+  conversation. y/N`. Only `y` proceeds; anything else prints `delete cancelled`.
+  A confirmed delete is `ccresu sessions delete`: the row, its attempts,
+  transitions, usage limits, pending wait and notifications go, the tombstone
+  stays so discovery does not resurrect it, and nothing under `~/.claude` is
+  touched.
+- **`n` creates by discovering.** It does not invent a session: it runs the
+  daemon's discovery pass (`Provider.Discover`, then `UpsertSession`, skipping
+  tombstoned ids) and reports `create: N new session(s) of M discovered`, adding
+  `, K left forgotten` when tombstones were skipped. The same rows appear on the
+  daemon's next pass, so pressing it twice is harmless.
+
+The listing shows 15 rows per page and says `rows 16-30 of 57` when there are
+more; `j`/`k` and `g`/`G` move within it. The filter is a case-insensitive
+substring match on everything the row is derived from — id, transcript path,
+project, state, type, the note and the last error — so `/flaky` finds a session
+by the failure that put it there.
+
+#### When the browser opens
+
+`sessions` decides in this order, first match wins:
+
+| Situation | What you get |
+| --- | --- |
+| `--tui` | the browser, even when stdout is a pipe or a file |
+| `--no-tui` | the table, even on a terminal |
+| `--json` | the JSON document, even on a terminal |
+| stdout is a terminal | the browser |
+| anything else — a pipe, a redirect, a cron job, `ssh` without a tty | the table |
+
+`--json` outranks the terminal because a machine-readable document can never be a
+full-screen browser. The two flags are for the cases the terminal cannot express:
+`--tui` when stdout is a pipe but you still want the browser, `--no-tui` when you
+want the plain table on a terminal you happen to be sitting at.
+
+Two combinations are usage errors (exit `2`), rejected before the database is
+opened:
+
+```console
+$ ccresu sessions --tui --no-tui
+ccresu: --tui and --no-tui are mutually exclusive
+Run 'ccresu --help' for usage.
+$ ccresu sessions --tui --json
+ccresu: --tui cannot be combined with --json; --json output is for scripts
+Run 'ccresu --help' for usage.
+```
+
+The TTY gate is not a second renderer. Piped, redirected and `--json` output is
+byte-for-byte what it was before the browser existed, and `--no-tui` on a
+terminal prints exactly the bytes a pipe would, so the two can never drift.
+
+The browser takes the alternate screen and hides the cursor on the way in, and it
+puts both back on **every** exit path — quit, `ctrl-c`, end of input, or an error
+— so a crash cannot leave your terminal unusable. `ctrl-c` is read as a
+keystroke rather than a signal (`ISIG` is cleared while the browser runs), which
+is why it exits cleanly and restores the screen instead of killing the process
+mid-paint. Raw mode is best-effort: a terminal that refuses it still works,
+because the decoder accepts a typed key followed by Enter.
+
+The keys come from stdin, so `printf 'q' | ccresu sessions --tui` is a legal way
+to script it: the browser draws and then quits at end of input.
 
 ### Removing a session
 

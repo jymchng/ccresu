@@ -4,6 +4,37 @@ All notable changes to ccresu are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`ccresu sessions` is an interactive browser on a terminal.** The table gains
+  a cursor and a key map: `enter` opens the session detail page, `n` creates by
+  running the daemon's discovery pass, `e`/`d` enable and disable, `r` retries,
+  `R` resumes now, `x` deletes after a `y/N` confirm, `/` filters, `c` clears the
+  filter, `a` toggles `--all`, `?` shows the key map and `q`/`ctrl-c` quits. Every
+  action calls the same store or recovery call as the command of the same name,
+  and acts on the row the cursor is on.
+- `--tui` opens the browser even when stdout is not a terminal; `--no-tui` prints
+  the table even when it is. `--tui --no-tui` and `--tui --json` are usage errors.
+- The key map lives in `tuiKeyMap` and the help screen renders it, so the on-screen
+  help, `docs/cli.md` and the README cannot drift from the code.
+
+### Changed
+
+- `sessions` on a terminal opens the browser instead of printing the table. Piped,
+  redirected and `--json` output is byte-for-byte unchanged, and `--no-tui` on a
+  terminal prints exactly the bytes a pipe would.
+- The browser takes the alternate screen, hides the cursor and clears `ISIG` while
+  it runs, and restores all three on every exit path — quit, `ctrl-c`, end of input
+  and failure — so it cannot leave a terminal unusable.
+
+### Fixed
+
+- `internal/recovery/state.go` is now gofmt-clean. v0.4.0 committed the transitions
+  table with map-literal alignment that `gofmt` disagreed with, so `gofmt -l .`
+  reported the file. The rewrite is alignment only: no token changed.
+
 ## [0.4.0] - 2026-11-06
 
 ### Changed
