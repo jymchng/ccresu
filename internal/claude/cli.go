@@ -134,10 +134,10 @@ func (c *CLI) ProbeVersion(ctx context.Context) (VersionReport, error) {
 		Command:  append([]string{c.bin}, args...),
 	}
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return report, fmt.Errorf("%w: %w", ErrCLIUnavailable, err)
-		}
-		return report, fmt.Errorf("%w: %s: %v", ErrCLIUnavailable, c.bin, err)
+		// A probe that exited non-zero ran, so it is not ErrCLIUnavailable; the
+		// same rule as every other command applies here, and doctor gets the
+		// captured stderr instead of a bare "exit status 1".
+		return report, describeRunError("claude --version", out, err)
 	}
 	version, parseErr := ParseVersion(string(out.Stdout))
 	if parseErr != nil {

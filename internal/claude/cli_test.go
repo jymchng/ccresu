@@ -190,6 +190,37 @@ func TestVersionProbeFailures(t *testing.T) {
 	}
 }
 
+func TestVersionProbeNonZeroExitIsNotUnavailable(t *testing.T) {
+	t.Parallel()
+
+	// `claude --version` that ran and exited non-zero is a crash with output,
+	// not a missing binary; doctor must be able to show what it said.
+	execer := NewFakeExecer(func(Call) (Output, error) {
+		return Output{Stderr: []byte("Error: broken installation"), ExitCode: 1}, errors.New("exit status 1")
+	})
+	cli := NewCLI(CLIOptions{Executable: "claude", Execer: execer})
+	report, err := cli.ProbeVersion(context.Background())
+	if err == nil {
+		t.Fatal("ProbeVersion() error = nil, want a failure")
+	}
+	if errors.Is(err, ErrCLIUnavailable) {
+		t.Errorf("error = %v, must not claim the executable was unavailable", err)
+	}
+	var cliErr *CLIError
+	if !errors.As(err, &cliErr) {
+		t.Fatalf("error = %v, want *CLIError", err)
+	}
+	if cliErr.ExitCode != 1 {
+		t.Errorf("ExitCode = %d, want 1", cliErr.ExitCode)
+	}
+	if !strings.Contains(err.Error(), "broken installation") {
+		t.Errorf("error = %v, want the captured stderr", err)
+	}
+	if report.ExitCode != 1 || report.Stderr != "Error: broken installation" {
+		t.Errorf("report = %+v, want the probe outcome recorded", report)
+	}
+}
+
 func TestAgentsQueryArgs(t *testing.T) {
 	t.Parallel()
 
