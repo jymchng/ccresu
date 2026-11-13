@@ -242,12 +242,30 @@ func (f *usageLimitFixture) attempts(t *testing.T) []storage.RecoveryAttempt {
 	return attempts
 }
 
-// inspect renders `ccresu sessions status <id>`, the page an operator sees.
+// inspect renders `ccresu inspect <id>`, the historical spelling of the page an
+// operator sees.
+//
+// It is deliberately the `inspect` subcommand and not `sessions status`: the two
+// are separate entry points that happen to share inspectSession, and a test that
+// renders only one of them cannot notice the other drifting.
 func (f *usageLimitFixture) inspect(t *testing.T) string {
 	t.Helper()
-	code, stdout, stderr := f.h.exec(t, "sessions", "status", f.id)
+	return f.render(t, "inspect")
+}
+
+// sessionsStatus renders `ccresu sessions status <id>`, the other spelling of the
+// same page.
+func (f *usageLimitFixture) sessionsStatus(t *testing.T) string {
+	t.Helper()
+	return f.render(t, "sessions", "status")
+}
+
+// render runs one of the two spellings and returns its stdout.
+func (f *usageLimitFixture) render(t *testing.T, args ...string) string {
+	t.Helper()
+	code, stdout, stderr := f.h.exec(t, append(args, f.id)...)
 	if code != ExitOK {
-		t.Fatalf("sessions status exit = %d (stderr %q)", code, stderr)
+		t.Fatalf("%s exit = %d (stderr %q)", strings.Join(args, " "), code, stderr)
 	}
 	return stdout
 }
@@ -484,11 +502,10 @@ func TestARefusedResumeIsBoundedToTheResetWindow(t *testing.T) {
 		t.Errorf("usage limit resets at %s, want %s", limit.ResetAt, resetAt)
 	}
 
-	// `sessions status` is the same page: the two spellings may never drift.
-	code, statusOut, stderr := f.h.exec(t, "sessions", "status", f.id)
-	if code != ExitOK {
-		t.Fatalf("sessions status exit = %d (stderr %q)", code, stderr)
-	}
+	// `sessions status` is the same page as `inspect`: both spellings must render
+	// the refusal identically, or an operator reading one of them sees a
+	// different story.
+	statusOut := f.sessionsStatus(t)
 	if statusOut != out {
 		t.Errorf("sessions status and inspect disagree:\n--- sessions status ---\n%s\n--- inspect ---\n%s",
 			statusOut, out)
