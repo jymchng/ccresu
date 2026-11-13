@@ -566,8 +566,22 @@ func TestRunTicksWithoutAWakeUp(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- notifier.Run(ctx) }()
 
-	// Queue a notification without signalling the sender, so only the ticker
-	// can deliver it.
+	// Deliver one notification first, so the loop has provably finished the pass
+	// it runs before its first select. Until it has, a queued row can still be
+	// picked up by that opening pass instead of by the ticker.
+	store.mu.Lock()
+	store.enqueueLocked(storage.Notification{
+		Event:     storage.EventSessionCompleted,
+		DedupeKey: "session_completed:opening",
+		Body:      "opening",
+		Status:    storage.NotificationPending,
+	})
+	store.mu.Unlock()
+	waitFor(t, "the notifier to finish its opening pass", func() bool { return sender.count() == 1 })
+
+	// Queue a second notification without signalling the sender, so only the
+	// ticker can deliver it: the opening pass has already run, and nothing else
+	// wakes the loop.
 	store.mu.Lock()
 	store.enqueueLocked(storage.Notification{
 		Event:     storage.EventSessionCompleted,
@@ -579,7 +593,7 @@ func TestRunTicksWithoutAWakeUp(t *testing.T) {
 
 	waitFor(t, "the notifier to arm its ticker on the clock", func() bool { return clk.HasWaiters() })
 	clk.Advance(time.Minute)
-	waitFor(t, "the notifier to deliver on the tick", func() bool { return sender.count() == 1 })
+	waitFor(t, "the notifier to deliver on the tick", func() bool { return sender.count() == 2 })
 
 	cancel()
 	select {
