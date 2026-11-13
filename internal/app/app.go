@@ -228,6 +228,15 @@ func (a *App) Execute(args []string) int {
 }
 
 // exitCode maps an error onto the documented exit codes.
+//
+// ErrLimitNotCleared belongs to the not-eligible group rather than the failure
+// one. A resume refused because the usage window has not reset is a wait with a
+// known end: the session is parked in WAITING_FOR_RESET and ccresu resumes it
+// when the window reopens, so nothing is broken and nothing should be retried
+// now. It also matches the two places that already say so -- the API answers
+// this condition with 409 limit_not_cleared, and the branch below that reports a
+// session which simply did not resume exits 4 -- so a script can treat both
+// shapes of "not resumed yet" the same way.
 func exitCode(err error) int {
 	var explicit *exitError
 	if errors.As(err, &explicit) {
@@ -246,6 +255,7 @@ func exitCode(err error) int {
 		errors.Is(err, recovery.ErrMaxAttempts),
 		errors.Is(err, recovery.ErrDisabled),
 		errors.Is(err, recovery.ErrUnrecoverable),
+		errors.Is(err, recovery.ErrLimitNotCleared),
 		errors.Is(err, recovery.ErrNoSession):
 		return ExitNotEligible
 	default:

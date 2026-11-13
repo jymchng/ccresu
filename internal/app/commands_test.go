@@ -503,6 +503,62 @@ func TestRecoverResumesAWaitingSession(t *testing.T) {
 	}
 }
 
+// TestRecoverReportsALimitRefusalAsNotEligible proves a park exits 4, not 1.
+//
+// A resume refused because the usage window has not reset is a wait with a known
+// end, not a failure. The CLI already exits 4 from its own "was not resumed"
+// branch, and the API answers the same condition with 409 limit_not_cleared, so
+// reporting 1 here would tell a script that something went wrong and invite a
+// retry loop against a limit that cannot clear any sooner.
+func TestRecoverReportsALimitRefusalAsNotEligible(t *testing.T) {
+	h := newHarness(t)
+	h.seedSession(t, canonicalSessionID, func(s *storage.Session) {
+		s.State = storage.StateResetTimeReached
+		s.TranscriptSize = 10
+		s.TranscriptLines = 1
+	})
+	h.provider.SetSession(claude.Session{
+		ID:          canonicalSessionID,
+		ProjectPath: "/work/project",
+		Recoverable: true,
+	})
+	const banner = "Claude usage limit reached. Your limit will reset at 10am (Europe/Berlin)."
+	h.provider.OnResume = func(context.Context, string, string) (claude.ResumeResult, error) {
+		return claude.ResumeResult{}, errors.Join(claude.ErrUsageLimitInForce, errors.New(banner))
+	}
+
+	code, _, stderr := h.exec(t, "recover", canonicalSessionID)
+	if code != ExitNotEligible {
+		t.Fatalf("exit = %d, want %d (stderr %q)", code, ExitNotEligible, stderr)
+	}
+	if !strings.Contains(stderr, canonicalSessionID) {
+		t.Errorf("stderr = %q, want it to name the session", stderr)
+	}
+	// The refusal must read as the wait it is, naming the limit rather than
+	// looking like a broken binary.
+	if !strings.Contains(stderr, "usage limit in force") {
+		t.Errorf("stderr = %q, want it to report the refusal as a wait", stderr)
+	}
+
+	ctx := context.Background()
+	stored, err := h.store.GetSession(ctx, canonicalSessionID)
+	if err != nil {
+		t.Fatalf("read session: %v", err)
+	}
+	if stored.State != storage.StateWaitingForReset {
+		t.Errorf("state = %s, want %s", stored.State, storage.StateWaitingForReset)
+	}
+	resumes := 0
+	for _, call := range h.provider.Calls() {
+		if call.Name == "ResumeSession" {
+			resumes++
+		}
+	}
+	if resumes != 1 {
+		t.Errorf("ResumeSession calls = %d, want 1: a refusal must not be retried", resumes)
+	}
+}
+
 func TestRecoverReportsAMissingSession(t *testing.T) {
 	h := newHarness(t)
 	code, _, stderr := h.exec(t, "recover", "99999999-9999-4999-8999-999999999999")
