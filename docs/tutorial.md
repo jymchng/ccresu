@@ -336,9 +336,6 @@ ccresu recover <id> --message "Pick up where the limit interrupted you." --force
 
 # put a spent/terminal session back to work with a fresh budget
 ccresu retry <id>
-
-# ask for one more attempt right now
-ccresu retry <id>
 ```
 
 `recover` refuses when the session cannot be resumed, and says why:

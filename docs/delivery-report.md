@@ -50,38 +50,51 @@ Run at `HEAD` on a clean tree:
 | --- | --- | --- |
 | Formatting | `gofmt -l .` | no output |
 | Vet | `go vet ./...` | clean |
-| Tests | `go test ./...` | all 13 Go packages with tests pass |
+| Tests | `go test ./...` | all 15 Go packages with tests pass |
 | Race | `go test -race ./...` | pass |
-| Coverage | `make cover-check` | **87.0%** (gate 80%) |
+| Coverage | `make cover-check` | **88.8%** (gate 80%) |
 | Website lint | `npm run lint` | clean |
 | Website types | `npx tsc --noEmit` | clean |
-| Website tests | `npm run test` | 7 files, 36 tests pass |
-| Website build | `npm run build` | static export, 11 routes |
+| Website tests | `npm run test` | 18 files, 143 tests pass |
+| Website build | `npm run build` | static export, 15 routes |
 
-Suite size: 62 Go test files, 625 test functions, plus 7 web test files.
+Suite size: 83 Go test files, 777 test functions, plus 18 web test files.
 
-Per-package statement coverage:
+Per-package statement coverage, from `go test ./... -cover`:
 
 | Package | Coverage | Target |
 | --- | --- | --- |
 | `internal/logging` | 100.0% | — |
-| `internal/config` | 98.6% | ≥90% |
+| `internal/config` | 98.7% | ≥90% |
 | `internal/detector` | 98.6% | ≥95% |
 | `internal/process` | 98.3% | ≥80% |
 | `internal/scheduler` | 96.0% | ≥95% |
-| `internal/telegram` | 96.3% | ≥90% |
+| `internal/telegram` | 96.0% | ≥90% |
 | `internal/clock` | 93.3% | — |
-| `internal/recovery` | 98.3% | ≥90% |
-| `internal/claude` | 90.0% | ≥80% |
+| `internal/recovery` | 97.7% | ≥90% |
+| `internal/claude` | 90.6% | ≥80% |
 | `internal/server` | 87.9% | ≥80% |
-| `internal/storage` | 87.5% | ≥85% |
-| `internal/app` | 82.8% | ≥80% |
+| `internal/storage` | 85.8% | ≥85% |
+| `internal/app` | 84.1% | ≥80% |
+| `cmd/ccresu` | 100.0% | — |
 | `tests/e2e` | no statements (behavioural) | — |
+| `tests/integration` | no statements (behavioural) | — |
+| `tests/support` | 0.0% (fixture package) | — |
 
-The 87.0% total is measured over everything `go test ./...` reports, which
-includes `cmd/ccresu` (0.0%, no test files), `tests/support` (a fixture package)
-and a vendored Go file inside `web/node_modules`. Over the `internal/` packages
-only it is 90.8%.
+The 88.8% total is statement-weighted over everything `go test ./...` reports in
+a clean checkout: the twelve `internal/` packages, `cmd/ccresu` (100.0%, two
+statements), `tests/support` (a fixture package the end-to-end tests import,
+which earns no credit for another package's test run and so reports 0.0%) and
+the two behavioural suites, which have no statements of their own. Over the
+`internal/` packages only it is 90.1%.
+
+One caveat about that number, because it depends on whether the website's
+dependencies are installed. After `cd web && npm ci`, `go test ./...` also walks
+a vendored Go package inside `web/node_modules` (160 statements, no tests of its
+own), and the very same run then reports **86.9%**. Both figures are correct for
+their tree: CI's Go job runs `make cover-check` before the website job installs
+anything, so the gate sees 88.8%, and a developer who has already run `npm ci`
+sees 86.9% and the gate still passes.
 
 ## The end-to-end scenario
 
@@ -108,9 +121,11 @@ Rediscovery after a spent budget is covered by the `internal/recovery` unit test
 
 Tracked as open goals, not hidden:
 
-- `internal/recovery` edge paths (`verify.go`, `manager.go`) are now at 98.3%;
+- `internal/recovery` edge paths (`verify.go`, `manager.go`) are now at 97.7%;
   the statements left are unreachable defensive branches tracked as an open goal.
-- `tests/integration` is empty; `cmd/ccresu` has no tests of its own.
+- `tests/integration` holds three test files and no non-test Go files, so it
+  contributes no statements of its own; `cmd/ccresu` is a single test file over a
+  two-statement `main`.
 - The installer's guarantees are verified by hand, not by an automated test.
 
 All are recorded in [troubleshooting.md](troubleshooting.md) where they are

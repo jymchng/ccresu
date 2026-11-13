@@ -911,9 +911,9 @@ resumed and is therefore returned to `DISCOVERED`.
 
 The same script with `--pre-fix` runs the identical scenario against a pre-fix
 checkout and expects the old outcome: `PERMANENTLY_FAILED` after one refused
-(that binary predates the state's removal; the current one returns the session to
-`DISCOVERED`)
-resume and no `stop` call. That contrast is the regression test for the bug:
+resume and no `stop` call (that binary predates the state's removal; the current
+one returns the session to `DISCOVERED`). That contrast is the regression test
+for the bug:
 
 ```bash
 git worktree add /tmp/ccresu-prefix 00692e3

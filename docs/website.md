@@ -83,21 +83,36 @@ make web-install web-lint web-typecheck web-test web-build
 
 ## Tests
 
-Seven files under `web/tests`, driven by Vitest with jsdom:
+Eighteen test files under `web/tests`, driven by Vitest with jsdom:
 
 | File | Covers |
 | --- | --- |
-| `landing.test.tsx` | Hero copy, the eight feature cards, the how-it-works steps. |
-| `docs.test.tsx` | Every documentation page renders its headings and body blocks. |
+| `backdrop.test.ts` | The CSS page gradient exists in both themes and costs no contrast. |
+| `captures.test.tsx` | Captured command output: the renderer shows the captured bytes exactly, and the capture module still matches the fixtures. |
 | `content.test.tsx` | The content modules: no empty sections, no duplicate slugs. |
-| `nav.test.tsx` | Header/footer links and the documentation sidebar. |
-| `theme-toggle.test.tsx` | Dark-first default, toggling, and persistence. |
-| `install-commands.test.tsx` | The install snippets and their exact release asset names. |
 | `copy-button.test.tsx` | Copy-to-clipboard, including the failure path. |
+| `doc-figures.test.tsx` | The two figure blocks: a capture renders the captured bytes, a diagram is inline SVG with an accessible name, and every figure id resolves. |
+| `docs.test.tsx` | Every documentation page renders its headings and body blocks. |
+| `install-commands.test.tsx` | The install snippets and their exact release asset names. |
+| `install-one-liner.test.ts` | The site and CI agree about what a documented command is, by rendering the commands the way CI does. |
+| `landing.test.tsx` | Hero copy, the eight feature cards, the how-it-works steps. |
+| `markdown.test.tsx` | The "copy this page as Markdown" promise, for a page and for the index. |
+| `mobile-nav.test.tsx` | The navigation a phone actually gets. |
+| `nav.test.tsx` | Header/footer links and the documentation sidebar. |
+| `release.test.ts` | The version the install commands name: release resolution, normalisation and the fallback. |
+| `responsive.test.tsx` | What markup can prove about "usable at 320px": the 44px control floor, a table that scrolls in its own region, breakable long URLs. |
+| `seo.test.ts` | The SEO contract: route metadata, parsed structured data, and the exported sitemap and `robots.txt`. |
+| `static-pages.test.tsx` | The about, privacy and terms pages, and the links they share with the docs. |
+| `terms-liability.test.tsx` | The liability limitation, asserted as things a reader must be able to find on `/terms/`. |
+| `theme-toggle.test.tsx` | Dark-first default, toggling, and persistence. |
 
 Testing Library is configured in `vitest.setup.ts`, which installs
 `@testing-library/jest-dom` matchers and stubs `navigator.clipboard` so the copy
-tests are deterministic.
+tests are deterministic. `tests/helpers.ts` holds the shared link helpers, and
+`tests/fixtures/captures/` holds the committed command output that
+`scripts/web-captures.sh` writes. The layout measurements jsdom cannot make live
+in `tests/mobile/`, which runs from its own `npm run test:mobile` script rather
+than from Vitest.
 
 ## Deployment
 

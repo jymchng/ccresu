@@ -28,7 +28,7 @@ Exit codes: `0` ok, `1` failure, `2` usage, `3` not found, `4` not eligible,
 | Command | Usage | What it does |
 | --- | --- | --- |
 | `daemon` | `daemon [--once] [--interval DURATION]` | Runs the watchdog loop until interrupted. `--once` performs a single reconcile pass and exits; `--interval` overrides `claude.discovery_interval`. |
-| `status` | `status` | One screen of the persisted state: `sessions` (`N total, M enabled`), `listing` (what a bare `sessions` shows), `pending`, `schedules`, `next wake` when one is due, `telegram`, `recovery` (`yes (max attempts 10)`), `now`, then a `STATE`/`SESSIONS` histogram. The queued-notification count is `pending_notifications` in `--json`. |
+| `status` | `status` | One screen of the persisted state: `config` and `database` (the paths actually in use), `sessions` (`N total, M enabled`), `listing` (what a bare `sessions` shows), `pending`, `schedules`, `next wake` when one is due, `telegram`, `recovery` (`yes (max attempts 10)`), `now`, then a `STATE`/`SESSIONS` histogram. The queued-notification count is `pending_notifications` in `--json`. |
 | `sessions` | `sessions [--all] [--state STATE]... [--limit N] [--tui] [--no-tui]` | Lists discovered sessions: `SESSION` (short id), `STATE`, `NEXT ATTEMPT`, `ENABLED`, `RECOVERABLE`, `PROJECT`, `LAST SEEN`, `NOTE` (the session's reason, else its last error, truncated to 40). On a terminal this opens the interactive browser; a pipe, a redirect or `--json` gets the table exactly as before. A bare listing is **enabled only** and says so in the footer; `--all` includes disabled and settled ones; `--state` is repeatable; `--limit 0` means all. |
 | `sessions status` | `sessions status <session-id>` | Everything known about one session: state, paths, the next attempt, the latest usage limit, the latest attempt, any pending wait and recent transitions. Identical to `inspect`, which is kept as an alias. |
 | `sessions delete` | `sessions delete <session-id>` | Removes the session from ccresu: the row, its attempts, transitions, usage limits, pending wait and notifications. Nothing under `~/.claude` is touched — the conversation stays where it is. A tombstone keeps discovery from re-creating the session; `ccresu enable <id>` undoes it. Deleting twice is a success, not an error. |
@@ -267,7 +267,10 @@ the reason. The reasons are the daemon's own words: `session is not enabled`,
 `no usage limit detected yet`, `returned to discovery; ccresu will re-read the
 transcript and schedule the next reset` (where a failed attempt and a spent
 attempt budget both leave it), `recovery in progress`, `already resumed`,
-`session completed`, `session was terminated`, `session cannot be recovered`.
+`session completed`, `session was terminated`, `session cannot be recovered`,
+`waiting for the reset but no schedule is stored` and `waiting to retry but the
+next instant is not stored` — the last two mean the row holding the instant is
+gone from the store, so there is nothing to count down to.
 A session waiting on a reset shows the instant it was given, with `why:` either
 `waiting for the usage limit to reset` — the reset the CLI named — or
 `polling until the usage limit clears` when the banner carried no time, which is

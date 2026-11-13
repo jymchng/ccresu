@@ -51,18 +51,29 @@ To get the two values:
 ## What you get
 
 Every event is a separate switch, all `true` by default except `notify_waiting`.
+Two of them are queued today: the daemon produces `limit_detected` and
+`waiting_for_reset` from one place (`internal/app/daemon.go:344-347`). The other
+five have a config key, a subject and a complete template, but nothing enqueues
+them, so turning one on is harmless and simply never sends anything.
 
-| Event | YAML key | Subject |
-| --- | --- | --- |
-| Usage limit detected | `notify_limit_detected` | Usage limit detected |
-| Waiting for the reset | `notify_waiting` (default `false`) | Waiting for the usage limit to reset |
-| Recovery started | `notify_recovery_started` | Recovery started |
-| Recovery succeeded | `notify_recovery_success` | Recovery succeeded |
-| Attempt failed | `notify_recovery_failure` | Recovery attempt failed |
-| Budget spent | `notify_permanent_failure` | Automatic recovery stopped |
-| Session completed | `notify_session_completed` | Session completed |
+| Event | YAML key | Subject | Queued today |
+| --- | --- | --- | --- |
+| Usage limit detected | `notify_limit_detected` | Usage limit detected | yes |
+| Waiting for the reset | `notify_waiting` (default `false`) | Waiting for the usage limit to reset | yes, when the banner named no reset |
+| Recovery started | `notify_recovery_started` | Recovery started | no |
+| Recovery succeeded | `notify_recovery_success` | Recovery succeeded | no |
+| Attempt failed | `notify_recovery_failure` | Recovery attempt failed | no |
+| Permanent failure | `notify_permanent_failure` | Automatic recovery stopped | no |
+| Session completed | `notify_session_completed` | Session completed | no |
 
-A successful recovery looks like this:
+`notify_waiting` is off by default, and it is not a second copy of the detection
+message: the daemon skips it whenever the reset time is known
+(`internal/app/daemon.go:351-354`), so it only arrives when the banner carried no
+time and ccresu has to poll for the window to clear. Turn it on to hear about
+that wait as it begins.
+
+The five inert events are fully rendered — a successful recovery would look like
+this (`internal/telegram/template.go:116-124`):
 
 ```text
 Recovery succeeded
@@ -72,10 +83,12 @@ The original conversation resumed and its transcript grew.
 Duration: 2m14s
 ```
 
-`notify_waiting` is off by default because it arrives immediately after
-`notify_limit_detected` with almost the same content — turn it on only if you
-want the reminder at the moment the wait begins rather than the moment the limit
-lands.
+What is missing is the producer, not the message. `notify_permanent_failure` is
+worth calling out because its name invites the wrong reading: it belongs to a
+failure classified permanent (`recovery.ClassPermanent`), and a spent attempt
+budget is not one — that returns the session to `DISCOVERED`, where the daemon
+re-reads the transcript and plans the next reset
+(`internal/recovery/manager.go:353-359`).
 
 ## Escaping and length
 
@@ -123,15 +136,16 @@ curl -s -H "Authorization: Bearer $TOKEN" \
   http://127.0.0.1:8787/api/v1/telegram/status
 ```
 
-Send a test message through the same client, escaping and retry logic the real
-events use:
-
-```bash
-curl -s -X POST -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"telegram":true}' \
-  http://127.0.0.1:8787/api/v1/test
-```
+`POST /api/v1/test` with `{"telegram": true}` does not send a message: it reports
+whether Telegram is enabled and how many delivery attempts each row gets
+(`internal/server/handlers.go:609-620`), which is why its own detail reads
+"no message sent by this test". It proves the configuration, not the delivery.
+To prove delivery, watch `pending` in the status route above while a real event
+is queued: it drops as the sender drains the row. A row that stays pending is
+the delivery failing, and `GET /api/v1/sessions/{id}` lists that session's
+notifications with `attempts` and `last_error`
+(`internal/server/dto.go:240-249`), so the reason is readable rather than
+guessed at.
 
 Both routes are documented in [api.md](api.md).
 
@@ -144,7 +158,7 @@ Both routes are documented in [api.md](api.md).
 | `403 bot was blocked by the user` | The chat blocked the bot; unblock it and send `/start`. |
 | `429` repeatedly | Telegram is rate limiting the bot; the queue keeps the message and backs off. |
 | Nothing arrives, `enabled: false` | The switch is off: `ccresu config validate` prints `telegram: no`. |
-| Nothing arrives, one event missing | The per-event `notify_*` switch is off for exactly that event. |
+| Nothing arrives, one event missing | Only `limit_detected` and `waiting_for_reset` are produced today; the other five `notify_*` switches are inert. For those two, the switch is off — and `notify_waiting` stays silent when the reset time is known. |
 
 The token is a credential: it is registered with the log redactor at startup, so
 it is scrubbed from every log line and error string, and it is masked in
