@@ -55,10 +55,10 @@ func (s *refusalScript) handle(call claude.Call) (claude.Output, error) {
 		s.resumes++
 		s.mu.Unlock()
 		return claude.Output{Stdout: []byte(usageLimitBanner), ExitCode: 1},
-			fmt.Errorf("%s %s: %w", call.Name, strings.Join(call.Args, " "), errors.New("exit status 1"))
+			fmt.Errorf("%s: %w", call.Name, errors.New("exit status 1"))
 	default:
 		return claude.Output{ExitCode: 1},
-			fmt.Errorf("%s %s: %w", call.Name, strings.Join(call.Args, " "), errors.New("exit status 1"))
+			fmt.Errorf("%s: %w", call.Name, errors.New("exit status 1"))
 	}
 }
 

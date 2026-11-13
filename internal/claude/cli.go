@@ -374,13 +374,136 @@ func (c *CLI) run(ctx context.Context, timeout time.Duration, stdin []byte, args
 	return c.exec.Run(runCtx, c.bin, args, opts)
 }
 
-// describeRunError turns a failed invocation into a message that carries the
-// exit code and the tail of stderr, without ever echoing a prompt.
+// describeRunError turns a failed invocation into an error that carries the
+// exit code, the output the CLI produced, and the condition the failure is
+// evidence of.
+//
+// It never echoes the prompt: stdout is included in the message only for a
+// usage-limit refusal, where the banner is the whole point of the message.
 func describeRunError(what string, out Output, err error) error {
 	if err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 		return fmt.Errorf("%w: %w", ErrCLIUnavailable, err)
 	}
-	return fmt.Errorf("%w: %s", ErrCLIUnavailable, describeDetail(what, out, err))
+	return &CLIError{
+		What:     what,
+		ExitCode: out.ExitCode,
+		Stdout:   out.Stdout,
+		Stderr:   out.Stderr,
+		Err:      err,
+		Kind:     failureKind(out),
+	}
+}
+
+// CLIError is a command that ran and failed.
+//
+// It exists because a sentinel alone loses the thing an operator needs: the
+// output. The refusal that made ccresu re-attempt a paused session lived on
+// stdout, and the old message never looked there, so the reset banner was
+// discarded and the failure was reported as a missing binary.
+//
+// Kind names the condition the failure was recognised as, so callers can branch
+// with errors.Is while the message stays readable; the captured streams stay
+// available as fields for anything that needs the raw output.
+type CLIError struct {
+	// What is the invocation being described, e.g. "claude -p --resume".
+	What string
+	// ExitCode is the process exit status.
+	ExitCode int
+	// Stdout and Stderr are the captured streams, truncated to the configured
+	// capture limit.
+	Stdout []byte
+	Stderr []byte
+	// Err is the process error, when there was one.
+	Err error
+	// Kind is the sentinel this failure is evidence of: ErrUsageLimitInForce for
+	// a refusal, ErrCLIUnavailable when the process never started, and nil for
+	// any other non-zero exit, which is a crash nobody here can explain.
+	Kind error
+}
+
+// Error renders "<what> failed (exit N): <stderr tail>: <banner>: <err>".
+func (e *CLIError) Error() string {
+	parts := []string{fmt.Sprintf("%s failed (exit %d)", e.What, e.ExitCode)}
+	if detail := tail(string(e.Stderr), 400); detail != "" {
+		parts = append(parts, detail)
+	}
+	if errors.Is(e.Kind, ErrUsageLimitInForce) {
+		if detail := tail(string(e.Stdout), 400); detail != "" {
+			parts = append(parts, detail)
+		}
+	}
+	if e.Err != nil {
+		parts = append(parts, e.Err.Error())
+	}
+	return strings.Join(parts, ": ")
+}
+
+// Unwrap exposes Kind so errors.Is(err, ErrUsageLimitInForce) and
+// errors.Is(err, ErrCLIUnavailable) work on the returned error.
+func (e *CLIError) Unwrap() error { return e.Kind }
+
+// failureKind names the condition a failed invocation is evidence of.
+//
+// Only two answers are possible here. A process that never started is the one
+// thing ErrCLIUnavailable is for. A refusal that carries a usage-limit banner is
+// a wait, not a failure, and saying so is what stops ccresu from hammering a
+// paused session. Every other non-zero exit keeps Kind nil: the command ran and
+// crashed, and this package cannot say why.
+func failureKind(out Output) error {
+	if out.ExitCode < 0 {
+		return ErrCLIUnavailable
+	}
+	if isUsageLimitRefusal(out) {
+		return ErrUsageLimitInForce
+	}
+	return nil
+}
+
+// usageLimitNouns and usageLimitVerbs are the two halves of the refusal
+// vocabulary the CLI uses when the account's usage window has not reset.
+//
+// Recognition needs both: a bare "usage limit" can appear in ordinary output,
+// whereas "5-hour limit reached" or "your weekly limit resets in 2h" cannot be
+// anything but a refusal. The list mirrors the decisive phrasings in
+// internal/detector; the authoritative parse of the banner — the limit kind and
+// the reset instant — stays the detector's job, not this package's.
+var (
+	usageLimitNouns = []string{
+		"usage limit",
+		"5-hour limit",
+		"five-hour limit",
+		"weekly limit",
+		"7-day limit",
+		"seven-day limit",
+		"opus limit",
+		"sonnet limit",
+		"message limit",
+	}
+	usageLimitVerbs = []string{
+		"reached",
+		"hit",
+		"exceeded",
+		"will reset",
+		"resets",
+		"in force",
+	}
+)
+
+// isUsageLimitRefusal reports whether a failed invocation's output is a
+// usage-limit refusal.
+func isUsageLimitRefusal(out Output) bool {
+	text := strings.ToLower(string(out.Stdout) + "\n" + string(out.Stderr))
+	return containsAny(text, usageLimitNouns) && containsAny(text, usageLimitVerbs)
+}
+
+// containsAny reports whether text contains any of the fragments.
+func containsAny(text string, fragments []string) bool {
+	for _, fragment := range fragments {
+		if strings.Contains(text, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 // describeDetail renders "<what> failed (exit N): <stderr tail>: <err>" without

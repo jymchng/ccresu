@@ -143,6 +143,29 @@ func TestOSExecerExitCodeAndStderr(t *testing.T) {
 	}
 }
 
+func TestOSExecerErrorDoesNotEchoTheArguments(t *testing.T) {
+	t.Parallel()
+
+	// The continuation message is a positional argument, so an error that quoted
+	// argv would put the prompt in the log and in the error stored on the
+	// session. Only the binary and the exit status belong there.
+	const prompt = "CONTINUATION-MESSAGE-MARKER"
+
+	execer := OSExecer{}
+	_, err := execer.Run(context.Background(), os.Args[0], append(helperArgs("fail"), prompt), RunOptions{
+		Env: helperEnv("fail"),
+	})
+	if err == nil {
+		t.Fatal("expected an error for a non-zero exit")
+	}
+	if strings.Contains(err.Error(), prompt) {
+		t.Fatalf("error = %q, must not echo the argument vector", err)
+	}
+	if !strings.Contains(err.Error(), "exit status 3") {
+		t.Errorf("error = %q, want the exit status", err)
+	}
+}
+
 func TestOSExecerMissingBinary(t *testing.T) {
 	t.Parallel()
 

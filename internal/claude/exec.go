@@ -100,7 +100,12 @@ func (OSExecer) Run(ctx context.Context, name string, args []string, opts RunOpt
 			// caller can distinguish "claude is slow" from "claude failed".
 			return out, fmt.Errorf("%w: %w", ctxErr, err)
 		}
-		return out, fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
+		// The argument vector is deliberately not echoed: the continuation
+		// message is a positional argument, so quoting argv here would copy the
+		// prompt into every log line and into the error stored on the session.
+		// The caller names the command it ran; this only says which binary
+		// failed.
+		return out, fmt.Errorf("%s: %w", name, err)
 	}
 	return out, nil
 }

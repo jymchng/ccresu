@@ -70,8 +70,20 @@ var (
 	ErrEmptyMessage = errors.New("claude: empty continuation message")
 	// ErrMessageTooLong reports a continuation message above the configured cap.
 	ErrMessageTooLong = errors.New("claude: continuation message too long")
-	// ErrCLIUnavailable reports that the claude executable could not be run.
+	// ErrCLIUnavailable reports that the claude executable could not be run at
+	// all: the binary is missing, or the invocation was cancelled before it
+	// produced a status. A command that ran and exited non-zero is *not* this
+	// error; see CLIError and ErrUsageLimitInForce.
 	ErrCLIUnavailable = errors.New("claude: claude executable unavailable")
+	// ErrUsageLimitInForce reports that the CLI ran and refused the request
+	// because the account's usage window has not reset yet.
+	//
+	// It is deliberately distinct from ErrCLIUnavailable: the executable was
+	// available and the refusal says exactly when the work may continue. Treating
+	// it as a broken binary is what made ccresu re-attempt a paused session every
+	// reconcile pass instead of waiting for the reset it had just been told
+	// about.
+	ErrUsageLimitInForce = errors.New("claude: usage limit is still in force")
 	// ErrUnsupportedVersion reports a claude version older than the minimum
 	// this package is verified against.
 	ErrUnsupportedVersion = errors.New("claude: unsupported claude code version")

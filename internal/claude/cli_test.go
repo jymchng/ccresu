@@ -243,8 +243,23 @@ func TestCLIAgentsErrors(t *testing.T) {
 			Output{ExitCode: 2, Stderr: []byte("Error: not logged in\nsecond line")},
 		)
 		_, err := cli.Agents(context.Background(), AgentsQuery{})
-		if !errors.Is(err, ErrCLIUnavailable) {
-			t.Fatalf("error = %v, want ErrCLIUnavailable", err)
+		// The command ran and exited non-zero, so the executable was available:
+		// this is a crash with output, not a missing binary.
+		var cliErr *CLIError
+		if !errors.As(err, &cliErr) {
+			t.Fatalf("error = %v, want *CLIError", err)
+		}
+		if cliErr.ExitCode != 2 {
+			t.Errorf("ExitCode = %d, want 2", cliErr.ExitCode)
+		}
+		if !strings.Contains(string(cliErr.Stderr), "not logged in") {
+			t.Errorf("Stderr = %q, want the captured detail", cliErr.Stderr)
+		}
+		if errors.Is(err, ErrCLIUnavailable) {
+			t.Errorf("error = %v, must not be ErrCLIUnavailable: the binary ran", err)
+		}
+		if errors.Is(err, ErrUsageLimitInForce) {
+			t.Errorf("error = %v, must not be a usage-limit refusal", err)
 		}
 		if !strings.Contains(err.Error(), "exit 2") || !strings.Contains(err.Error(), "not logged in") {
 			t.Errorf("error = %v, want exit code and stderr detail", err)
@@ -363,6 +378,9 @@ func TestCLIResumeFailures(t *testing.T) {
 		output  Output
 		runErr  error
 		wantErr error
+		// wantNoSentinel asserts a *CLIError with no sentinel: the command ran
+		// and crashed, so it is neither a missing binary nor a refusal.
+		wantNoSentinel bool
 	}{
 		{
 			name:    "is_error result",
@@ -385,10 +403,10 @@ func TestCLIResumeFailures(t *testing.T) {
 			wantErr: ErrMalformedOutput,
 		},
 		{
-			name:    "non zero exit with json noise",
-			output:  Output{Stdout: []byte("{}"), Stderr: []byte("boom"), ExitCode: 3},
-			runErr:  errors.New("exit status 3"),
-			wantErr: ErrCLIUnavailable,
+			name:           "non zero exit with json noise",
+			output:         Output{Stdout: []byte("{}"), Stderr: []byte("boom"), ExitCode: 3},
+			runErr:         errors.New("exit status 3"),
+			wantNoSentinel: true,
 		},
 		{
 			name:    "timeout",
@@ -410,7 +428,21 @@ func TestCLIResumeFailures(t *testing.T) {
 				return tc.output, tc.runErr
 			})
 			cli := NewCLI(CLIOptions{Executable: "claude", Execer: execer})
-			if _, err := cli.Resume(context.Background(), testSessionID, "go"); !errors.Is(err, tc.wantErr) {
+			_, err := cli.Resume(context.Background(), testSessionID, "go")
+			if tc.wantNoSentinel {
+				var cliErr *CLIError
+				if !errors.As(err, &cliErr) {
+					t.Fatalf("error = %v, want *CLIError", err)
+				}
+				if cliErr.ExitCode != 3 {
+					t.Errorf("ExitCode = %d, want 3", cliErr.ExitCode)
+				}
+				if errors.Is(err, ErrCLIUnavailable) || errors.Is(err, ErrUsageLimitInForce) {
+					t.Errorf("error = %v, want no sentinel: the binary ran and crashed", err)
+				}
+				return
+			}
+			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("error = %v, want %v", err, tc.wantErr)
 			}
 		})
