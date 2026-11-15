@@ -168,7 +168,7 @@ func TestRecoverRefusesToPretendAStorageFailureSucceeded(t *testing.T) {
 			t.Fatalf("seed attempt: %v", err)
 		}
 		if _, err := store.FinishAttempt(context.Background(), attempt.ID, storage.AttemptResult{
-			State: StateDiscovered, Success: false, Error: "earlier failure",
+			State: StateDiscovered, Success: storage.BoolPtr(false), Error: "earlier failure",
 			FinishedAt: time.Now().UTC(),
 		}); err != nil {
 			t.Fatalf("finish seeded attempt: %v", err)
@@ -303,9 +303,12 @@ func TestRecoverRefusesToPretendAStorageFailureSucceeded(t *testing.T) {
 			wantErr: "close interrupted attempt",
 		},
 		{
+			// The close moves the session through the walker, so the write that can fail is
+			// TransitionSession — the one that persists the new state and its history
+			// together — not the bare RecordTransition beside it.
 			name:    "an interrupted attempt whose transition cannot be written",
 			session: func() storage.Session { s := recoverableSession(sessionA); s.State = StateRetryWait; return s }(),
-			fault:   [2]any{"RecordTransition", 0},
+			fault:   [2]any{"TransitionSession", 0},
 			prepare: staleAttempt,
 			wantErr: "record interrupted attempt",
 		},

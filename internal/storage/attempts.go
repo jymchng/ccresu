@@ -111,7 +111,13 @@ type AttemptResult struct {
 	// State is the state the session moved to as a result of the attempt.
 	State State
 	// Success reports whether the resume worked.
-	Success bool
+	//
+	// It is a pointer because an attempt can end without a verdict. An attempt
+	// interrupted by a restart is unresolved — the supervisor may have carried the
+	// work on — so it is recorded as nil rather than as `false`, which the schema
+	// already allows and which `ccresu history` renders as "interrupted" (PRD 3
+	// R6).
+	Success *bool
 	// Output is the captured CLI output (truncated by the caller).
 	Output string
 	// Error is the failure text, empty on success.
@@ -199,7 +205,7 @@ func (s *Store) FinishAttempt(ctx context.Context, attemptID int64, result Attem
 				observed_state = ?, observed_status = ?, observed_waiting_for = ?,
 				observed_at = ?, observed_listed = ?
 			WHERE id = ?`,
-			string(result.State), timeToDB(finishedAt), boolToInt(result.Success),
+			string(result.State), timeToDB(finishedAt), nullableBool(result.Success),
 			result.Output, result.Error, nullableBool(result.SessionIDVerified),
 			nullableBool(result.TranscriptGrew),
 			result.HandoffStateID, result.HandoffName, handoffAt,

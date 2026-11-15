@@ -334,6 +334,11 @@ type Outcome struct {
 	// Resumed reports that the original conversation was proven to continue,
 	// either because ccresu resumed it or because it had already resumed.
 	Resumed bool
+	// Interrupted reports that the pass ended because an attempt left running by
+	// a process that died was closed as interrupted (PRD 3 R6). It is not a
+	// failure: nothing was handed off, no budget was spent, and the session
+	// returns to DISCOVERED for the next pass to re-observe.
+	Interrupted bool
 }
 
 // Recover attempts one recovery of a session.
@@ -440,10 +445,19 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 	}
 
 	// An attempt row with no finish time belongs to a process that died — a
-	// restart or a reboot. Close it truthfully rather than leaving a phantom
-	// "running" attempt that hides the next one.
-	if _, err := m.closeStaleAttempt(ctx, sessionID); err != nil {
+	// restart or a reboot. It is closed as *interrupted*, and the pass ends
+	// there: the supervisor may still be running the work, so handing off again
+	// in the same pass would duplicate the recovery the supervisor is already
+	// doing (PRD 3 R6).
+	if closed, err := m.closeInterruptedAttempt(ctx, state, sessionID); err != nil {
 		return Outcome{SessionID: sessionID, State: state.current}, err
+	} else if closed {
+		return Outcome{SessionID: sessionID, State: StateDiscovered, Interrupted: true},
+			&cycleEndError{
+				SessionID: sessionID,
+				State:     StateDiscovered,
+				Cause:     fmt.Errorf("%w; re-observing it before handing off again", ErrAttemptInterrupted),
+			}
 	}
 
 	outcome := Outcome{SessionID: sessionID}
@@ -620,7 +634,7 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 
 	finished, err := m.store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
 		State:             StateResumed,
-		Success:           true,
+		Success:           boolPtr(true),
 		Output:            truncate(result.Result),
 		SessionIDVerified: boolPtr(verification.SessionIDPreserved),
 		TranscriptGrew:    boolPtr(verification.TranscriptGrew),
@@ -724,7 +738,7 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 	if !preResume {
 		if _, err := m.store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
 			State:             target,
-			Success:           false,
+			Success:           boolPtr(false),
 			Error:             truncate(cause.Error()),
 			SessionIDVerified: boolPtr(verification.SessionIDPreserved),
 			TranscriptGrew:    boolPtr(verification.TranscriptGrew),
@@ -817,7 +831,7 @@ func (m *Manager) park(ctx context.Context, state *stateWalker, outcome Outcome,
 		verification := outcome.Verification
 		if _, err := m.store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
 			State:             StateWaitingForReset,
-			Success:           false,
+			Success:           boolPtr(false),
 			Error:             truncate(banner),
 			SessionIDVerified: boolPtr(verification.SessionIDPreserved),
 			TranscriptGrew:    boolPtr(verification.TranscriptGrew),
@@ -926,12 +940,27 @@ func targetFor(class Class, attemptNumber, maxAttempts int) State {
 	return class.State()
 }
 
-// closeStaleAttempt finishes an attempt left running by a process that died.
+// closeInterruptedAttempt finishes an attempt left running by a process that died.
 //
-// This is what makes a restart safe: the interrupted attempt is recorded as a
-// failure — never as a success — and the next attempt starts with the truth on
-// disk.
-func (m *Manager) closeStaleAttempt(ctx context.Context, sessionID string) (bool, error) {
+// The attempt is *interrupted*, not failed. Its child vanished because ccresu was
+// restarted or the machine rebooted, and the supervisor — which owns the session
+// now — may have kept the work running, restarted it, or idle-stopped it. The
+// docs describe all three as normal, so "the child disappeared" is not evidence
+// about the work at all (PRD 3 R6).
+//
+// Two consequences follow, and both are the point of this function:
+//
+//   - The row is closed with `Success` left nil. The pointer already means
+//     "unresolved", which is exactly what an attempt nobody watched end is;
+//     writing `false` claimed a verdict a restart cannot support and made the
+//     operator read a failure for work that never stopped.
+//   - The session returns to DISCOVERED rather than to RETRY_WAIT, so the next
+//     pass re-observes it (PRD 2) instead of handing off again on top of a
+//     session the supervisor may still be hosting. DISCOVERED is also what makes
+//     the interruption free: the attempt budget counts the attempts started since
+//     the last DISCOVERED transition, so an interrupted attempt can never spend a
+//     cycle's budget.
+func (m *Manager) closeInterruptedAttempt(ctx context.Context, state *stateWalker, sessionID string) (bool, error) {
 	latest, err := m.store.LatestAttempt(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -944,24 +973,16 @@ func (m *Manager) closeStaleAttempt(ctx context.Context, sessionID string) (bool
 	}
 	m.log.Warn("closing an attempt interrupted by a restart", "session", sessionID, "attempt", latest.AttemptNumber)
 	reason := "the attempt was interrupted by a process restart"
+	// Success is left nil on purpose. The session itself is moved through the
+	// walker below, so the persisted state and the transition history agree.
 	if _, err := m.store.FinishAttempt(ctx, latest.ID, storage.AttemptResult{
-		State:             StateRetryWait,
-		Success:           false,
-		Error:             reason,
-		SessionIDVerified: boolPtr(false),
-		TranscriptGrew:    boolPtr(false),
-		FinishedAt:        m.now(),
+		State:      StateDiscovered,
+		FinishedAt: m.now(),
+		Error:      reason + "; the outcome is unknown, so it is not recorded as a failure",
 	}); err != nil {
 		return false, fmt.Errorf("close interrupted attempt: %w", err)
 	}
-	if err := m.store.RecordTransition(ctx, storage.Transition{
-		SessionID:  sessionID,
-		AttemptID:  latest.ID,
-		FromState:  latest.State,
-		ToState:    StateRetryWait,
-		Reason:     reason,
-		OccurredAt: m.now(),
-	}); err != nil {
+	if err := state.move(StateDiscovered, reason+"; re-observing the session before handing off again", latest.ID); err != nil {
 		return true, fmt.Errorf("record interrupted attempt: %w", err)
 	}
 	return true, nil

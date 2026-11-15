@@ -334,6 +334,12 @@ func boolToInt(b bool) int {
 // intToBool reads SQLite's 0/1 representation.
 func intToBool(n int64) bool { return n != 0 }
 
+// BoolPtr returns a pointer to v.
+//
+// It exists for the attempt result fields that are deliberately nullable: nil is
+// "no verdict", which is a different fact from false.
+func BoolPtr(v bool) *bool { return &v }
+
 // nullableBool converts a *bool to a storable value.
 func nullableBool(b *bool) any {
 	if b == nil {

@@ -527,7 +527,7 @@ func TestPersistenceAcrossReopen(t *testing.T) {
 	}
 	yes := true
 	if _, err := first.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
-		State: storage.StateResumed, Success: true, Output: "done",
+		State: storage.StateResumed, Success: storage.BoolPtr(true), Output: "done",
 		SessionIDVerified: &yes, TranscriptGrew: &yes,
 	}); err != nil {
 		t.Fatalf("finish attempt: %v", err)

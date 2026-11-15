@@ -688,9 +688,21 @@ func TestRecoverRecordsAFailedPreResumeCheckWithTheBudgetSpent(t *testing.T) {
 	seedSession(t, store, session)
 
 	ctx := context.Background()
+	// The budget is spent by attempts that ran and failed, not by rows left
+	// unfinished: an unfinished attempt is *interrupted* (PRD 3 R6), which ends the
+	// pass at the close and never reaches the check under test.
 	for i := 0; i < DefaultMaxAttempts; i++ {
-		if _, err := store.StartAttempt(ctx, sessionA, 0, "claude -p --resume"); err != nil {
+		attempt, err := store.StartAttempt(ctx, sessionA, 0, "claude -p --resume")
+		if err != nil {
 			t.Fatalf("start attempt %d: %v", i+1, err)
+		}
+		if _, err := store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
+			State:      StateRetryWait,
+			Success:    storage.BoolPtr(false),
+			Error:      "previous failure",
+			FinishedAt: time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC),
+		}); err != nil {
+			t.Fatalf("finish attempt %d: %v", i+1, err)
 		}
 	}
 
@@ -968,7 +980,7 @@ func exhaustBudget(t *testing.T, store *storage.Store, sessionID string, n int) 
 		}
 		if _, err := store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
 			State:      StateRetryWait,
-			Success:    false,
+			Success:    storage.BoolPtr(false),
 			Error:      "previous failure",
 			FinishedAt: time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC),
 		}); err != nil {
@@ -1071,7 +1083,7 @@ func TestRecoverHonoursTheAttemptBudgetAndForce(t *testing.T) {
 		}
 		if _, err := store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
 			State:      StateRetryWait,
-			Success:    false,
+			Success:    storage.BoolPtr(false),
 			Error:      "previous failure",
 			FinishedAt: time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC),
 		}); err != nil {
@@ -1191,62 +1203,109 @@ func TestRecoverEnforcesTheConcurrencyLimit(t *testing.T) {
 	}
 }
 
-func TestRecoverClosesAnAttemptInterruptedByARestart(t *testing.T) {
+// TestAProcessExitIsNotAFailedRecovery is PRD 3 R6's acceptance criterion.
+//
+// A restart of ccresu leaves the attempt row open, because the process that owned
+// it is gone. The supervisor may still be running the session — restarting it,
+// moving it across an update, or having idle-stopped it are all normal — so the
+// close records *interrupted*, not `Success: false`, the attempt spends no
+// budget, and the pass ends without handing off again: the next pass re-observes
+// first.
+func TestAProcessExitIsNotAFailedRecovery(t *testing.T) {
 	store := newTestStore(t)
 	session := recoverableSession(sessionA)
 	session.State = StateRetryWait
 	seedSession(t, store, session)
 	ctx := context.Background()
 
-	interrupted, err := store.StartAttempt(ctx, sessionA, 0, "claude -p --resume")
+	interrupted, err := store.StartAttempt(ctx, sessionA, 0, "claude --bg --resume "+sessionA)
 	if err != nil {
 		t.Fatalf("start attempt: %v", err)
 	}
 
-	manager := testManager(t, store, growthProvider(10, 12), nil)
+	provider := growthProvider(10, 12)
+	manager := testManager(t, store, provider, nil)
 	outcome, err := manager.Recover(ctx, sessionA)
-	if err != nil {
-		t.Fatalf("Recover: %v", err)
+	if !errors.Is(err, ErrAttemptInterrupted) {
+		t.Fatalf("Recover error = %v, want ErrAttemptInterrupted", err)
 	}
-	if outcome.State != StateResumed {
-		t.Fatalf("outcome state = %s, want RESUMED", outcome.State)
+	if !outcome.Interrupted {
+		t.Error("Outcome.Interrupted = false, want the pass to say it was interrupted")
+	}
+	if outcome.State != StateDiscovered {
+		t.Errorf("outcome state = %s, want DISCOVERED so the next pass re-observes", outcome.State)
+	}
+
+	// Nothing was handed off and nothing was asked about the session: the pass
+	// ends at the close, which is what stops a restart from manufacturing a second
+	// recovery on top of the one the supervisor may already be running.
+	if got := provider.resumeCount(); got != 0 {
+		t.Errorf("resumes = %d, want 0: an interrupted attempt is re-observed, not re-handed-off", got)
+	}
+	if got := provider.statusCount(); got != 0 {
+		t.Errorf("status reads = %d, want 0: the pass ends before it looks at the session", got)
 	}
 
 	attempts, err := store.ListAttempts(ctx, sessionA, 0)
 	if err != nil {
 		t.Fatalf("list attempts: %v", err)
 	}
-	if len(attempts) != 2 {
-		t.Fatalf("attempts = %d, want the interrupted one plus the new one", len(attempts))
+	if len(attempts) != 1 {
+		t.Fatalf("attempts = %d, want only the interrupted one: no new attempt may be started", len(attempts))
 	}
-	var closed storage.RecoveryAttempt
-	for _, attempt := range attempts {
-		if attempt.ID == interrupted.ID {
-			closed = attempt
-		}
+	closed := attempts[0]
+	if closed.ID != interrupted.ID {
+		t.Fatalf("closed attempt = %d, want %d", closed.ID, interrupted.ID)
 	}
 	if closed.FinishedAt.IsZero() {
 		t.Error("the interrupted attempt must be closed, not left running")
 	}
-	if closed.Success == nil || *closed.Success {
-		t.Errorf("interrupted attempt success = %v, want a recorded failure", closed.Success)
+	if closed.Success != nil {
+		t.Errorf("interrupted attempt success = %v, want nil: an interrupted attempt is unresolved, not failed",
+			*closed.Success)
 	}
 	if !strings.Contains(closed.Error, "interrupted by a process restart") {
 		t.Errorf("interrupted attempt error = %q, want the restart explanation", closed.Error)
+	}
+
+	// The budget is what a retry loop spends. An interruption is not a try, so the
+	// next cycle starts with a full budget — the count after the close is zero.
+	budget, err := manager.attemptsThisCycle(ctx, sessionA)
+	if err != nil {
+		t.Fatalf("attemptsThisCycle: %v", err)
+	}
+	if budget != 0 {
+		t.Errorf("attemptsThisCycle = %d, want 0: an interrupted attempt spends no budget", budget)
+	}
+
+	stored, err := store.GetSession(ctx, sessionA)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if stored.State != StateDiscovered {
+		t.Errorf("session state = %s, want DISCOVERED", stored.State)
 	}
 
 	transitions, err := store.ListTransitions(ctx, sessionA, 0)
 	if err != nil {
 		t.Fatalf("list transitions: %v", err)
 	}
-	found := false
+	found, retryWait := false, false
 	for _, transition := range transitions {
-		if transition.ToState == StateRetryWait && strings.Contains(transition.Reason, "interrupted") {
-			found = true
+		if strings.Contains(transition.Reason, "interrupted") {
+			switch transition.ToState {
+			case StateDiscovered:
+				found = true
+			case StateRetryWait:
+				retryWait = true
+			}
 		}
 	}
 	if !found {
-		t.Errorf("transitions = %+v, want the restart recorded", transitions)
+		t.Errorf("transitions = %+v, want the interruption recorded as a return to DISCOVERED", transitions)
+	}
+	if retryWait {
+		t.Error("the interruption was recorded as RETRY_WAIT, which schedules the second recovery R6 forbids")
 	}
 }
 

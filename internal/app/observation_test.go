@@ -34,7 +34,7 @@ func TestInspectRendersTheObservedState(t *testing.T) {
 	listed := true
 	if _, err := h.store.FinishAttempt(context.Background(), attempt.ID, storage.AttemptResult{
 		State:   storage.StateWaitingForInput,
-		Success: false,
+		Success: storage.BoolPtr(false),
 		Error:   "the session is blocked",
 		Observation: storage.ObservationRecord{
 			State:      "blocked",
@@ -89,7 +89,7 @@ func TestInspectRendersNotRecordedForAnAttemptWithNoObservation(t *testing.T) {
 	}
 	if _, err := h.store.FinishAttempt(context.Background(), attempt.ID, storage.AttemptResult{
 		State:   storage.StateRetryWait,
-		Success: false,
+		Success: storage.BoolPtr(false),
 		Error:   "the transcript check failed",
 	}); err != nil {
 		t.Fatalf("FinishAttempt: %v", err)

@@ -427,7 +427,7 @@ func TestAttemptRepository(t *testing.T) {
 	yes := true
 	no := false
 	finished, err := store.FinishAttempt(ctx, first.ID, storage.AttemptResult{
-		State: storage.StateResumed, Success: true, Output: "ok",
+		State: storage.StateResumed, Success: storage.BoolPtr(true), Output: "ok",
 		SessionIDVerified: &yes, TranscriptGrew: &no,
 		FinishedAt: fixedTime.Add(30 * time.Second),
 	})

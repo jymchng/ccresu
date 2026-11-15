@@ -36,6 +36,15 @@ var (
 	// ErrVerificationFailed reports that the resume ran but could not be proved
 	// to have continued the original conversation.
 	ErrVerificationFailed = errors.New("recovery: resume could not be verified")
+	// ErrAttemptInterrupted reports that an attempt was left running by a process
+	// that died, so it was closed as interrupted rather than as a failure.
+	//
+	// It is its own condition because it is not a verdict on the session's work:
+	// the supervisor may have kept the work running, restarted it, or idle-stopped
+	// it, and all three are normal (PRD 3 R6). The pass that discovers it ends
+	// here, the attempt spends no budget, and the session returns to DISCOVERED so
+	// the next pass re-observes it before anything is handed off again.
+	ErrAttemptInterrupted = errors.New("recovery: the previous attempt was interrupted by a restart")
 	// ErrInvalidConfig reports an unusable manager configuration.
 	ErrInvalidConfig = errors.New("recovery: invalid configuration")
 )
