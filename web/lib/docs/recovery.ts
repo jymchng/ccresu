@@ -36,7 +36,7 @@ export const recoveryDoc: DocPage = {
       id: "state-machine",
       label: "The chain, the retry loop and the two ways out",
       description:
-        "The solid line is the recorded chain: discovery, the detected limit, the wait, the reset instant, the session check, the limit check and the resume. The dashed line is a failed attempt with budget left, which returns to the session check after a backoff. An attempt that fails with the budget spent, or with an error classed as non-retryable, ends in DISCOVERED; `ccresu retry <id>` is the only operator edge from there, and it lands in DISABLED.",
+        "The solid line is the recorded chain: discovery, the detected limit, the wait, the reset instant, the session check, the limit check and the resume. The dashed line is a failed attempt with budget left, which returns to the session check after a backoff. An attempt that fails with the budget spent, or with an error classed as non-retryable, ends in DISCOVERED, where the next pass starts the cycle again; `ccresu disable <id>` is the operator edge out, and it parks the session in DISABLED from any state.",
     },
     {
       kind: "h2",

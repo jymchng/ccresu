@@ -47,7 +47,14 @@ const CHAIN_BOTTOM = chainY(STATE_CHAIN.length - 1) + NODE.height;
 const CHIP_Y = CHAIN_BOTTOM + 22;
 const CHIP_H = 32;
 const LEGEND_Y = CHIP_Y + CHIP_H + 44;
-const STATE_MACHINE_HEIGHT = LEGEND_Y + 26;
+/** y of the legend key's dashed sample, below the DISABLED chip. */
+const LEGEND_KEY_Y = LEGEND_Y + CHIP_H + 18;
+/**
+ * The viewBox has to contain the legend as well as the chain. It used to end at
+ * `LEGEND_Y + 26`, which put the key's line at y=502 inside a 478-tall box: the
+ * one element that explains the dashed edges was clipped away.
+ */
+const STATE_MACHINE_HEIGHT = LEGEND_KEY_Y + 16;
 
 /** An arrowhead, drawn once per diagram with a unique id. */
 function Arrowhead({ id, colour }: { id: string; colour: string }) {
@@ -199,10 +206,12 @@ function StateMachine({ titleId, descriptionId, label, description }: DiagramPro
         fill="var(--foreground)"
         className={MONO}
       >
-        PERMANENTLY_FAILED
+        DISCOVERED
       </text>
 
-      {/* The operator edge out of it. */}
+      {/* The operator edge out of it: `ccresu disable <id>` parks the session in
+          DISABLED, from any state. There is no `ccresu reset`: the cycle restarts
+          by itself, which is why the failure edge above lands on DISCOVERED. */}
       <line
         x1={230}
         y1={CHIP_Y + CHIP_H}
@@ -214,7 +223,7 @@ function StateMachine({ titleId, descriptionId, label, description }: DiagramPro
         markerEnd={dashed}
       />
       <text x={222} y={LEGEND_Y - 2} textAnchor="end" fontSize="9.5" fill="var(--muted-foreground)" className={MONO}>
-        ccresu reset &lt;id&gt;
+        ccresu disable &lt;id&gt;
       </text>
       <rect
         x={140}
@@ -239,16 +248,16 @@ function StateMachine({ titleId, descriptionId, label, description }: DiagramPro
       {/* A legend, because a dashed line nobody explains is decoration. */}
       <line
         x1={20}
-        y1={LEGEND_Y + CHIP_H + 18}
+        y1={LEGEND_KEY_Y}
         x2={52}
-        y2={LEGEND_Y + CHIP_H + 18}
+        y2={LEGEND_KEY_Y}
         stroke="var(--muted-foreground)"
         strokeWidth="1.25"
         strokeDasharray="5 4"
       />
       <text
         x={60}
-        y={LEGEND_Y + CHIP_H + 21}
+        y={LEGEND_KEY_Y + 3}
         fontSize="9.5"
         fill="var(--muted-foreground)"
       >

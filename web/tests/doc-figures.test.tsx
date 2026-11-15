@@ -128,6 +128,37 @@ describe("documentation figures", () => {
     expect(Array.from(drawn).sort()).toEqual(["handoff", "state-machine"]);
   });
 
+  it("draws only states and commands that still exist", () => {
+    // A hand-authored figure cannot be generated from the code, so it is the one
+    // place a retired state can survive unnoticed. `PERMANENTLY_FAILED` was
+    // removed by migration 0006_rediscover_failed_sessions.sql and `ccresu reset`
+    // is an unknown command, and both were labels in this drawing: a picture of a
+    // state the binary cannot reach is worse than no picture.
+    const retired = [/PERMANENTLY_FAILED/, /ccresu reset\b/];
+
+    for (const block of diagrams) {
+      const { container, unmount } = render(<DocBlocks blocks={[block]} />);
+      const text = Array.from(container.querySelectorAll("svg[role='img'] text"))
+        .map((node) => node.textContent ?? "")
+        .join(" ");
+
+      for (const pattern of retired) {
+        expect(text).not.toMatch(pattern);
+      }
+
+      if (block.id === "state-machine") {
+        // The failure edge lands back in DISCOVERED, and the operator edge out of
+        // it is `ccresu disable`, which is what the CLI dispatches and what the
+        // block's own description says.
+        expect(text).toContain("DISCOVERED");
+        expect(text).toContain("ccresu disable <id>");
+        expect(text).toContain("DISABLED");
+      }
+
+      unmount();
+    }
+  });
+
   it("keeps every referenced capture registered", () => {
     const ids = new Set(captureList.map((capture) => capture.id));
     for (const block of captured) {
