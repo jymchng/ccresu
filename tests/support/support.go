@@ -368,7 +368,7 @@ func (p *GrowingProvider) ResumeSession(_ context.Context, id, message string) (
 		Result:             "continued the paused goal",
 		Subtype:            "success",
 		NumTurns:           1,
-		Command:            append([]string{"claude"}, claude.ResumeArgs(id, message)...),
+		Command:            append([]string{"claude"}, claude.HandoffArgs(id, message)...),
 	}, nil
 }
 

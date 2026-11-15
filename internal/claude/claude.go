@@ -288,15 +288,39 @@ type SessionStatus struct {
 	CheckedAt time.Time
 }
 
-// ResumeResult is the outcome of a resume attempt.
+// ResumeResult is the outcome of a handoff attempt.
 type ResumeResult struct {
 	// RequestedSessionID is the session id ccresu asked to resume.
 	RequestedSessionID string
-	// SessionID is the session id the CLI reported back.
+	// SessionID is the conversation the continuation landed in: the requested
+	// id when it continued in place, the copy's id when the CLI named one, and
+	// empty when a copy was made without being named.
 	SessionID string
-	// Verified reports SessionID == RequestedSessionID, which is the proof that
-	// the original conversation continued rather than a new one starting.
+	// Verified reports that the original conversation provably continued. A
+	// handoff cannot prove that: the supervisor accepted the work and the proof
+	// arrives later, from the published session state. It is therefore false
+	// here on purpose rather than by omission.
 	Verified bool
+	// Backgrounded reports that the CLI accepted the handoff and printed its
+	// `backgrounded · <short-id> · <name>` block.
+	Backgrounded bool
+	// StateID is the short ID from that block. `claude attach`, `claude logs`
+	// and `claude stop` take it, and it is not the session UUID.
+	StateID string
+	// Name is the label the supervisor shows for the session.
+	Name string
+	// Handoff keeps the parsed block and the raw output it came from.
+	Handoff Handoff
+	// Copied reports that the CLI started a copy instead of continuing in place.
+	Copied bool
+	// CopySessionID is the copy's session id when the CLI named one.
+	CopySessionID string
+	// Note is the CLI's `note:` line, empty when the continuation was in place.
+	Note string
+	// SupervisorStarted reports that the CLI had to start a supervisor first.
+	SupervisorStarted bool
+	// CWD is the working directory the handoff was given.
+	CWD string
 	// Result is the final assistant text of the resumed turn.
 	Result string
 	// Subtype is the CLI result subtype ("success" or an error subtype).

@@ -34,8 +34,9 @@ type Options struct {
 	Logger *slog.Logger
 	// QueryTimeout bounds `--version` and `agents --json`.
 	QueryTimeout time.Duration
-	// ResumeTimeout bounds a resume invocation.
-	ResumeTimeout time.Duration
+	// HandoffTimeout bounds the handoff invocation. The supervisor's work is not
+	// bounded by it; verification has its own setting.
+	HandoffTimeout time.Duration
 	// MaxOutputBytes caps captured command output.
 	MaxOutputBytes int
 	// All passes --all to `claude agents --json` by default.
@@ -85,7 +86,7 @@ func New(opts Options) (*Provider, error) {
 		Executable:     opts.Executable,
 		Execer:         execer,
 		QueryTimeout:   opts.QueryTimeout,
-		ResumeTimeout:  opts.ResumeTimeout,
+		HandoffTimeout: opts.HandoffTimeout,
 		MaxOutputBytes: opts.MaxOutputBytes,
 		MinVersion:     opts.MinimumVersion,
 		Logger:         logger,
@@ -391,7 +392,7 @@ func (p *Provider) ResumeSession(ctx context.Context, sessionID, message string)
 	if session.Unrecoverable() {
 		return ResumeResult{}, fmt.Errorf("%w: %s: %s", ErrUnrecoverable, sessionID, session.Reason)
 	}
-	result, err := p.cli.Resume(ctx, sessionID, message)
+	result, err := p.cli.Resume(ctx, sessionID, message, session.ProjectPath)
 	if err != nil {
 		return result, err
 	}

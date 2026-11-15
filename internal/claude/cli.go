@@ -18,8 +18,6 @@ import (
 const (
 	// DefaultQueryTimeout bounds `--version` and `agents --json`.
 	DefaultQueryTimeout = 30 * time.Second
-	// DefaultResumeTimeout bounds a resume turn, which runs a full model turn.
-	DefaultResumeTimeout = 15 * time.Minute
 )
 
 // MaxMessageBytes caps the continuation message ccresu will send. Anything
@@ -34,38 +32,38 @@ type CLIOptions struct {
 	Execer Execer
 	// QueryTimeout bounds `--version` and `agents --json`.
 	QueryTimeout time.Duration
-	// ResumeTimeout bounds a resume invocation.
-	ResumeTimeout time.Duration
+	// HandoffTimeout bounds the handoff invocation. It does not bound the
+	// supervisor's work, which is no longer ccresu's process.
+	HandoffTimeout time.Duration
 	// MaxOutputBytes caps captured output.
 	MaxOutputBytes int
 	// MinVersion overrides the supported-version floor.
 	MinVersion *Version
-	// Logger receives the recovery diagnostics for a resume that needed a
-	// `claude stop` first. Empty means slog.Default().
+	// Logger receives the recovery diagnostics for a handoff that needed a
+	// retry or a directory decision. Empty means slog.Default().
 	Logger *slog.Logger
 }
 
 // CLI is the version-aware adapter around the claude executable.
 //
-// It exposes exactly the five verified invocations:
+// It exposes exactly these verified invocations:
 //
 //	claude --version
 //	claude agents --json [--all] [--cwd <path>]
-//	claude -p --resume <session-id> --output-format json <message>
+//	claude --bg --resume <session-id> --name <label> <message>
 //	claude stop <job-id>
 //	(the transcript and session-env files are read, not executed)
 //
-// `claude stop` takes an eight-hex background job name, not the session UUID --
-// the CLI resolves job names only and answers a UUID with "No job matching" and
-// exit 1. It is issued only when a resume is refused because the session is
-// still attached to a background agent, and the job name is read out of that
-// refusal: its conversation is kept, so the same resume can follow immediately. No other command is ever constructed, and the
-// message is always passed as a single argv element so no shell ever sees it.
+// Recovery hands the continuation to the supervisor rather than running it:
+// `--bg` cannot be combined with `-p`/`--print`, so the print-mode flags are
+// absent by construction and not merely unused. The handoff is given the
+// session's own directory, never the daemon's, and the message is always passed
+// as a single argv element so no shell ever sees it.
 type CLI struct {
 	bin            string
 	exec           Execer
 	queryTimeout   time.Duration
-	resumeTimeout  time.Duration
+	handoffTimeout time.Duration
 	maxOutputBytes int
 	minVersion     Version
 	log            *slog.Logger
@@ -82,7 +80,7 @@ func NewCLI(opts CLIOptions) *CLI {
 		bin:            strings.TrimSpace(opts.Executable),
 		exec:           opts.Execer,
 		queryTimeout:   opts.QueryTimeout,
-		resumeTimeout:  opts.ResumeTimeout,
+		handoffTimeout: opts.HandoffTimeout,
 		maxOutputBytes: opts.MaxOutputBytes,
 		log:            opts.Logger,
 	}
@@ -98,8 +96,8 @@ func NewCLI(opts CLIOptions) *CLI {
 	if c.queryTimeout <= 0 {
 		c.queryTimeout = DefaultQueryTimeout
 	}
-	if c.resumeTimeout <= 0 {
-		c.resumeTimeout = DefaultResumeTimeout
+	if c.handoffTimeout <= 0 {
+		c.handoffTimeout = DefaultHandoffTimeout
 	}
 	c.minVersion = MinimumVersion
 	if opts.MinVersion != nil {
@@ -219,26 +217,27 @@ func (c *CLI) Agents(ctx context.Context, query AgentsQuery) ([]AgentEntry, erro
 	return entries, nil
 }
 
-// Resume runs the verified resume command:
+// Resume hands the session to the supervisor:
 //
-//	claude -p --resume <session-id> --output-format json <message>
+//	claude --bg --resume <session-id> --name <label> <message>
 //
-// One situation needs a second command first. The CLI refuses to resume a
-// session that is still attached to a background agent ("That session is
-// running in the background"). Because `claude stop <job-id>` keeps both the
-// conversation and the session id, ccresu answers that refusal by stopping the
-// background agent and repeating the identical resume argument vector once.
-// The stop takes the eight-hex job name the refusal itself prints, not the
-// session UUID; see stop.go.
-// Only that exact refusal is handled this way: every other failure, a stop that
-// itself fails, and a resume that still refuses after a successful stop are
-// returned unchanged, so the existing classification (permanent, no attempt
-// spent) is untouched.
+// It is a handoff, not a run. The print-mode flags are gone: `--bg` cannot be
+// combined with `-p`/`--print`, so a single invocation cannot carry both, and
+// R12 of the PRD retires print mode rather than keeping it beside the handoff.
+// The invocation returns as soon as the supervisor accepts the session, which
+// the CLI reports by printing a `backgrounded · <short-id> · <name>` block;
+// catching that block is the whole verification this PRD keeps, and proving the
+// work happened is a later PRD's job.
 //
-// The session id is validated first so it can never be mistaken for a flag, and
-// the returned session id must equal the requested one; otherwise the call
-// fails with ErrSessionNotPreserved instead of reporting a false success.
-func (c *CLI) Resume(ctx context.Context, sessionID, message string) (ResumeResult, error) {
+// dir is the directory the session occupies, never the caller's. The handoff is
+// the first ccresu invocation that chooses a working directory deliberately; a
+// recovery that ran in the daemon's cwd would resume the wrong tree.
+//
+// Either refusal that is not a crash is named rather than described: an
+// untrusted workspace wraps ErrWorkspaceNotTrusted, and output without a block
+// wraps ErrHandoffNotAcknowledged. Neither is retried, because neither gets
+// better by trying again with the same arguments.
+func (c *CLI) Resume(ctx context.Context, sessionID, message, dir string) (ResumeResult, error) {
 	if err := ValidateSessionID(sessionID); err != nil {
 		return ResumeResult{}, err
 	}
@@ -247,6 +246,9 @@ func (c *CLI) Resume(ctx context.Context, sessionID, message string) (ResumeResu
 	}
 	if len(message) > MaxMessageBytes {
 		return ResumeResult{}, fmt.Errorf("%w: %d bytes (max %d)", ErrMessageTooLong, len(message), MaxMessageBytes)
+	}
+	if strings.TrimSpace(dir) == "" {
+		return ResumeResult{}, fmt.Errorf("%w: session %s", ErrHandoffDirectoryMissing, sessionID)
 	}
 
 	version, err := c.Version(ctx)
@@ -257,106 +259,66 @@ func (c *CLI) Resume(ctx context.Context, sessionID, message string) (ResumeResu
 		return ResumeResult{}, err
 	}
 
-	args := ResumeArgs(sessionID, message)
-	result, resumeErr := c.resumeOnce(ctx, sessionID, args)
-	if resumeErr == nil || !IsSessionRunningInBackground(resumeErr) {
-		return result, resumeErr
-	}
-
-	// The refusal says the session is busy elsewhere, not that the conversation
-	// is gone. Stopping it is bookkeeping: the transcript and the session id
-	// survive, so the resume that follows is the same command with the same
-	// arguments. The stop is recorded in the log only; the attempt row keeps
-	// showing the one `claude -p --resume …` command.
-	//
-	// The stop needs the CLI's eight-hex job name, not the session UUID: the
-	// refusal names it ("claude stop 837eaaea"), so it is read from there. When
-	// the message names no job, no stop is attempted and the refusal is
-	// reported unchanged -- guessing a job name could stop another session.
-	jobID := BackgroundJobID(resumeErr)
-	if jobID == "" {
-		c.log.Warn("the refusal named no background job id; cannot stop the session holding it",
-			"session", sessionID)
-		return result, resumeErr
-	}
-	c.log.Warn("claude refused the resume because the session is attached to a background agent; stopping it and resuming again",
-		"session", sessionID, "job", jobID)
-	if stopErr := c.Stop(ctx, jobID); stopErr != nil {
-		// Without the stop the session is still in the way, so the original
-		// refusal is the honest result. Returning it untouched keeps the
-		// existing permanent classification intact.
-		c.log.Warn("claude stop did not clear the background session; reporting the original resume failure",
-			"session", sessionID, "job", jobID, "error", stopErr)
-		return result, resumeErr
-	}
-	c.log.Info("stopped the background session; repeating the identical resume",
-		"session", sessionID, "job", jobID)
-
-	retried, retryErr := c.resumeOnce(ctx, sessionID, args)
-	if retryErr != nil {
-		c.log.Warn("resume failed again after stopping the background session",
-			"session", sessionID, "error", retryErr)
-	}
-	return retried, retryErr
-}
-
-// resumeOnce runs one resume invocation and interprets its output.
-//
-// It exists so the background-session recovery repeats exactly the same command:
-// the argument vector is built once by the caller and handed in, never rebuilt
-// by a second, subtly different code path.
-func (c *CLI) resumeOnce(ctx context.Context, sessionID string, args []string) (ResumeResult, error) {
-	out, runErr := c.run(ctx, c.resumeTimeout, nil, args...)
+	args := HandoffArgs(sessionID, message)
 	result := ResumeResult{
 		RequestedSessionID: sessionID,
 		Command:            append([]string{c.bin}, args...),
+		CWD:                dir,
 	}
-
-	parsed, parseErr := ParseResumeJSON(out.Stdout)
-	if parsed != nil {
-		result.SessionID = parsed.SessionID
-		result.Result = parsed.Result
-		result.Subtype = parsed.Subtype
-		result.IsError = parsed.IsError
-		result.NumTurns = parsed.NumTurns
-		result.DurationMS = parsed.DurationMS
-		result.TotalCostUSD = parsed.TotalCostUSD
-		result.Model = parsed.Model
-	}
-
+	out, runErr := c.runIn(ctx, c.handoffTimeout, dir, nil, args...)
+	result.Handoff = Handoff{Raw: strings.TrimSpace(string(out.Stdout))}
 	if runErr != nil || out.ExitCode != 0 {
+		if WorkspaceNotTrusted(out) {
+			// The remedy is the operator's: trust the directory, or resume
+			// somewhere they do trust. It is its own outcome so it is not
+			// mistaken for a transient failure and retried on a backoff.
+			result.Handoff = Handoff{Raw: strings.TrimSpace(string(out.Stdout))}
+			return result, fmt.Errorf("%w: %s", ErrWorkspaceNotTrusted, dir)
+		}
 		if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
 			return result, fmt.Errorf("%w: %w", ErrCLIUnavailable, runErr)
 		}
-		return result, describeRunError("claude -p --resume", out, runErr)
+		return result, describeRunError("claude --bg --resume", out, runErr)
 	}
+
+	handoff, parseErr := ParseHandoff(out.Stdout)
+	result.Handoff = handoff
+	result.Backgrounded = handoff.Acknowledged
+	result.StateID = handoff.StateID
+	result.Name = handoff.Name
+	result.Note = handoff.Note
+	result.Copied = handoff.Copied
+	result.CopySessionID = handoff.CopySessionID
+	result.SupervisorStarted = handoff.StartedService
 	if parseErr != nil {
 		return result, parseErr
 	}
-	if parsed.IsError {
-		return result, fmt.Errorf("%w: %s", ErrResumeFailed, firstNonEmpty(parsed.Result, parsed.Subtype, "unknown error"))
+	if handoff.Copied {
+		// A copy is an expected outcome, not a failure: the continuation lives
+		// in a new conversation. The note names it when the CLI says so, and
+		// the field is left empty when it does not rather than guessed.
+		result.SessionID = handoff.CopySessionID
+		return result, nil
 	}
-	if result.SessionID == "" {
-		return result, ErrNoSessionIDReported
-	}
-	if result.SessionID != sessionID {
-		return result, fmt.Errorf("%w: got %s, want %s", ErrSessionNotPreserved, result.SessionID, sessionID)
-	}
-	result.Verified = true
+	result.SessionID = sessionID
 	return result, nil
 }
 
-// ResumeArgs returns the verified resume argument vector.
-//
-// Exported so tests and the recovery audit trail can assert the exact command
-// without reimplementing it.
-func ResumeArgs(sessionID, message string) []string {
-	return []string{"-p", "--resume", sessionID, "--output-format", "json", message}
+// run executes one command with the per-command timeout applied when the caller
+// provided none. It inherits the caller's working directory, which is right for
+// the query commands: they inspect the CLI, not a session.
+func (c *CLI) run(ctx context.Context, timeout time.Duration, stdin []byte, args ...string) (Output, error) {
+	return c.runIn(ctx, timeout, "", stdin, args...)
 }
 
-// run executes one command with the per-command timeout applied when the caller
-// provided none.
-func (c *CLI) run(ctx context.Context, timeout time.Duration, stdin []byte, args ...string) (Output, error) {
+// runIn executes one command in dir.
+//
+// It exists because the handoff is the one invocation whose working directory is
+// part of its meaning: a recovery handed to the supervisor from the daemon's cwd
+// would continue the wrong tree. Everything else passes an empty dir and
+// inherits, so the deliberate choice is visible at the one call site that makes
+// it.
+func (c *CLI) runIn(ctx context.Context, timeout time.Duration, dir string, stdin []byte, args ...string) (Output, error) {
 	if err := ctx.Err(); err != nil {
 		return Output{ExitCode: -1}, err
 	}
@@ -367,7 +329,7 @@ func (c *CLI) run(ctx context.Context, timeout time.Duration, stdin []byte, args
 	}
 	defer cancel()
 
-	opts := RunOptions{MaxOutputBytes: c.maxOutputBytes}
+	opts := RunOptions{MaxOutputBytes: c.maxOutputBytes, Dir: dir}
 	if len(stdin) > 0 {
 		opts.Stdin = bytes.NewReader(stdin)
 	}

@@ -100,10 +100,12 @@ func (v Version) AtLeast(other Version) bool { return v.Compare(other) >= 0 }
 
 // MinimumVersion is the oldest Claude Code release ccresu is verified against.
 //
-// Both verified interfaces (`agents --json` and `-p --output-format json`) were
-// introduced before 2.0, so refusing anything older keeps ccresu from probing
-// flags that may not exist.
-var MinimumVersion = Version{Major: 2, Minor: 0, Patch: 0, Parsed: true}
+// The floor moved to the release that makes `--resume <id> --bg` continue the
+// session in place, or start a copy and say so on a `note:` line. Recovery has
+// no print-mode path any more, so a CLI below this release cannot perform a
+// recovery at all, and saying so once is better than probing flags that are not
+// there.
+var MinimumVersion = Version{Major: 2, Minor: 1, Patch: 257, Parsed: true}
 
 // Supported reports whether the interpreter is new enough for the verified
 // interfaces.
@@ -111,6 +113,29 @@ func (v Version) Supported() bool { return v.Parsed && v.AtLeast(MinimumVersion)
 
 // checkSupported turns an unsupported version into an actionable error.
 func (v Version) checkSupported() error { return checkVersion(v, MinimumVersion) }
+
+// VersionRequirementError is the named failure for a CLI below the floor.
+//
+// It exists as a type rather than a formatted string because three call sites
+// need to tell it apart from a crash: the recovery classifier must not retry
+// it, the command layer must not present it as a mystery, and the operator
+// needs the same remedy every time. It unwraps to ErrUnsupportedVersion so
+// existing errors.Is checks keep working.
+type VersionRequirementError struct {
+	// Have is the version the configured CLI reported.
+	Have Version
+	// Need is the floor this build requires.
+	Need Version
+}
+
+// Error renders the requirement and the two remedies, in that order.
+func (e *VersionRequirementError) Error() string {
+	return fmt.Sprintf("%s is older than the required %s: upgrade Claude Code, or stay on ccresu v0.6.0 which still resumes in print mode",
+		e.Have, e.Need)
+}
+
+// Unwrap makes the error readable as ErrUnsupportedVersion.
+func (e *VersionRequirementError) Unwrap() error { return ErrUnsupportedVersion }
 
 // checkVersion validates v against an explicit floor.
 func checkVersion(v, min Version) error {
@@ -120,5 +145,5 @@ func checkVersion(v, min Version) error {
 	if !v.Parsed {
 		return fmt.Errorf("%w: %q", ErrUnrecognizedVersion, v.Raw)
 	}
-	return fmt.Errorf("%w: %s is older than the required %s", ErrUnsupportedVersion, v, min)
+	return &VersionRequirementError{Have: v, Need: min}
 }
