@@ -125,7 +125,7 @@ export const recoveryDoc: DocPage = {
       kind: "note",
       tone: "warning",
       title: "The handoff returns; the work does not",
-      text: "`claude.DefaultHandoffTimeout` (two minutes) bounds the invocation, not the work: a handoff comes back as soon as the supervisor accepts it, which the CLI does in seconds. The conversation then runs under the supervisor and outlives ccresu \u2014 that is the point of handing it over. To follow it, `claude attach <short-id>`; to read what it did, `claude logs`; to stop it, `claude stop <short-id>` (the eight-hex id from the block, never the session UUID). None of the three is part of a recovery.",
+      text: "`recovery.startup_timeout` (two minutes by default) bounds the invocation, not the work: a handoff comes back as soon as the supervisor accepts it, which the CLI does in seconds. The conversation then runs under the supervisor and outlives ccresu \u2014 that is the point of handing it over. To follow it, `claude attach <short-id>`; to read what it did, `claude logs`; to stop it, `claude stop <short-id>` (the eight-hex id from the block, never the session UUID). None of the three is part of a recovery.",
     },
     {
       kind: "h2",

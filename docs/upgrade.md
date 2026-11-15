@@ -130,6 +130,20 @@ Verify the upgrade:
 ~/.local/bin/ccresu doctor
 ```
 
+### `recovery.startup_timeout` now has a reader
+
+The key used to be accepted, validated, defaulted and environment-overridable,
+and read by nothing: it dated from the print-mode resume, where ccresu watched a
+child process start, and a handoff has no child to watch. It now bounds the
+`claude --bg --resume` handoff call itself — how long ccresu waits for the CLI to
+accept the session — and nothing else: the resumed work runs under the
+supervisor and outlives ccresu.
+
+Its default moved from `60s` to `2m`, which is the fixed timeout the handoff call
+used while the key did nothing, so a configuration that never set it behaves
+exactly as it did before. A configuration that *did* set it now gets that value:
+check it is enough for your host to start the background service.
+
 ### Rolling back
 
 Releases are pinned by tag, so rolling back is a normal install of the previous

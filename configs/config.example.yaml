@@ -63,11 +63,12 @@ recovery:
   max_delay: 15m
   multiplier: 2.0
   jitter: 0.15
-  # Accepted and validated, but nothing reads it: it dates from the print-mode
-  # resume, when ccresu watched a child process start producing output. A handoff
-  # has no child to watch, so the wait that applies is claude's fixed 2m
-  # DefaultHandoffTimeout on the handoff call itself.
-  startup_timeout: 60s
+  # Bounds the `claude --bg --resume` handoff call itself: how long ccresu waits
+  # for the CLI to accept the session. It does not bound the resumed work, which
+  # runs under the supervisor and outlives ccresu. The default is the two minutes
+  # the handoff call used before this key had a reader, so leaving it alone
+  # changes nothing; raise it where starting the background service is slow.
+  startup_timeout: 2m
   # Bounds the transcript-growth poll on a resume that did not hand off. A handoff
   # returns as soon as the `backgrounded` block is parsed, so this never bounds it.
   verification_timeout: 120s

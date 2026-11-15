@@ -142,16 +142,7 @@ func BuildRuntime(ctx context.Context, cfg *config.Config, clk clock.Clock, log 
 		return nil, fmt.Errorf("migrate %s: %w", dbPath, err)
 	}
 
-	provider, err := claude.New(claude.Options{
-		Executable: cfg.Claude.Executable,
-		Clock:      clk,
-		Logger:     log,
-		All:        cfg.Claude.DiscoverAllSessions,
-		// PRD 5 R2: the four handoff-safe flags ride every resume. An unset knob
-		// adds nothing, so a config with no guardrails produces the vector it did
-		// before this PRD.
-		Guardrails: guardrailsFromConfig(cfg),
-	})
+	provider, err := claude.New(claudeOptionsFromConfig(cfg, clk, log))
 	if err != nil {
 		_ = store.Close()
 		return nil, err
@@ -217,6 +208,31 @@ func BuildRuntime(ctx context.Context, cfg *config.Config, clk clock.Clock, log 
 		runtime.Notifier = notifier
 	}
 	return runtime, nil
+}
+
+// claudeOptionsFromConfig maps the configuration onto the provider's options.
+//
+// It is a pure mapping, like guardrailsFromConfig and recoveryFromConfig below,
+// so what reaches the CLI can be asserted without a CLI to run:
+// TestClaudeOptionsFromConfigCarriesTheStartupTimeout fails if a field stops
+// being fed from the configuration it names.
+func claudeOptionsFromConfig(cfg *config.Config, clk clock.Clock, log *slog.Logger) claude.Options {
+	return claude.Options{
+		Executable: cfg.Claude.Executable,
+		Clock:      clk,
+		Logger:     log,
+		All:        cfg.Claude.DiscoverAllSessions,
+		// recovery.startup_timeout is the bound on the handoff invocation and
+		// nothing else: the resumed work runs under the supervisor, so the only
+		// wait ccresu can apply is the one for acceptance. Without this line the
+		// key is a knob with no reader again and the call is pinned at
+		// claude.DefaultHandoffTimeout, whatever the configuration says.
+		HandoffTimeout: cfg.Recovery.StartupTimeout.Duration,
+		// PRD 5 R2: the four handoff-safe flags ride every resume. An unset knob
+		// adds nothing, so a config with no guardrails produces the vector it did
+		// before this PRD.
+		Guardrails: guardrailsFromConfig(cfg),
+	}
 }
 
 // guardrailsFromConfig maps the configured guardrails onto the flags a handoff

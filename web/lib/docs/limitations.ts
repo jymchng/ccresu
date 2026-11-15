@@ -33,7 +33,7 @@ export const limitationsDoc: DocPage = {
       items: [
         "The CLI refuses to background a session in a directory it does not trust. ccresu reports that refusal as its own outcome instead of retrying it, because trusting the directory is your decision.",
         "The handoff needs the session's own working directory. ccresu never inherits the daemon's, so a session whose recorded directory has been deleted cannot be handed off.",
-        "One handoff invocation is bounded at two minutes. That bound covers acceptance only: the work runs under the supervisor afterwards and is no longer ccresu's process, which is exactly why the two phases no longer share a timeout.",
+        "One handoff invocation is bounded by `recovery.startup_timeout`, two minutes by default. That bound covers acceptance only: the work runs under the supervisor afterwards and is no longer ccresu's process, which is exactly why the two phases no longer share a timeout.",
         "If the CLI prints no `backgrounded` block, the handoff is an error rather than an unproven success: without the block ccresu cannot name the state it created, so it records nothing as recovered.",
       ],
     },

@@ -36,6 +36,12 @@ func Defaults() Config {
 			UnknownResetMaxInterval:     NewDuration(30 * 60e9),
 			RecheckBeforeResume:         true,
 		},
+		// Recovery's StartupTimeout default is deliberately the timeout the
+		// handoff invocation used before the key had a reader:
+		// claude.DefaultHandoffTimeout, two minutes. Wiring the key must not
+		// shorten the wait for a configuration that never set it, and
+		// TestStartupTimeoutDefaultMatchesTheHandoffDefault pins the pair so the
+		// two cannot drift into a silent behaviour change.
 		Recovery: Recovery{
 			Enabled:                 true,
 			MaxAttempts:             10,
@@ -43,7 +49,7 @@ func Defaults() Config {
 			MaxDelay:                NewDuration(15 * 60e9),
 			Multiplier:              2.0,
 			Jitter:                  0.15,
-			StartupTimeout:          NewDuration(60e9),
+			StartupTimeout:          NewDuration(120e9),
 			VerificationTimeout:     NewDuration(120e9),
 			HealthCheckInterval:     NewDuration(10e9),
 			MaxConcurrentRecoveries: 3,

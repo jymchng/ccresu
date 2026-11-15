@@ -6,7 +6,9 @@ import (
 	"log/slog"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/jymchng/ccresu/internal/claude"
 	"github.com/jymchng/ccresu/internal/clock"
 	"github.com/jymchng/ccresu/internal/config"
 	"github.com/jymchng/ccresu/internal/detector"
@@ -146,6 +148,33 @@ func TestRecoveryFromConfigMatchesThePackageConstructor(t *testing.T) {
 		gotBackoff.Multiplier != wantBackoff.Multiplier ||
 		gotBackoff.Jitter != wantBackoff.Jitter {
 		t.Errorf("backoff = %+v, want %+v", gotBackoff, wantBackoff)
+	}
+}
+
+// TestClaudeOptionsFromConfigCarriesTheStartupTimeout is the reader
+// recovery.startup_timeout never had: the key was accepted, validated, defaulted
+// and env-overridable, and read by nothing, so every handoff was pinned at
+// claude.DefaultHandoffTimeout whatever the configuration said. Delete the
+// HandoffTimeout line from claudeOptionsFromConfig and this fails with 0s, which
+// is exactly the regression it exists to catch.
+func TestClaudeOptionsFromConfigCarriesTheStartupTimeout(t *testing.T) {
+	cfg := runtimeConfig(t)
+	cfg.Recovery.StartupTimeout = config.NewDuration(45 * time.Second)
+
+	opts := claudeOptionsFromConfig(cfg, clock.NewFake(harnessBaseTime), nil)
+	if opts.HandoffTimeout != 45*time.Second {
+		t.Fatalf("HandoffTimeout = %s, want 45s: recovery.startup_timeout must reach the handoff call", opts.HandoffTimeout)
+	}
+}
+
+// TestStartupTimeoutDefaultMatchesTheHandoffDefault pins the default to the fixed
+// timeout the handoff invocation used before the key had a reader. Wiring the key
+// must not shorten the wait for a configuration that never set it, and an edit to
+// either constant alone would silently do exactly that.
+func TestStartupTimeoutDefaultMatchesTheHandoffDefault(t *testing.T) {
+	cfg := config.Defaults()
+	if got := cfg.Recovery.StartupTimeout.Duration; got != claude.DefaultHandoffTimeout {
+		t.Fatalf("recovery.startup_timeout default = %s, want %s (claude.DefaultHandoffTimeout): the wiring must change no existing behaviour", got, claude.DefaultHandoffTimeout)
 	}
 }
 

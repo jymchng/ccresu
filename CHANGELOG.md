@@ -4,6 +4,18 @@ All notable changes to ccresu are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`recovery.startup_timeout` has a reader.** The key was accepted, validated,
+  defaulted to `60s` and environment-overridable, and consumed by nothing: every
+  handoff ran under the fixed `claude.DefaultHandoffTimeout` whatever the
+  configuration said. It now bounds the `claude --bg --resume` handoff call
+  itself (and still not the resumed work, which is the supervisor's), and its
+  default moved to `2m` — the value that call already used — so an existing
+  configuration behaves as before.
+
 ## [0.7.0] - 2026-11-15
 
 Six PRDs on one theme: a recovery is decided by what the supervisor publishes, not

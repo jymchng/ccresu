@@ -74,7 +74,7 @@ export const configurationDoc: DocPage = {
         ["max_delay", "15m", "Ceiling for the exponential backoff."],
         ["multiplier", "2.0", "Growth factor between attempts."],
         ["jitter", "0.15", "Random fraction added so retries do not synchronise."],
-        ["startup_timeout", "60s", "Accepted and validated, but nothing reads it: it dates from the print-mode resume, when ccresu watched a child process start producing output. A handoff has no child to watch, so the wait that applies is the CLI's fixed two-minute `DefaultHandoffTimeout` on the handoff call itself."],
+        ["startup_timeout", "2m", "How long ccresu waits for the `claude --bg --resume` handoff to be accepted: the bound on the handoff invocation, not on the resumed work, which runs under the supervisor and outlives ccresu. The default is the two minutes the handoff call used before this key had a reader, so raising it is only needed where starting the background service is slow."],
         ["verification_timeout", "120s", "How long the verifier polls the transcript for growth on a resume it did not hand off. A handoff never waits on it — the CLI's `backgrounded` block returns the handoff at once — and growth is only a diagnostic: the block proves a handoff, and the published state proves any other resume."],
         ["health_check_interval", "10s", "Gap between transcript reads inside that same growth poll. Nothing polls a handed-off session."],
         ["max_concurrent_recoveries", "3", "Recovery loops allowed to run at once."],

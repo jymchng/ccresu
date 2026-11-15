@@ -660,6 +660,33 @@ func TestCLIRunAppliesTimeout(t *testing.T) {
 	}
 }
 
+// TestCLIHandoffTimeoutBoundsTheHandoffInvocation proves the other half of
+// recovery.startup_timeout's wiring: the value the composition root puts in
+// claude.Options.HandoffTimeout is the deadline the `claude --bg --resume`
+// invocation actually runs under, distinct from the query bound. The recorder
+// sees the last invocation, which is the handoff, so a 47s handoff bound beside
+// a 5s query bound cannot be confused for one another.
+func TestCLIHandoffTimeoutBoundsTheHandoffInvocation(t *testing.T) {
+	t.Parallel()
+
+	execer := &deadlineRecorder{output: Output{Stdout: []byte(testVersionOutput + testHandoffBlock)}}
+	cli := NewCLI(CLIOptions{
+		Executable:     "claude",
+		Execer:         execer,
+		QueryTimeout:   5 * time.Second,
+		HandoffTimeout: 47 * time.Second,
+	})
+	if _, err := cli.Resume(context.Background(), testSessionID, "continue", testSessionDir); err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if !execer.sawDeadline {
+		t.Fatal("the handoff ran with no deadline, so nothing bounds it")
+	}
+	if execer.timeout <= 30*time.Second || execer.timeout > 47*time.Second {
+		t.Fatalf("handoff deadline = %s, want at most 47s and clearly the handoff bound rather than the 5s query one", execer.timeout)
+	}
+}
+
 // deadlineRecorder records the deadline the CLI applied.
 type deadlineRecorder struct {
 	output      Output

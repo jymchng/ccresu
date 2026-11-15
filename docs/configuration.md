@@ -160,7 +160,7 @@ detector:
 | `max_delay` | `15m` | Retry delay ceiling. |
 | `multiplier` | `2.0` | Exponential growth factor. |
 | `jitter` | `0.15` | ±15% randomisation so retries do not synchronise. |
-| `startup_timeout` | `60s` | Validated and accepted, but nothing reads it. It dates from the print-mode resume, when ccresu watched a child process start producing output; a handoff has no child to watch, so the wait that actually applies is the fixed `claude.DefaultHandoffTimeout` (2m) on the handoff call itself. |
+| `startup_timeout` | `2m` | How long ccresu waits for the `claude --bg --resume` handoff to be accepted — the bound on the handoff invocation itself (`claude.CLIOptions.HandoffTimeout`), and on nothing else: the resumed work runs under the supervisor and outlives ccresu. The default is the two minutes the handoff call used before this key had a reader, so the wiring changed nothing for a configuration that never set it; raise it on a host where starting the background service is slow. |
 | `verification_timeout` | `120s` | How long the verifier polls the transcript for growth after a resume that did not hand off. The handoff — the only resume ccresu issues — never reaches that poll: `Verify` returns through `acceptHandoff` as soon as the CLI prints its `backgrounded` block, and the published-state observation has no timeout of its own. Growth is a diagnostic either way: the block proves a handoff, the published state proves any other resume. |
 | `health_check_interval` | `10s` | Gap between transcript reads inside that same growth poll. Nothing polls a handed-off session. |
 | `max_concurrent_recoveries` | `3` | Parallel resumes. |
