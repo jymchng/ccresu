@@ -254,6 +254,76 @@ func TestEnableDisableRecordsTransitions(t *testing.T) {
 	}
 }
 
+// TestDisableKeepsTheRecordedError pins the fact the recovery page documents:
+// `ccresu disable` changes whether ccresu may act on a session, not the record
+// of what happened to it. SetSessionEnabled writes only enabled, state,
+// retry_at and updated_at, so the last error survives both edges — which is why
+// `ccresu inspect` and `ccresu sessions --all` still show the failure that ended
+// the session after an operator has parked it.
+func TestDisableKeepsTheRecordedError(t *testing.T) {
+	store := newStore(t)
+	ctx := context.Background()
+	session := mustSeedSession(t, store, "parked")
+
+	const failure = "claude: the handoff printed no backgrounded block"
+	if err := store.SetSessionError(ctx, session.ID, failure); err != nil {
+		t.Fatalf("record error: %v", err)
+	}
+
+	// Disable from a state other than DISCOVERED, because the page claims the
+	// command parks a session from whatever state it is in. Storage does not
+	// enforce edges, so the transition is enough to set the starting point.
+	if _, err := store.TransitionSession(ctx, session.ID, storage.StateRetryWait, "backoff", 0); err != nil {
+		t.Fatalf("transition to RETRY_WAIT: %v", err)
+	}
+	if err := store.SetSessionEnabled(ctx, session.ID, false); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+
+	got, err := store.GetSession(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Enabled || got.State != storage.StateDisabled {
+		t.Fatalf("after disable: enabled=%t state=%s, want enabled=false state=DISABLED", got.Enabled, got.State)
+	}
+	if got.LastError != failure {
+		t.Fatalf("disable cleared the recorded error: got %q, want %q kept", got.LastError, failure)
+	}
+
+	// The edge back is enable, and it must not launder the record either: the
+	// page says a session returns to DISCOVERED and is decided afresh, which is
+	// a statement about scheduling, not about forgetting.
+	if err := store.SetSessionEnabled(ctx, session.ID, true); err != nil {
+		t.Fatalf("re-enable: %v", err)
+	}
+	got, err = store.GetSession(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != storage.StateDiscovered {
+		t.Fatalf("after re-enable: state=%s, want DISCOVERED", got.State)
+	}
+	if got.LastError != failure {
+		t.Fatalf("re-enable cleared the recorded error: got %q, want %q kept", got.LastError, failure)
+	}
+
+	// Positive control: something does clear the column — a successful resume
+	// calls SetSessionError with the empty string (internal/recovery/manager.go,
+	// "clear session error"). Without this the assertions above would still pass
+	// if GetSession never read the column at all.
+	if err := store.SetSessionError(ctx, session.ID, ""); err != nil {
+		t.Fatalf("clear error: %v", err)
+	}
+	got, err = store.GetSession(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastError != "" {
+		t.Fatalf("SetSessionError(\"\") did not clear the column: %q", got.LastError)
+	}
+}
+
 func TestSessionAuxiliaryUpdates(t *testing.T) {
 	store := newStore(t)
 	ctx := context.Background()
