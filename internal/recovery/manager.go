@@ -94,6 +94,11 @@ type Config struct {
 	// Nil means nothing is announced: the recovery runs identically either way,
 	// which is why the notifications cannot stand in its path.
 	Observer Observer
+	// Supervisor reads the background supervisor's status and version (PRD 3
+	// R1, R2). Nil means no supervisor capability is installed: every pass
+	// reports "no supervisor" and recovers exactly as before, which is the same
+	// answer as a machine that has never run `claude --bg`.
+	Supervisor SupervisorReader
 }
 
 // Manager runs recoveries for one process.
@@ -119,6 +124,10 @@ type Manager struct {
 	// observations reads the supervisor's published state. It caches one read
 	// per pass, so every session in a pass is answered from the same instant.
 	observations *ObservationSource
+	// supervisors reads `claude daemon status` once per pass (R1), so the
+	// supervisor's state, version and worker count are one fact per pass rather
+	// than one fact per session.
+	supervisors *SupervisorSource
 
 	locks *sessionLocks
 	sem   chan struct{}
@@ -194,6 +203,7 @@ func New(cfg Config) (*Manager, error) {
 		limitPark:    cfg.LimitPark,
 		observer:     cfg.Observer,
 		observations: NewObservationSource(cfg.Provider, clk),
+		supervisors:  NewSupervisorSource(cfg.Supervisor),
 		locks:        newSessionLocks(),
 		sem:          make(chan struct{}, maxConcurrent),
 	}, nil
@@ -339,6 +349,11 @@ type Outcome struct {
 	// failure: nothing was handed off, no budget was spent, and the session
 	// returns to DISCOVERED for the next pass to re-observe.
 	Interrupted bool
+	// Supervisor is what `claude daemon status` reported on this pass (PRD 3
+	// R1). It is carried rather than re-read, so a caller that wants to record or
+	// show the reading cannot end up describing a different supervisor than the
+	// pass acted on.
+	Supervisor claude.SupervisorStatus
 }
 
 // Recover attempts one recovery of a session.
@@ -466,6 +481,28 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 	if err := state.move(StateCheckingSession, "checking the session before resuming", 0); err != nil {
 		return Outcome{SessionID: sessionID, State: state.current}, err
 	}
+
+	// PRD 3 R1/R2: the supervisor is read once per pass, and its version is
+	// compared with the CLI ccresu would hand off with. Three answers are
+	// possible and each is its own outcome: no supervisor (normal, carry on), an
+	// unreadable status (named failure, hand off nothing), and a version mismatch
+	// (named condition with the documented remedy, hand off nothing). The last
+	// two are reported through fail(), which records the cause on the session and
+	// spends no attempt budget, because no continuation was issued.
+	//
+	// The read is bookkeeping, not a decision: what the pass decides about the
+	// session still comes from the published listing. Recording the reading here
+	// is what lets an operator see which supervisor the pass was talking to when
+	// it made that decision.
+	supervisor, supervisorErr := m.supervisors.Check(ctx)
+	outcome.Supervisor = supervisor
+	m.log.Info("read the background supervisor",
+		"session", sessionID, "supervisor", SupervisorSummary(supervisor), "argv", supervisor.Argv)
+	if supervisorErr != nil {
+		return m.fail(ctx, state, Outcome{SessionID: sessionID, Supervisor: supervisor}, baseline,
+			storage.RecoveryAttempt{}, Verification{}, supervisorErr)
+	}
+
 	status, err := m.provider.GetSessionStatus(ctx, sessionID)
 	if err != nil {
 		return m.fail(ctx, state, Outcome{SessionID: sessionID}, baseline, storage.RecoveryAttempt{},
@@ -626,6 +663,29 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 		}
 		published = obs
 		verification.ObservePublished(obs, Observe(obs, true, false))
+	} else {
+		// PRD 3 R7: acceptance is when the supervisor takes the session, not when
+		// the work is safe. It idle-stops sessions after about an hour, restarts
+		// itself across its own updates, and reports `stopped` for a session that
+		// ended while it was off — none of which is a verdict about the
+		// conversation, and all of which look identical from here unless the
+		// listing is read again.
+		//
+		// So the pass asks once more, after the handoff. A session the supervisor
+		// no longer lists (having listed it before) or lists as `stopped`,
+		// `failed` or an unknown value is not proven resumed: the session is
+		// parked in RETRY_WAIT with a scheduled retry that re-observes before
+		// handing off again, and nothing about it is reported as a permanent
+		// failure or "cured" with a respawn.
+		m.observations.Reset()
+		after, obsErr := m.observations.Observe(ctx, sessionID)
+		if obsErr != nil {
+			return m.fail(ctx, state, outcome, baseline, attempt, verification,
+				fmt.Errorf("observe session %s after the handoff: %w", sessionID, obsErr))
+		}
+		if reason, lost := handoffLost(after, observation); lost {
+			return m.retryHandoff(ctx, state, outcome, attempt, verification, after, reason)
+		}
 	}
 	if !verification.Proven {
 		return m.fail(ctx, state, outcome, baseline, attempt, verification,
@@ -938,6 +998,98 @@ func targetFor(class Class, attemptNumber, maxAttempts int) State {
 		return StateDiscovered
 	}
 	return class.State()
+}
+
+// ErrHandoffUnobserved reports that a continuation ccresu handed to the
+// supervisor is not in the supervisor's listing any more, or is listed in a state
+// that is not evidence the continuation ran (PRD 3 R7).
+//
+// It is retryable on purpose. An idle stop is expected, the conversation stays on
+// disk, and the next pass re-observes the session before handing it off again —
+// which is also how a session that ended while the supervisor was off comes back.
+var ErrHandoffUnobserved = errors.New("recovery: the handed-off session is not being observed")
+
+// handoffLost decides whether the supervisor says the handed-off continuation is
+// gone, and why.
+//
+// Two readings mean it is gone:
+//
+//   - The session was in the listing before the handoff and is not in it after
+//     (PRD 2 R8's HandoffUnobserved). A session that was never listed is a
+//     different case and deliberately not a loss: a handoff issued a moment ago is
+//     not in the listing yet, and the `backgrounded` block is what proves the
+//     supervisor took it.
+//   - It is listed with a state that is itself a retryable outcome — `stopped`,
+//     `failed`, or a value ccresu does not recognise. None of them is evidence
+//     that the continuation ran, and PRD 2's mapping already says so.
+//
+// A session still `working`, already `done`, or now `blocked` is not lost: the
+// supervisor owns the work, and a blocked session is parked by the next pass on
+// its published state rather than by a guess here.
+func handoffLost(after, before StateObservation) (reason string, lost bool) {
+	decision := Observe(after, true, false)
+	switch {
+	case decision.NeedsInput:
+		return "", false
+	case decision.HandoffUnobserved && before.InListing:
+		return "the session vanished from the supervisor's listing after the handoff", true
+	case decision.HandoffUnobserved:
+		return "", false
+	case decision.State == StateRetryWait:
+		return fmt.Sprintf("the supervisor publishes %q for the handed-off session, which is not evidence that the continuation ran", after.State), true
+	}
+	return "", false
+}
+
+// retryHandoff records a handoff whose continuation the supervisor did not keep.
+//
+// The attempt is closed *unresolved* — `Success` stays nil, exactly as R6 closes
+// an attempt whose child disappeared — because the handoff was accepted and what
+// became of the work is unknown. Writing `false` would claim the continuation
+// failed, and writing `true` would claim it ran; neither is something ccresu saw.
+//
+// The session is parked in RETRY_WAIT with a scheduled retry, so the next pass
+// re-observes it before handing off again (R7). Nothing here is announced as a
+// permanent failure and nothing is resolved with `respawn` (R4): an idle stop is
+// expected, the conversation is on disk, and the retry continues it.
+func (m *Manager) retryHandoff(ctx context.Context, state *stateWalker, outcome Outcome,
+	attempt storage.RecoveryAttempt, verification Verification,
+	observation StateObservation, reason string) (Outcome, error) {
+	cause := fmt.Errorf("%w: %s", ErrHandoffUnobserved, reason)
+	verification.ObservePublished(observation, Observe(observation, true, false))
+	outcome.Verification = verification
+
+	reasonText := fmt.Sprintf("%s; re-observing the session before the next handoff", reason)
+	if _, err := m.store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
+		State:             StateRetryWait,
+		Error:             truncate(reasonText),
+		SessionIDVerified: boolPtr(verification.SessionIDPreserved),
+		TranscriptGrew:    boolPtr(verification.TranscriptGrew),
+		HandoffStateID:    verification.HandoffStateID,
+		HandoffName:       verification.HandoffName,
+		HandoffAt:         handoffTime(verification, m.now()),
+		HandoffCopied:     handoffCopied(verification),
+		Observation:       RecordedObservation(observation),
+		FinishedAt:        m.now(),
+	}); err != nil {
+		m.log.Warn("record the handed-off attempt", "session", outcome.SessionID, "error", err)
+	}
+
+	attemptNumber := attempt.AttemptNumber
+	delay := m.backoff.Delay(attemptNumber)
+	if err := state.move(StateRetryWait, truncate(fmt.Sprintf("%s; next check in %s", reasonText, delay)), attempt.ID); err != nil {
+		return Outcome{SessionID: outcome.SessionID, State: state.current, Supervisor: outcome.Supervisor}, err
+	}
+	if err := m.store.SetSessionRetryAt(ctx, outcome.SessionID, m.now().Add(delay)); err != nil {
+		m.log.Warn("record next attempt", "session", outcome.SessionID, "error", err)
+	}
+	_ = m.store.SetSessionError(ctx, outcome.SessionID, truncate(cause.Error()))
+	outcome.State = state.current
+	outcome.Delay = delay
+	return outcome, &RetryError{
+		SessionID: outcome.SessionID, Attempt: attemptNumber, Max: m.maxAttempts,
+		Delay: delay, Cause: cause,
+	}
 }
 
 // closeInterruptedAttempt finishes an attempt left running by a process that died.

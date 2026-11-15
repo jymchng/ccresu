@@ -48,6 +48,23 @@ type VersionReporter interface {
 	Version(ctx context.Context) (claude.VersionReport, error)
 }
 
+// SupervisorReader is the supervisor's read-only surface as `ccresu inspect`
+// uses it (PRD 3 R1, R10). *claude.Provider satisfies it.
+//
+// It is a narrow interface rather than part of SessionProvider because a provider
+// that cannot read the supervisor is still a usable provider: inspection then
+// says "unavailable" instead of refusing to show the session, and recovery runs
+// with no supervisor attached, which is the same answer as a machine that has
+// never started one.
+type SupervisorReader interface {
+	// DaemonStatus runs `claude daemon status`.
+	DaemonStatus(ctx context.Context) (claude.SupervisorStatus, error)
+	// SessionLogs runs `claude logs <state-id>`.
+	SessionLogs(ctx context.Context, stateID string) (claude.LogsResult, error)
+	// DaemonLogs runs `claude daemon logs`.
+	DaemonLogs(ctx context.Context) (claude.LogsResult, error)
+}
+
 // Runtime is everything the long-lived commands operate on.
 //
 // Every field is either a value a test can build in memory or an interface it can
@@ -206,6 +223,15 @@ func BuildRuntime(ctx context.Context, cfg *config.Config, clk clock.Clock, log 
 // guard against the two drifting apart.
 func recoveryFromConfig(cfg *config.Config, store *storage.Store, provider claude.SessionProvider, clk clock.Clock, log *slog.Logger, park recovery.LimitPark, observer recovery.Observer) (*recovery.Manager, error) {
 	rec := cfg.Recovery
+	// The supervisor read (PRD 3 R1) goes through the same provider as the state
+	// read, so the pass cannot read one instance's sessions and ask a second
+	// instance about them. A provider with no supervisor surface leaves it nil,
+	// which the engine reports as "no supervisor" — the same answer as a machine
+	// that has never run `claude --bg`.
+	var supervisor recovery.SupervisorReader
+	if reader, ok := provider.(recovery.SupervisorReader); ok {
+		supervisor = reader
+	}
 	return recovery.New(recovery.Config{
 		Store:               store,
 		Provider:            provider,
@@ -223,7 +249,8 @@ func recoveryFromConfig(cfg *config.Config, store *storage.Store, provider claud
 		// built here so this function stays a pure mapping of configuration onto
 		// policy, and so a caller with no notifier passes nil and announces
 		// nothing.
-		Observer: observer,
+		Observer:   observer,
+		Supervisor: supervisor,
 	})
 }
 

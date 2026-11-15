@@ -113,6 +113,10 @@ Routes, error codes and the SSE stream are in [api.md](api.md).
 | A session sits in `WAITING_FOR_RESET` and nothing resumes it | That is the park path working: the CLI refused the resume because the limit is still in force, so the attempt was finished with the banner and the session waits for the reset it named. The log line is `resume refused by the usage limit; waiting for the reset`, and no further resume is issued before then. |
 | Recovery stops after ten tries in one cycle | The attempt budget (`recovery.max_attempts`) is spent. The session was returned to `DISCOVERED`, where the next discovery pass starts a fresh budget — a pause, not a failure. `ccresu retry <id>` pushes it now. |
 | Load spike of `claude` processes | Lower `recovery.max_concurrent_recoveries`. |
+| `the running supervisor is a different version` | The supervisor that hosts your sessions is not the `claude` ccresu invokes, or is below this build's floor. `ccresu` deliberately does not fix it: run `claude daemon stop --any --keep-workers` (keeps the sessions it hosts) and let the next handoff start a supervisor on the new version. See [recovery.md](recovery.md#the-supervisor-is-a-dependency-not-a-child). |
+| `the supervisor's status could not be read` | `claude daemon status` failed for a reason other than "no supervisor" (timeout, crash, a `claude` too old to have the `daemon` subcommand). Nothing is handed off that pass, so a second supervisor is never started. Run the same command by hand — its stderr is the cause. `ccresu inspect <id>` shows the last reading, its `argv` and its own error. |
+| `inspect` says `supervisor: not running` | Normal on a machine that has never run `claude --bg`: exit 1 is the documented "no supervisor" answer, and the next handoff starts one. Not a failure, and not a reason to start one by hand. |
+| `inspect` says `recent output: not recorded` | The session's latest attempt carries no supervisor state id, so there is nothing for `claude logs` to read. It means no handoff has been recorded since the upgrade, not that the session is silent. |
 
 Deployment specifics are in [deployment.md](deployment.md).
 

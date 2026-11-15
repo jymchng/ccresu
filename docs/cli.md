@@ -288,6 +288,44 @@ Above that block are the session's own columns (`state`, `enabled`,
 `command`, `error`), `Schedule` (`due`, `unknown reset`, `polls`, `phrase`) and
 the last five `Recent transitions` (`WHEN`, `TRANSITION`, `REASON`).
 
+Below the stored records comes the **Supervisor** block. It is the one part of
+`inspect` that is not read from ccresu's database: it runs `claude daemon status`
+and, when the latest attempt recorded the state id the handoff printed, `claude
+logs <state-id>` — on demand, only for `inspect`, and never polled, because the
+supervisor owns the process and a second reader of its socket would answer with a
+different snapshot one second later.
+
+```console
+Supervisor
+status:        running
+state:         running
+version:       2.1.300
+workers:       3
+socket dir:    /run/user/1000/claude
+command:       claude daemon status
+recent output: last 20 line(s) of `claude logs ab12cd34`
+  …
+```
+
+`status` is one of four words, because four different facts lead to four
+different actions:
+
+| `status` | what it means | what to do |
+|---|---|---|
+| `running` | the supervisor answered; its `state`, `version`, `workers` and socket directory follow | nothing |
+| `not running` | the documented exit-1 answer: this machine has no supervisor yet | nothing — the next handoff starts one |
+| `unavailable` | this build's provider has no supervisor surface (a stub, or `--force` print mode) | nothing to ask; the rest of the page is still accurate |
+| `unreadable` | the command was run and failed for another reason (timeout, crash, a `claude` without the `daemon` subcommand); `error` carries its own words | read `error`; the supervisor's state is unknown, not empty |
+
+`recent output` is the last 20 lines of `claude logs <state-id>`, where
+`<state-id>` is the short id the handoff printed and ccresu stored on the
+attempt. When the latest attempt carries no supervisor state id, the block says
+so instead of printing an empty log, and when the session is not hosted by the
+supervisor at all (`status: not running`) no log read is attempted. With
+`--json`, the same read appears as a `supervisor` object: `status`, `state`,
+`version`, `workers`, `socket_dir`, `argv`, `log_target`, `recent_output` and
+`error` (all omitted when empty).
+
 `sessions` carries the same answer as its `NEXT ATTEMPT` column: `in 2h14m` while
 a wait is pending, `none (<reason>)` when nothing is scheduled. Both read the
 stored schedule or the stored retry instant rather than re-deriving a time, so

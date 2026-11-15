@@ -873,6 +873,8 @@ ccresu only uses interfaces that exist in the installed CLI (inspected with
 | Per-session environment | `~/.claude/session-env/<session-id>/` |
 | Continue the original session | `claude --bg --resume <session-id> --name ccresu-<first-8-hex> "<continuation message>"` |
 | Release a session a background agent still holds | `claude stop <job-id>` (the eight-hex job name the refusal prints) |
+| Read the supervisor's health and version | `claude daemon status` (once per recovery pass; exit 1 is the documented "no supervisor") |
+| Read a session's or the supervisor's recent output | `claude logs <state-id>`, `claude daemon logs` (on demand, for `ccresu inspect`) |
 
 `--bg --resume` is the command ccresu lives on. It is a **handoff**, not a run:
 the invocation returns as soon as the supervisor accepts the session, and the

@@ -717,6 +717,65 @@ in `DISCOVERED` with its attempt row, its reason and its transcript intact, and
 the script asserts that `ccresu reset` and `ccresu sessions clear` no longer
 exist (both exit 2 as unknown commands).
 
+## The supervisor is a dependency, not a child
+
+`claude`'s own supervisor owns every process a recovery produces, so ccresu asks
+it questions instead of doing its work for it. Four rules follow from that.
+
+**One read per pass, and exit 1 is an answer.** `claude daemon status` is run once
+per recovery pass, not once per session: the supervisor's state, version and
+worker count describe the machine, so answering two sessions from two instants
+would be two different facts wearing one label. Its documented exit status is 1
+for "there is no supervisor" — normal on a machine that has never run `claude
+--bg`, because the next handoff starts one. Any other failure (a timeout, a crash, a
+`claude` without the `daemon` subcommand) is `recovery: the supervisor's status
+could not be read`, and nothing is handed off that pass: a handoff issued while
+the supervisor cannot answer could start a second one. A session that cannot be
+asked about is *unknown*, which is not the same as *absent*.
+
+**A version mismatch is named, never silent and never acted on.** When the running
+supervisor is a different version from the `claude` ccresu invokes, or below this
+build's floor, the pass raises `claude: the running supervisor is a different
+version`, carrying all three versions:
+
+```
+the running supervisor is 2.0.999 but the claude ccresu invokes is 2.1.300
+(floor 2.1.0): run `claude daemon stop --any --keep-workers`, which keeps the
+sessions it hosts and lets the next `claude --bg` start a supervisor on the new
+version
+```
+
+ccresu runs no part of that remedy. It stops the sessions the supervisor hosts,
+so it is the operator's decision, and a retry loop that issued it would be a
+retry loop that kills work. An unparseable version on either side is recorded,
+not turned into a mismatch: the remedy has a real cost, so it is raised only on
+evidence.
+
+**ccresu never runs `claude respawn`, and never stops the supervisor on its own
+initiative.** The supervisor already restarts unexpected exits and migrates
+sessions across its own updates; and on a session whose transcript was cleaned
+up, `respawn` re-runs the original prompt, which a recovery must never do. Both
+commands are *reported*, in the mismatch above and in
+`claude daemon stop --any --keep-workers` as the remedy, and the operator runs
+them. `claude stop <job-id>` stays the only lifecycle command ccresu issues, and
+only for a user termination.
+
+**A stopped session is not a verdict about the work.** The published state cannot
+tell an idle stop from a kill from a session that ended while the supervisor was
+off, so `stopped` is never success, is a retryable outcome unless ccresu issued
+the stop itself, and is never `permanent_failure`. An idle-stopped session is
+continued from its saved conversation, never respawned and never re-prompted.
+
+Nothing here reads a PID. A recovery's process belongs to the supervisor, so
+"is it running?" is answered by the published state and by `claude daemon status`,
+never by `os.FindProcess` or a stored `PPID` — a check that looks at a number
+nothing updates is worse than no check at all.
+
+The whole set talks to one Claude Code instance because one config directory is
+resolved once (`CLAUDE_CONFIG_DIR` when set, `~/.claude` otherwise) and used for
+both the read and the handoff: two directories are two supervisors, and reading
+one while handing off to the other is how a recovery disappears.
+
 ## What the supervisor published decides the outcome
 
 A session's outcome is read from `claude agents --json --all`, which is the

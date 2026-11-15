@@ -37,12 +37,16 @@ ExecStart=%h/.local/bin/ccresu daemon
 # stops the unit after repeated failures).
 Restart=on-failure
 RestartSec=10s
-# Give an in-flight `claude -p --resume` child a chance to finish or be killed
-# cleanly before systemd escalates to SIGKILL.
+# ccresu owns no Claude Code child: a session's work belongs to `claude`'s own
+# supervisor, which survives this unit and is never stopped with it. The only
+# children left are query-timeout-bounded commands (`--version`, `agents --json`,
+# `daemon status`, `logs`, `--bg`), and a stop that lands mid-handoff is a
+# retryable outcome rather than lost work, so the timeout is sized for a bounded
+# command instead of for a `claude -p --resume`.
 KillSignal=SIGTERM
-TimeoutStopSec=60s
+TimeoutStopSec=35s
 
-# The daemon spawns `claude`, which writes to ~/.claude and to your project
+# The daemon runs `claude`, which writes to ~/.claude and to your project
 # directories, so the home directory must stay writable and no filesystem-wide
 # sandbox is applied here. Only the cheap, non-breaking hardening is used.
 NoNewPrivileges=yes

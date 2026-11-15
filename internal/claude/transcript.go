@@ -36,10 +36,20 @@ const (
 	headWindow = 24
 )
 
+// EnvConfigDir is the environment variable Claude Code reads to find its config
+// directory.
+//
+// It is named once because it has to be honoured in two places that must agree:
+// the directory ccresu reads state from, and the environment of every command it
+// runs (PRD 3 R9). Two supervisors can exist on one machine, one per config
+// directory, and reading one while handing off to the other is the failure this
+// constant exists to prevent.
+const EnvConfigDir = "CLAUDE_CONFIG_DIR"
+
 // DefaultClaudeHome returns the Claude Code data directory, honouring
 // $CLAUDE_CONFIG_DIR and falling back to ~/.claude.
 func DefaultClaudeHome() (string, error) {
-	if dir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); dir != "" {
+	if dir := strings.TrimSpace(os.Getenv(EnvConfigDir)); dir != "" {
 		return dir, nil
 	}
 	home, err := os.UserHomeDir()

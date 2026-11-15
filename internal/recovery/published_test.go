@@ -262,8 +262,8 @@ func TestOneAgentsQueryServesEverySessionInAPass(t *testing.T) {
 		statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
 			return statusFor(sessionID, 10, 200), nil
 		},
-		// A handoff does not re-read the listing after the resume, so the one
-		// pre-resume read stands for the whole pass.
+		// The listing keeps reporting every session as working, so the pass has
+		// one answer for all three and each handoff is confirmed from it.
 		listingFn: func(int) (claude.PublishedListing, error) {
 			return claude.PublishedListing{
 				Entries: []claude.AgentEntry{
@@ -283,8 +283,16 @@ func TestOneAgentsQueryServesEverySessionInAPass(t *testing.T) {
 		}
 	}
 
-	if got := provider.publishedCount(); got != 1 {
-		t.Errorf("listing reads = %d, want exactly 1 for the pass", got)
+	// R1's rule is one read per *decision*, not one read per session: the first
+	// pass reads once and all three sessions are answered from it.
+	//
+	// PRD 3 R7 adds exactly one confirming read per handoff, because acceptance is
+	// not the same fact as the continuation still being there — the supervisor
+	// idle-stops, restarts and loses sessions, and only a second look can tell. The
+	// confirming read also fills the cache the next session's decision is served
+	// from, so three sessions and three handoffs cost four reads, never six.
+	if got := provider.publishedCount(); got != 1+3 {
+		t.Errorf("listing reads = %d, want 1 (shared pre-decision read) + 1 per handoff (R7) = 4", got)
 	}
 }
 func TestObserveIsTotalOverEveryDocumentedValue(t *testing.T) {

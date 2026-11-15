@@ -38,6 +38,12 @@ type CLIOptions struct {
 	MaxOutputBytes int
 	// MinVersion overrides the supported-version floor.
 	MinVersion *Version
+	// ConfigDir is the resolved Claude Code config directory. When set, every
+	// invocation carries CLAUDE_CONFIG_DIR=<dir>, so the read and the handoff can
+	// never land on two different supervisors (PRD 3 R9): $CLAUDE_CONFIG_DIR makes
+	// separate instances, and inheriting it from the environment means a daemon
+	// started one way could read one supervisor and hand off to another.
+	ConfigDir string
 	// Logger receives the recovery diagnostics for a handoff that needed a
 	// retry or a directory decision. Empty means slog.Default().
 	Logger *slog.Logger
@@ -65,6 +71,7 @@ type CLI struct {
 	handoffTimeout time.Duration
 	maxOutputBytes int
 	minVersion     Version
+	configDir      string
 	log            *slog.Logger
 
 	mu          sync.Mutex
@@ -81,6 +88,7 @@ func NewCLI(opts CLIOptions) *CLI {
 		queryTimeout:   opts.QueryTimeout,
 		handoffTimeout: opts.HandoffTimeout,
 		maxOutputBytes: opts.MaxOutputBytes,
+		configDir:      strings.TrimSpace(opts.ConfigDir),
 		log:            opts.Logger,
 	}
 	if c.bin == "" {
@@ -110,6 +118,10 @@ const DefaultExecutable = "claude"
 
 // Executable returns the configured binary.
 func (c *CLI) Executable() string { return c.bin }
+
+// ConfigDir returns the resolved Claude Code config directory, empty when the
+// CLI is left to resolve it from the environment itself.
+func (c *CLI) ConfigDir() string { return c.configDir }
 
 // VersionReport is the outcome of a version probe, including the exit code and
 // stderr so `ccresu doctor` can explain a failure.
@@ -329,6 +341,13 @@ func (c *CLI) runIn(ctx context.Context, timeout time.Duration, dir string, stdi
 	defer cancel()
 
 	opts := RunOptions{MaxOutputBytes: c.maxOutputBytes, Dir: dir}
+	// One config directory for every invocation, whether it is the state read or
+	// the handoff (R9). Passing it explicitly rather than inheriting it is what
+	// makes "the same supervisor" a property ccresu guarantees instead of a
+	// property of how the daemon happened to be started.
+	if c.configDir != "" {
+		opts.Env = append(opts.Env, EnvConfigDir+"="+c.configDir)
+	}
 	if len(stdin) > 0 {
 		opts.Stdin = bytes.NewReader(stdin)
 	}

@@ -89,7 +89,12 @@ func New(opts Options) (*Provider, error) {
 		HandoffTimeout: opts.HandoffTimeout,
 		MaxOutputBytes: opts.MaxOutputBytes,
 		MinVersion:     opts.MinimumVersion,
-		Logger:         logger,
+		// The directory the store resolved, not the option as given: an empty
+		// Home and an explicit one both end up as the same absolute directory, and
+		// that one value is what every command runs with (R9). Resolving it twice
+		// is how a read and a handoff end up on different supervisors.
+		ConfigDir: store.Home(),
+		Logger:    logger,
 	})
 	return &Provider{
 		cli:   cli,
@@ -107,6 +112,40 @@ func (p *Provider) CLI() *CLI { return p.cli }
 
 // Store exposes the on-disk store, e.g. for transcript inspection.
 func (p *Provider) Store() *Store { return p.store }
+
+// DaemonStatus reads the background supervisor's status with
+// `claude daemon status` (PRD 3 R1).
+//
+// It is the provider's job rather than the recovery engine's because the
+// provider already owns the configured CLI, the config directory (R9) and the
+// query timeout, and a supervisor read that used a second CLI could talk to a
+// second supervisor.
+func (p *Provider) DaemonStatus(ctx context.Context) (SupervisorStatus, error) {
+	return p.cli.DaemonStatus(ctx)
+}
+
+// DaemonLogs reads the supervisor's own log on demand with
+// `claude daemon logs` (PRD 3 R10).
+func (p *Provider) DaemonLogs(ctx context.Context) (LogsResult, error) {
+	return p.cli.DaemonLogs(ctx)
+}
+
+// SessionLogs reads one session's recent output on demand with
+// `claude logs <id>` (PRD 3 R10).
+//
+// The identifier is the supervisor's short state id, not the session UUID: it is
+// the same identifier `claude attach` and `claude stop` take, and the one the
+// handoff's acceptance block prints.
+func (p *Provider) SessionLogs(ctx context.Context, stateID string) (LogsResult, error) {
+	return p.cli.SessionLogs(ctx, stateID)
+}
+
+// CLIVersion reports the version of the executable ccresu invokes, so the
+// supervisor's version can be compared with it (PRD 3 R2).
+func (p *Provider) CLIVersion(ctx context.Context) (Version, error) { return p.cli.Version(ctx) }
+
+// MinimumVersion reports the version floor this build supports (PRD 3 R2).
+func (p *Provider) MinimumVersion() Version { return p.cli.minVersion }
 
 // Version reports the Claude Code version ccresu is talking to.
 func (p *Provider) Version(ctx context.Context) (VersionReport, error) {
