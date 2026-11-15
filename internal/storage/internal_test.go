@@ -214,7 +214,7 @@ func TestClosedStoreUniformErrors(t *testing.T) {
 		"CountSessions":             func() error { _, err := store.CountSessions(ctx, SessionFilter{}); return err }(),
 		"SetSessionEnabled":         store.SetSessionEnabled(ctx, "x", true),
 		"TransitionSession":         func() error { _, err := store.TransitionSession(ctx, "x", StateRunning, "", 0); return err }(),
-		"SetSessionIdentity":        store.SetSessionIdentity(ctx, "x", 1, 2, 3),
+		"SetSessionPID":             store.SetSessionPID(ctx, "x", 1),
 		"SetSessionTranscriptStats": store.SetSessionTranscriptMetrics(ctx, "x", "/t", 1, 1),
 		"SetSessionError":           store.SetSessionError(ctx, "x", "e"),
 		"DeleteSession":             store.DeleteSession(ctx, "x"),

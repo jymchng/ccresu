@@ -52,15 +52,13 @@ func openAt(t *testing.T, path string) *storage.Store {
 func mustSeedSession(t *testing.T, store *storage.Store, id string) storage.Session {
 	t.Helper()
 	created, err := store.UpsertSession(context.Background(), storage.Session{
-		ID:               id,
-		ProjectPath:      "/work/project",
-		TranscriptPath:   "/home/u/.claude/projects/-work-project/" + id + ".jsonl",
-		Type:             storage.SessionTypeInteractive,
-		Enabled:          true,
-		Recoverable:      true,
-		ProcessStartTime: 424242,
-		PID:              1234,
-		PPID:             1,
+		ID:             id,
+		ProjectPath:    "/work/project",
+		TranscriptPath: "/home/u/.claude/projects/-work-project/" + id + ".jsonl",
+		Type:           storage.SessionTypeInteractive,
+		Enabled:        true,
+		Recoverable:    true,
+		PID:            1234,
 	})
 	if err != nil {
 		t.Fatalf("seed session %s: %v", id, err)
@@ -564,8 +562,8 @@ func TestPersistenceAcrossReopen(t *testing.T) {
 	if got.State != storage.StateUsageLimitDetected {
 		t.Fatalf("state = %s, want USAGE_LIMIT_DETECTED", got.State)
 	}
-	if got.ProcessStartTime != 424242 || got.PID != 1234 || got.PPID != 1 {
-		t.Fatalf("identity lost: %+v", got)
+	if got.PID != 1234 {
+		t.Fatalf("pid lost: %+v", got)
 	}
 	if !got.DiscoveredAt.Equal(session.DiscoveredAt) {
 		t.Fatalf("discovered_at = %s, want %s", got.DiscoveredAt, session.DiscoveredAt)

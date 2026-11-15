@@ -12,7 +12,7 @@ import (
 // sessionColumns is the canonical column list for session queries. Keeping it in
 // one place means a new column is added (or forgotten) in exactly one spot.
 const sessionColumns = `id, project_path, transcript_path, provider, session_type,
-	pid, ppid, process_start_time, state, enabled, recoverable, reason, last_error,
+	pid, state, enabled, recoverable, reason, last_error,
 	transcript_size, transcript_lines, retry_at, discovered_at, last_seen_at, updated_at`
 
 // SessionFilter narrows a session query. Zero values mean "no constraint".
@@ -73,10 +73,10 @@ func (s *Store) UpsertSession(ctx context.Context, session Session) (bool, error
 	err := s.InTx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `
 			INSERT INTO sessions (`+sessionColumns+`)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (id) DO NOTHING`,
 			session.ID, session.ProjectPath, session.TranscriptPath, session.Provider,
-			string(session.Type), session.PID, session.PPID, int64(session.ProcessStartTime),
+			string(session.Type), session.PID,
 			string(session.State), boolToInt(session.Enabled), boolToInt(session.Recoverable),
 			session.Reason, session.LastError, session.TranscriptSize, session.TranscriptLines,
 			timePtrToDB(session.RetryAt), timeToDB(session.DiscoveredAt),
@@ -97,13 +97,13 @@ func (s *Store) UpsertSession(ctx context.Context, session Session) (bool, error
 		_, err = tx.ExecContext(ctx, `
 			UPDATE sessions SET
 				project_path = ?, transcript_path = ?, provider = ?, session_type = ?,
-				pid = ?, ppid = ?, process_start_time = ?,
+				pid = ?,
 				recoverable = ?, reason = ?,
 				transcript_size = ?, transcript_lines = ?,
 				last_seen_at = ?, updated_at = ?
 			WHERE id = ?`,
 			session.ProjectPath, session.TranscriptPath, session.Provider, string(session.Type),
-			session.PID, session.PPID, int64(session.ProcessStartTime),
+			session.PID,
 			boolToInt(session.Recoverable), session.Reason,
 			session.TranscriptSize, session.TranscriptLines,
 			timeToDB(session.LastSeenAt), timeToDB(session.UpdatedAt), session.ID)
@@ -361,21 +361,26 @@ func (s *Store) TransitionSession(ctx context.Context, id string, to State, reas
 	return transition, nil
 }
 
-// SetSessionIdentity updates the process identity of a session.
-func (s *Store) SetSessionIdentity(ctx context.Context, id string, pid, ppid int, startTime uint64) error {
+// SetSessionPID records the process id the published listing reported.
+//
+// It is one number because that is all the listing carries: the supervisor
+// publishes no parent pid and no process start time, and storing columns nothing
+// can fill is what PRD 3 R8 removed. Nothing in the lifecycle reads this value;
+// `ccresu inspect` shows it as evidence.
+func (s *Store) SetSessionPID(ctx context.Context, id string, pid int) error {
 	if s == nil || s.db == nil {
 		return ErrClosed
 	}
 	result, err := s.db.ExecContext(ctx, `
-		UPDATE sessions SET pid = ?, ppid = ?, process_start_time = ?, updated_at = ?
+		UPDATE sessions SET pid = ?, updated_at = ?
 		WHERE id = ?`,
-		pid, ppid, int64(startTime), timeToDB(s.now().UTC()), id)
+		pid, timeToDB(s.now().UTC()), id)
 	if err != nil {
-		return fmt.Errorf("set session %s identity: %w", id, err)
+		return fmt.Errorf("set session %s pid: %w", id, err)
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("set session %s identity: %w", id, err)
+		return fmt.Errorf("set session %s pid: %w", id, err)
 	}
 	if affected == 0 {
 		return fmt.Errorf("%w: session %s", ErrNotFound, id)
@@ -457,13 +462,12 @@ func scanSession(row scanner) (Session, error) {
 		session                             Session
 		sessionType, state                  string
 		enabled, recoverable                int64
-		processStartTime                    int64
 		retryAt                             any
 		discoveredAt, lastSeenAt, updatedAt any
 	)
 	err := row.Scan(
 		&session.ID, &session.ProjectPath, &session.TranscriptPath, &session.Provider,
-		&sessionType, &session.PID, &session.PPID, &processStartTime,
+		&sessionType, &session.PID,
 		&state, &enabled, &recoverable, &session.Reason, &session.LastError,
 		&session.TranscriptSize, &session.TranscriptLines, &retryAt,
 		&discoveredAt, &lastSeenAt, &updatedAt,
@@ -479,7 +483,6 @@ func scanSession(row scanner) (Session, error) {
 	session.State = State(state)
 	session.Enabled = intToBool(enabled)
 	session.Recoverable = intToBool(recoverable)
-	session.ProcessStartTime = uint64(processStartTime)
 	if session.RetryAt, err = timePtrFromDB(retryAt); err != nil {
 		return Session{}, err
 	}

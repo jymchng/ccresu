@@ -34,7 +34,7 @@ func TestUpsertSessionSemantics(t *testing.T) {
 	created, err = store.UpsertSession(ctx, storage.Session{
 		ID: "semantics", ProjectPath: "/b", TranscriptPath: "/t.jsonl",
 		Type: storage.SessionTypeHeadless, Enabled: true, Recoverable: false,
-		Reason: "unsupported session type", PID: 55, PPID: 2, ProcessStartTime: 999,
+		Reason: "unsupported session type", PID: 55,
 		TranscriptSize: 2048, TranscriptLines: 40,
 	})
 	if err != nil {
@@ -52,8 +52,8 @@ func TestUpsertSessionSemantics(t *testing.T) {
 		got.Type != storage.SessionTypeHeadless {
 		t.Fatalf("discovery columns not refreshed: %+v", got)
 	}
-	if got.PID != 55 || got.PPID != 2 || got.ProcessStartTime != 999 {
-		t.Fatalf("identity not refreshed: %+v", got)
+	if got.PID != 55 {
+		t.Fatalf("pid not refreshed: %+v", got)
 	}
 	if got.Recoverable || got.Reason != "unsupported session type" {
 		t.Fatalf("recoverability not refreshed: %+v", got)
@@ -189,7 +189,7 @@ func TestSessionMutationsReportMissingSessions(t *testing.T) {
 		"enable":             store.SetSessionEnabled(ctx, missing, true),
 		"disable":            store.SetSessionEnabled(ctx, missing, false),
 		"transition":         func() error { _, err := store.TransitionSession(ctx, missing, storage.StateRunning, "", 0); return err }(),
-		"identity":           store.SetSessionIdentity(ctx, missing, 1, 2, 3),
+		"pid":                store.SetSessionPID(ctx, missing, 1),
 		"transcript metrics": store.SetSessionTranscriptMetrics(ctx, missing, "/t", 1, 2),
 		"error":              store.SetSessionError(ctx, missing, "boom"),
 		"delete":             store.DeleteSession(ctx, missing),
@@ -257,8 +257,8 @@ func TestSessionAuxiliaryUpdates(t *testing.T) {
 	ctx := context.Background()
 	session := mustSeedSession(t, store, "aux")
 
-	if err := store.SetSessionIdentity(ctx, session.ID, 4242, 7, 123456); err != nil {
-		t.Fatalf("set identity: %v", err)
+	if err := store.SetSessionPID(ctx, session.ID, 4242); err != nil {
+		t.Fatalf("set pid: %v", err)
 	}
 	if err := store.SetSessionTranscriptMetrics(ctx, session.ID, "/new/transcript.jsonl", 4096, 88); err != nil {
 		t.Fatalf("set transcript metrics: %v", err)
@@ -271,8 +271,8 @@ func TestSessionAuxiliaryUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.PID != 4242 || got.PPID != 7 || got.ProcessStartTime != 123456 {
-		t.Fatalf("identity not applied: %+v", got)
+	if got.PID != 4242 {
+		t.Fatalf("pid not applied: %+v", got)
 	}
 	if got.TranscriptPath != "/new/transcript.jsonl" || got.TranscriptSize != 4096 || got.TranscriptLines != 88 {
 		t.Fatalf("transcript metrics not applied: %+v", got)

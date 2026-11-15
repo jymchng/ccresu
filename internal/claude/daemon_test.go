@@ -202,12 +202,12 @@ func TestCcresuNeverRespawns(t *testing.T) {
 	t.Parallel()
 
 	constructors := map[string][]string{
-		"DaemonStatusArgs":  DaemonStatusArgs(),
-		"DaemonLogsArgs":    DaemonLogsArgs(),
-		"SessionLogsArgs":   SessionLogsArgs("3f1e2c7a"),
-		"StopArgs":          StopArgs("3f1e2c7a"),
-		"HandoffArgs":       HandoffArgs(testSessionID, "continue"),
-		"AgentsQuery.Args":  (AgentsQuery{}).Args(),
+		"DaemonStatusArgs":   DaemonStatusArgs(),
+		"DaemonLogsArgs":     DaemonLogsArgs(),
+		"SessionLogsArgs":    SessionLogsArgs("3f1e2c7a"),
+		"StopArgs":           StopArgs("3f1e2c7a"),
+		"HandoffArgs":        HandoffArgs(testSessionID, "continue"),
+		"AgentsQuery.Args":   (AgentsQuery{}).Args(),
 		"VersionArgs-if-any": nil,
 	}
 

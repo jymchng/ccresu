@@ -77,7 +77,6 @@ type sessionDTO struct {
 	Provider        string    `json:"provider,omitempty"`
 	Type            string    `json:"type"`
 	PID             int       `json:"pid,omitempty"`
-	PPID            int       `json:"ppid,omitempty"`
 	State           string    `json:"state"`
 	Enabled         bool      `json:"enabled"`
 	Recoverable     bool      `json:"recoverable"`
@@ -99,7 +98,6 @@ func toSessionDTO(session storage.Session) sessionDTO {
 		Provider:        session.Provider,
 		Type:            string(session.Type),
 		PID:             session.PID,
-		PPID:            session.PPID,
 		State:           string(session.State),
 		Enabled:         session.Enabled,
 		Recoverable:     session.Recoverable,

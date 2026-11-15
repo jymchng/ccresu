@@ -167,11 +167,11 @@ type Session struct {
 	Provider string
 	// Type classifies the session.
 	Type SessionType
-	// PID, PPID and ProcessStartTime capture process identity so a recycled PID
-	// is never mistaken for the original process.
-	PID              int
-	PPID             int
-	ProcessStartTime uint64
+	// PID is the process id the published listing reported. It is recorded for
+	// evidence only: no lifecycle decision reads it (PRD 3 R8). Liveness comes
+	// from the published state and, for the supervisor itself, from
+	// `claude daemon status`.
+	PID int
 	// State is the persisted recovery state.
 	State State
 	// Enabled reports whether ccresu may recover this session.
