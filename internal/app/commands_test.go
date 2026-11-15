@@ -41,6 +41,85 @@ func TestHelpListsEveryCommand(t *testing.T) {
 	}
 }
 
+// TestSessionsHelpNamesOnlyDispatchableActions pins the sessions summary to the
+// operations the CLI actually has.
+//
+// `ccresu --help` advertised "list, inspect, delete or clear sessions" while no
+// `sessions clear` subcommand existed: `ccresu sessions clear` answers "sessions
+// takes no arguments, got \"clear\"". A summary is prose, so nothing failed when
+// the promise and the dispatch drifted apart. This reads the action words out of
+// the published summary and requires an invocation for each — the check that
+// would have caught `clear`.
+func TestSessionsHelpNamesOnlyDispatchableActions(t *testing.T) {
+	h := newHarness(t)
+	code, stdout, stderr := h.exec(t, "--help")
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want %d (stderr %q)", code, ExitOK, stderr)
+	}
+	summary := helpSummary(t, stdout, "sessions")
+
+	// The invocation that performs each advertised action. The session id does
+	// not exist: what is asserted is that dispatch reaches the action, not that
+	// the action finds a session, so "not found" is a pass and only a usage
+	// rejection means the action is not there.
+	invocations := map[string][]string{
+		"list":    {"sessions"},
+		"inspect": {"inspect", canonicalSessionID},
+		"delete":  {"sessions", "delete", canonicalSessionID},
+	}
+	for _, action := range summaryActions(t, summary, "sessions") {
+		args, ok := invocations[action]
+		if !ok {
+			t.Errorf("the sessions summary advertises %q, which no command performs: "+
+				"add the action or drop it from the summary", action)
+			continue
+		}
+		code, out, errOut := h.exec(t, args...)
+		if code == ExitUsage {
+			t.Errorf("ccresu %s exits %d (usage) for the advertised action %q: stdout %q stderr %q",
+				strings.Join(args, " "), code, action, out, errOut)
+		}
+	}
+}
+
+// helpSummary returns the summary column of one command in the `ccresu --help`
+// index, whose rows are "  <name>  <summary>" with the summary padded to a
+// common column.
+func helpSummary(t *testing.T, help, command string) string {
+	t.Helper()
+	for _, line := range strings.Split(help, "\n") {
+		fields := strings.SplitN(strings.TrimSpace(line), "  ", 2)
+		if len(fields) == 2 && strings.TrimSpace(fields[0]) == command {
+			return strings.TrimSpace(fields[1])
+		}
+	}
+	t.Fatalf("no %q row in the command index:\n%s", command, help)
+	return ""
+}
+
+// summaryActions returns the action words a summary advertises: everything before
+// the trailing noun, split on commas and "or". "list, inspect or delete sessions"
+// gives ["list" "inspect" "delete"].
+func summaryActions(t *testing.T, summary, noun string) []string {
+	t.Helper()
+	clause := strings.TrimSuffix(strings.TrimSpace(summary), " "+noun)
+	if clause == strings.TrimSpace(summary) {
+		t.Fatalf("the %s summary %q does not end with %q, so its actions cannot be read",
+			noun, summary, noun)
+	}
+	clause = strings.ReplaceAll(clause, " or ", ", ")
+	var actions []string
+	for _, action := range strings.Split(clause, ",") {
+		if action = strings.TrimSpace(action); action != "" {
+			actions = append(actions, action)
+		}
+	}
+	if len(actions) == 0 {
+		t.Fatalf("the %s summary %q names no actions", noun, summary)
+	}
+	return actions
+}
+
 func TestHelpWithoutArgumentsIsAUsageError(t *testing.T) {
 	h := newHarness(t)
 	code, stdout, stderr := h.exec(t)
