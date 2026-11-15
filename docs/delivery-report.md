@@ -99,20 +99,21 @@ row held to the tenth across repeated runs, with one near-miss: `internal/server
 measured 88.0% in isolation and in eight of nine aggregate runs, and 87.8% once
 when the whole suite was competing for the machine.
 
-The 86.7% total is statement-weighted over everything `go test ./...` reports in
-a clean checkout: the twelve `internal/` packages, `cmd/ccresu` (100.0%, two
-statements), `tests/support` (a fixture package the end-to-end tests import,
-which earns no credit for another package's test run and so reports 0.0%) and
-the two behavioural suites, which have no statements of their own. Over the
-`internal/` packages only it is 89.8%.
+The total is statement-weighted over everything `go test ./...` reports: the
+twelve `internal/` packages, `cmd/ccresu` (100.0%, two statements), `tests/support`
+(a fixture package the end-to-end tests import, which earns no credit for another
+package's test run and so reports 0.0%) and the two behavioural suites, which have
+no statements of their own. Over the `internal/` packages only it is 89.8%. That
+tree measures **88.5%**.
 
 One caveat about that number, because it depends on whether the website's
 dependencies are installed. After `cd web && npm ci`, `go test ./...` also walks
-a vendored Go package inside `web/node_modules` (160 statements, no tests of its
-own), and the very same run then reports **86.7%**. Both figures are correct for
-their tree: CI's Go job runs `make cover-check` before the website job installs
-anything, so the gate sees 88.5%, and a developer who has already run `npm ci`
-sees 86.7% and the gate still passes.
+a vendored Go package inside `web/node_modules` (one file, 160 statements, no
+tests of its own), and the very same run then reports **86.7%** — the figure in
+the table above, and what `make cover-check` prints in this working tree. Both
+figures are correct for their tree: CI's Go job runs `make cover-check` before the
+website job installs anything, so the gate sees 88.5%, and a developer who has
+already run `npm ci` sees 86.7% and the gate still passes.
 
 ## The end-to-end scenario
 
