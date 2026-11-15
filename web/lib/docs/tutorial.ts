@@ -248,10 +248,10 @@ WAITING_FOR_RESET  1`,
       kind: "p",
       text: "`next wake` is the moment the daemon will act, in UTC. If the reset time could not be extracted from the banner, the session is still scheduled: ccresu polls with a backoff (`scheduler.unknown_reset_initial_interval` up to `scheduler.unknown_reset_max_interval`) until the limit clears, and `inspect` shows `unknown reset: yes`.",
     },
-    { kind: "h2", text: "Step 9 — Watch the resume happen" },
+    { kind: "h2", text: "Step 9 — Watch the handoff happen" },
     {
       kind: "p",
-      text: "When the reset time arrives, ccresu re-checks the session, checks that the limit has actually cleared, resumes the same session ID, and verifies the conversation grew afterwards. `ccresu history` is the audit trail; `--limit N` caps how many transitions are shown (default 50, newest kept).",
+      text: "When the reset time arrives, ccresu re-checks the session, checks that the limit has actually cleared, and hands the same session ID to Claude Code's background supervisor with `claude --bg --resume <session-id> --name ccresu-<first 8 hex> \"<continuation message>\"`. The invocation returns as soon as the supervisor prints its `backgrounded · <short-id> · <name>` block, and that block — not a transcript measurement — is what proves the recovery. `ccresu history` is the audit trail; `--limit N` caps how many transitions are shown (default 50, newest kept).",
     },
     {
       kind: "code",
@@ -270,7 +270,7 @@ WHEN                     TRANSITION                                 REASON
 2026-11-05 03:29:03 +08  RESET_TIME_REACHED -> CHECKING_SESSION     checking the session before resuming
 2026-11-05 03:29:03 +08  CHECKING_SESSION -> CHECKING_LIMIT         checking the usage limit has cleared
 2026-11-05 03:29:03 +08  CHECKING_LIMIT -> RESUMING                 resuming the original session
-2026-11-05 03:29:03 +08  RESUMING -> RESUMED                        the original session resumed and the conversation grew`,
+2026-11-05 03:29:03 +08  RESUMING -> RESUMED                        the supervisor accepted the continuation as 837eaaea (ccresu-3f9d1c07)`,
     },
     { kind: "h2", text: "Step 10 — Act manually" },
     {
@@ -349,8 +349,8 @@ session 7c1b2a44-0000-4000-8000-abcdefabcdef: reset; run 'ccresu enable 7c1b2a44
     {
       kind: "note",
       tone: "info",
-      title: "A background session is stopped, not abandoned",
-      text: "One failure is not the session's fault at all: `claude -p --resume` refuses while the session is still attached to Claude Code's background agent (`That session is running in the background (837eaaea) …`). ccresu treats that as busy, not gone: in the same attempt it runs `claude stop <job-id>` (the eight-hex job name the refusal prints, never the session id) and repeats the identical resume once, so the session reaches RESUMED without intervention and the conversation is kept — same session id, same transcript. The stop is logged, not recorded as the attempt's command. If the stop fails or the second resume refuses again, the original error is reported unchanged and the session lands in DISCOVERED, which is where `retry`, `reset` and `recover --force` come in.",
+      title: "A handoff returns; the work does not",
+      text: "A recovery does not run the continuation itself: it hands it to Claude Code's background supervisor and returns. One failure is therefore not the session's fault at all — a workspace the CLI does not trust, or a supervisor that never answers, is reported as its own outcome rather than retried into the same silence. When the CLI does answer, it prints a `backgrounded · <short-id> · <name>` block, and that block is what the attempt records, so `claude attach <short-id>` reaches the conversation later without a lookup. If no block is printed, the handoff is an error rather than an unproven success, and the session lands in DISCOVERED, which is where `retry`, `reset` and `recover --force` come in.",
     },
     { kind: "h2", text: "Step 12 — Turn on Telegram notifications (optional)" },
     {
