@@ -75,6 +75,11 @@ type Milestone struct {
 	// prompt belongs to without the hook resolving or trusting the payload's
 	// cwd.
 	ProjectPath string
+	// RunsInPath is where the session actually runs, when the caller knows it
+	// (PRD 6 R1). It is filled from the persisted row like ProjectPath, and it
+	// differs exactly when the session has moved into a worktree — the case a
+	// message should name rather than hide.
+	RunsInPath string
 	// Observation is the published state a needs-input milestone was raised
 	// from, verbatim. It is the payload the message is built from, so the
 	// operator sees what the CLI said — including that it said no reason —

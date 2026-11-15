@@ -36,6 +36,14 @@ type cliScript struct {
 // positional queue.
 func scriptedProvider(t *testing.T, home string, script cliScript) (*Provider, *FakeExecer) {
 	t.Helper()
+	return scriptedProviderWithLogger(t, home, script,
+		slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
+}
+
+// scriptedProviderWithLogger is scriptedProvider with the logger supplied, so a
+// test can assert what the provider said (PRD 6 R8/R9 are about saying it).
+func scriptedProviderWithLogger(t *testing.T, home string, script cliScript, logger *slog.Logger) (*Provider, *FakeExecer) {
+	t.Helper()
 
 	if script.version == "" && script.versionErr == nil {
 		script.version = testVersionOutput
@@ -77,7 +85,7 @@ func scriptedProvider(t *testing.T, home string, script cliScript) (*Provider, *
 		Home:       home,
 		Execer:     execer,
 		Clock:      clock.NewFake(time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)),
-		Logger:     slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+		Logger:     logger,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -369,7 +377,10 @@ func TestProviderGetSessionStatusFreshTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore() error = %v", err)
 	}
-	writeTranscript(t, store, "/root/project", testSessionID, 4)
+	// A real directory, because PRD 6 R2 resolves the handoff directory and
+	// refuses a path that is not one.
+	project := t.TempDir()
+	writeTranscript(t, store, project, testSessionID, 4)
 
 	provider, _ := scriptedProvider(t, home, cliScript{})
 
@@ -418,9 +429,14 @@ func TestProviderResume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore() error = %v", err)
 	}
-	writeTranscript(t, store, "/root/project", testSessionID, 4)
+	// PRD 6: the handoff runs in the session's own directory, so the fixture has
+	// to be a directory that exists. The listing is empty on purpose — the
+	// session is then discovered from its transcript, which names the launch
+	// project (PRD 6 §6.2).
+	project := t.TempDir()
+	writeTranscript(t, store, project, testSessionID, 4)
 
-	provider, execer := scriptedProvider(t, home, cliScript{})
+	provider, execer := scriptedProvider(t, home, cliScript{agents: "[]"})
 
 	result, err := provider.ResumeSession(context.Background(), testSessionID, "continue the goal")
 	if err != nil {
@@ -488,12 +504,14 @@ func TestProviderResumeFailurePropagates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore() error = %v", err)
 	}
-	writeTranscript(t, store, "/root/project", testSessionID, 2)
+	project := t.TempDir()
+	writeTranscript(t, store, project, testSessionID, 2)
 
 	// A refusal now comes back as output with no `backgrounded` block, because
 	// there is no print-mode JSON to parse any more. It is still a failure, and
 	// still a named one.
 	provider, _ := scriptedProvider(t, home, cliScript{
+		agents:     "[]",
 		resume:     "Error: still limited\n",
 		resumeExit: 1,
 	})

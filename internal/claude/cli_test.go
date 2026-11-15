@@ -423,9 +423,13 @@ func TestTheHandoffRunsInTheSessionsDirectory(t *testing.T) {
 	if wd, err := os.Getwd(); err == nil && last.Options.Dir == wd {
 		t.Errorf("child dir = %q, which is the test process's own directory", last.Options.Dir)
 	}
-	// The query commands still inherit, so the choice is visible where it is made.
-	if calls[0].Options.Dir != "" {
-		t.Errorf("version probe dir = %q, want the inherited one", calls[0].Options.Dir)
+	// PRD 6 R2: the query commands pass ccresu's own directory explicitly rather
+	// than inheriting it, so no invocation depends on how the daemon was started.
+	if calls[0].Options.Dir == "" {
+		t.Error("version probe dir is empty, want ccresu's own directory passed explicitly")
+	}
+	if calls[0].Options.Dir == "/w/session-worktree" {
+		t.Error("version probe ran in the session's directory, want ccresu's own")
 	}
 }
 

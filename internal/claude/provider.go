@@ -224,6 +224,22 @@ func (p *Provider) Discover(ctx context.Context, filter DiscoverFilter) ([]Sessi
 			if out[i].Name == "" {
 				out[i].Name = prev.Name
 			}
+			// PRD 6 R1: where a session started is a fact that must survive a
+			// pass. The map is rebuilt on every pass, so without this carry-over
+			// the observed `cwd` would become ProjectPath again and the launch
+			// directory would be lost the first time a session moved.
+			if prev.ProjectPath != "" {
+				out[i].ProjectPath = prev.ProjectPath
+			}
+			// PRD 6 R9: a recorded run directory that disagrees with the newest
+			// observation must not be used silently. The newer observation has
+			// already won (merge takes `cwd` from it); what is left is to say so,
+			// because a recovery must never resume into a tree the session does
+			// not occupy.
+			if prev.RunsInPath != "" && out[i].RunsInPath != "" && prev.RunsInPath != out[i].RunsInPath {
+				p.log.Warn("session changed its working directory; using the newer observation",
+					"session", out[i].ID, "was", prev.RunsInPath, "now", out[i].RunsInPath)
+			}
 		}
 		p.known[out[i].ID] = out[i]
 	}
@@ -282,7 +298,17 @@ func (p *Provider) merge(entries []AgentEntry, records []SessionRecord, now time
 		session.WaitingFor = entry.WaitingFor
 		session.StartedAt = entry.StartedAt
 		session.LastActivity = firstNonZeroTime(entry.StartedAt)
+		// PRD 6 R1: the observed `cwd` is where the session *runs*, which is a
+		// different fact from where it started. It is recorded in its own field
+		// and refreshed on every pass (R4), so a session that moves into a
+		// worktree mid-life is picked up without losing its launch directory.
+		if cwd := strings.TrimSpace(entry.CWD); cwd != "" {
+			session.RunsInPath = cwd
+		}
 		if session.ProjectPath == "" {
+			// The launch directory, recorded once and never overwritten: it is
+			// the fallback when a worktree disappears (R8) and the value the
+			// display and PRD 5's messages quote.
 			session.ProjectPath = entry.CWD
 		}
 		if session.DiscoveredAt.IsZero() {
@@ -424,6 +450,11 @@ func sessionRunning(session Session) bool {
 
 // ResumeSession continues the original conversation using the single verified
 // resume command and verifies the session id was preserved.
+//
+// The handoff runs in the directory the session occupies, resolved in PRD 6's
+// fixed order: the recorded run directory, then the project directory (R3). A
+// recorded directory that no longer exists falls back and says so once (R8); a
+// session with neither is a named failure, never an inherited cwd (R2).
 func (p *Provider) ResumeSession(ctx context.Context, sessionID, message string) (ResumeResult, error) {
 	if err := ValidateSessionID(sessionID); err != nil {
 		return ResumeResult{}, err
@@ -435,12 +466,62 @@ func (p *Provider) ResumeSession(ctx context.Context, sessionID, message string)
 	if session.Unrecoverable() {
 		return ResumeResult{}, fmt.Errorf("%w: %s: %s", ErrUnrecoverable, sessionID, session.Reason)
 	}
-	result, err := p.cli.Resume(ctx, sessionID, message, session.ProjectPath)
+	workspace, err := ResolveWorkspace(session.RunsInPath, session.ProjectPath)
+	if err != nil {
+		// Not wrapped as ErrUnrecoverable: a directory can come back (a worktree
+		// restored, a checkout re-cloned), so this is a failed attempt with a
+		// name, not a verdict on the session.
+		return ResumeResult{}, fmt.Errorf("resume session %s: %w", sessionID, err)
+	}
+	if workspace.FellBack {
+		// R8: the fallback is announced rather than silent, because an operator
+		// reading a recovery that ran in the checkout instead of the worktree
+		// needs to know which of the two answered and why.
+		p.log.Warn("the session's recorded run directory is gone; resuming in the project directory",
+			"session", sessionID, "missing", workspace.Missing, "using", workspace.Dir)
+	}
+	return p.resumeIn(ctx, sessionID, session, message, workspace.Dir)
+}
+
+// ResumeSessionIn hands the session off in a directory the caller has already
+// resolved.
+//
+// It exists so the recovery engine can use the directory it persisted rather
+// than a second opinion computed here (PRD 6 R3): after a restart the stored row
+// may be the only source for a session the CLI no longer lists, and a session
+// that moved since the last pass is better served by the observation. The caller
+// owns that choice; this method only carries it out.
+func (p *Provider) ResumeSessionIn(ctx context.Context, sessionID, message, dir string) (ResumeResult, error) {
+	if err := ValidateSessionID(sessionID); err != nil {
+		return ResumeResult{}, err
+	}
+	session, err := p.GetSession(ctx, sessionID)
+	if err != nil {
+		// A session the CLI no longer lists is still resumable: the handoff is
+		// addressed by id, and the caller has already resolved a directory. The
+		// zero Session is enough for the bookkeeping below — but not for the
+		// vector, which is why resumeIn takes the id as its own argument rather
+		// than reading it off a session that may be the zero value.
+		p.log.Debug("resuming a session discovery does not report", "session", sessionID, "error", err)
+	}
+	return p.resumeIn(ctx, sessionID, session, message, dir)
+}
+
+// resumeIn is the one place a handoff is issued, so the two entry points cannot
+// drift into running in different directories.
+//
+// sessionID is passed separately from session because session may be the zero
+// value (a session discovery does not report) while the handoff still has to
+// name the conversation it continues. Reading the id off the session instead
+// built a `--resume ""` vector for exactly that case.
+func (p *Provider) resumeIn(ctx context.Context, sessionID string, session Session, message, dir string) (ResumeResult, error) {
+	result, err := p.cli.Resume(ctx, sessionID, message, dir)
 	if err != nil {
 		return result, err
 	}
 	p.mu.Lock()
 	updated := session
+	updated.ID = sessionID
 	updated.LastSeenAt = p.clock.Now().UTC()
 	if result.Verified {
 		updated.LastActivity = updated.LastSeenAt

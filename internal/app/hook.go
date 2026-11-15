@@ -172,6 +172,7 @@ func (a *App) runHook(ctx context.Context) {
 			// there is no row here and the message must not imply one.
 		},
 		ProjectPath: session.ProjectPath,
+		RunsInPath:  session.RunsInPath,
 		Observation: observation,
 	})
 }

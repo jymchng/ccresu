@@ -11,7 +11,7 @@ import (
 
 // sessionColumns is the canonical column list for session queries. Keeping it in
 // one place means a new column is added (or forgotten) in exactly one spot.
-const sessionColumns = `id, project_path, transcript_path, provider, session_type,
+const sessionColumns = `id, project_path, runs_in_path, transcript_path, provider, session_type,
 	pid, state, enabled, recoverable, reason, last_error,
 	transcript_size, transcript_lines, retry_at, discovered_at, last_seen_at, updated_at`
 
@@ -73,9 +73,9 @@ func (s *Store) UpsertSession(ctx context.Context, session Session) (bool, error
 	err := s.InTx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `
 			INSERT INTO sessions (`+sessionColumns+`)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (id) DO NOTHING`,
-			session.ID, session.ProjectPath, session.TranscriptPath, session.Provider,
+			session.ID, session.ProjectPath, session.RunsInPath, session.TranscriptPath, session.Provider,
 			string(session.Type), session.PID,
 			string(session.State), boolToInt(session.Enabled), boolToInt(session.Recoverable),
 			session.Reason, session.LastError, session.TranscriptSize, session.TranscriptLines,
@@ -96,13 +96,13 @@ func (s *Store) UpsertSession(ctx context.Context, session Session) (bool, error
 
 		_, err = tx.ExecContext(ctx, `
 			UPDATE sessions SET
-				project_path = ?, transcript_path = ?, provider = ?, session_type = ?,
+				project_path = ?, runs_in_path = ?, transcript_path = ?, provider = ?, session_type = ?,
 				pid = ?,
 				recoverable = ?, reason = ?,
 				transcript_size = ?, transcript_lines = ?,
 				last_seen_at = ?, updated_at = ?
 			WHERE id = ?`,
-			session.ProjectPath, session.TranscriptPath, session.Provider, string(session.Type),
+			session.ProjectPath, session.RunsInPath, session.TranscriptPath, session.Provider, string(session.Type),
 			session.PID,
 			boolToInt(session.Recoverable), session.Reason,
 			session.TranscriptSize, session.TranscriptLines,
@@ -466,7 +466,7 @@ func scanSession(row scanner) (Session, error) {
 		discoveredAt, lastSeenAt, updatedAt any
 	)
 	err := row.Scan(
-		&session.ID, &session.ProjectPath, &session.TranscriptPath, &session.Provider,
+		&session.ID, &session.ProjectPath, &session.RunsInPath, &session.TranscriptPath, &session.Provider,
 		&sessionType, &session.PID,
 		&state, &enabled, &recoverable, &session.Reason, &session.LastError,
 		&session.TranscriptSize, &session.TranscriptLines, &retryAt,

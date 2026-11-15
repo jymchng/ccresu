@@ -133,6 +133,7 @@ func milestoneData(milestone recovery.Milestone) telegram.EventData {
 	data := telegram.EventData{
 		SessionID:   milestone.Outcome.SessionID,
 		ProjectPath: milestone.ProjectPath,
+		RunsInPath:  milestone.RunsInPath,
 		AttemptID:   attempt.ID,
 		Attempt:     attempt.AttemptNumber,
 		MaxAttempts: milestone.MaxAttempts,

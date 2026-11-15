@@ -30,8 +30,12 @@ func Events() []storage.NotificationEvent {
 type EventData struct {
 	// SessionID identifies the conversation the message is about.
 	SessionID string
-	// ProjectPath is the working directory the session belongs to.
+	// ProjectPath is where the session started.
 	ProjectPath string
+	// RunsInPath is where the session actually runs (PRD 6 R12). Empty means
+	// "not observed", which renders as nothing rather than as a second copy of
+	// the project path.
+	RunsInPath string
 	// LimitID is the persisted usage-limit row, used for deduplication.
 	LimitID int64
 	// LimitType is five_hour, weekly or other.
@@ -98,9 +102,7 @@ func Render(event storage.NotificationEvent, data EventData) (string, error) {
 	case storage.EventLimitDetected:
 		fmt.Fprintf(&body, "%s\n", Bold("Usage limit detected"))
 		fmt.Fprintf(&body, "Session: %s\n", session)
-		if data.ProjectPath != "" {
-			fmt.Fprintf(&body, "Project: %s\n", Code(data.ProjectPath))
-		}
+		writeProject(&body, data)
 		fmt.Fprintf(&body, "Limit: %s\n", Escape(limitName(data.LimitType)))
 		fmt.Fprintf(&body, "Resets: %s\n", describeReset(data))
 		body.WriteString("ccresu is waiting for the reset and will resume this session automatically.")
@@ -160,9 +162,7 @@ func Render(event storage.NotificationEvent, data EventData) (string, error) {
 	case storage.EventSessionCompleted:
 		fmt.Fprintf(&body, "%s\n", Bold("Session completed"))
 		fmt.Fprintf(&body, "Session: %s\n", session)
-		if data.ProjectPath != "" {
-			fmt.Fprintf(&body, "Project: %s\n", Code(data.ProjectPath))
-		}
+		writeProject(&body, data)
 		if data.State != "" {
 			fmt.Fprintf(&body, "State: %s\n", Escape(data.State))
 		}
@@ -174,9 +174,7 @@ func Render(event storage.NotificationEvent, data EventData) (string, error) {
 		// message that invented a reason would be worse than no message.
 		fmt.Fprintf(&body, "%s\n", Bold("Session needs your input"))
 		fmt.Fprintf(&body, "Session: %s\n", session)
-		if data.ProjectPath != "" {
-			fmt.Fprintf(&body, "Project: %s\n", Code(data.ProjectPath))
-		}
+		writeProject(&body, data)
 		fmt.Fprintf(&body, "State: %s\n", Escape(nonEmpty(data.State, "blocked")))
 		if strings.TrimSpace(data.Reason) != "" {
 			fmt.Fprintf(&body, "Waiting for: %s\n", Escape(firstLine(data.Reason)))
@@ -294,4 +292,20 @@ func nonEmpty(value, fallback string) string {
 		return trimmed
 	}
 	return fallback
+}
+
+// writeProject renders the two directories a session can have.
+//
+// PRD 6 R12: where it started and where it runs are separate facts, and they are
+// labelled separately. The second line appears only when the two differ, because
+// repeating one path under two labels is noise, and an unobserved run directory
+// is not a third fact worth a line.
+func writeProject(body *strings.Builder, data EventData) {
+	if data.ProjectPath != "" {
+		fmt.Fprintf(body, "Project: %s\n", Code(data.ProjectPath))
+	}
+	runsIn := strings.TrimSpace(data.RunsInPath)
+	if runsIn != "" && runsIn != strings.TrimSpace(data.ProjectPath) {
+		fmt.Fprintf(body, "Runs in: %s\n", Code(runsIn))
+	}
 }

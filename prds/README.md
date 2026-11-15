@@ -47,7 +47,7 @@ Read in this order. Each depends only on the ones above it.
 | 3 | [`delegate-lifecycle-to-supervisor.md`](delegate-lifecycle-to-supervisor.md) | `ccresu` spawns, kills and re-spawns `claude` itself, racing a supervisor that already does all three | PRDs 1, 2 | `Implemented` |
 | 4 | [`hook-driven-eventing.md`](hook-driven-eventing.md) | "This session needs you" is discovered by polling transcripts, minutes after the CLI announced it | PRD 2 | `Implemented` |
 | 5 | [`resume-spend-guardrails.md`](resume-spend-guardrails.md) | "One resume per limit window" bounds how often a resume happens, never what it costs | PRDs 1, 2 | `Implemented` |
-| 6 | [`worktree-aware-recovery.md`](worktree-aware-recovery.md) | A session is one flat directory to `ccresu`, so a recovery that must run in a git worktree runs in the wrong tree | PRD 1 | `Proposed` |
+| 6 | [`worktree-aware-recovery.md`](worktree-aware-recovery.md) | A session is one flat directory to `ccresu`, so a recovery that must run in a git worktree runs in the wrong tree | PRD 1 | `Implemented` |
 
 PRD 6 is last because it is the only one about *where* a recovery happens rather
 than *whether* it did, and that question only becomes answerable once PRD 1 has

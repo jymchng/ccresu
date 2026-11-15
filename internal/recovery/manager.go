@@ -662,7 +662,7 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 	// daemon at all.
 	m.announce(ctx, MilestoneStarted, outcome, nil)
 
-	result, resumeErr := m.provider.ResumeSession(ctx, sessionID, message)
+	result, resumeErr := m.resume(ctx, session, status.Session, sessionID, message)
 	// R4: what this attempt cost, as soon as the CLI has said. A nil cost is
 	// *unknown*, not zero, and an unknown attempt neither counts toward a cap nor
 	// blocks a resume (R10). Carrying it on the attempt value is what lets both
@@ -1470,4 +1470,48 @@ func handoffCopied(verification Verification) *bool {
 		return nil
 	}
 	return boolPtr(verification.Copied)
+}
+
+// resume issues the handoff in the directory the session occupies.
+//
+// PRD 6 R3: the directory is resolved in a fixed order — the freshest
+// observation's run directory, then the persisted run directory, then the
+// project directory. The observation is the only source that knows a session
+// moved into a worktree since the last pass; the persisted row is the only
+// source after a restart for a session the CLI no longer lists. Neither is
+// guessed, and an empty resolution is a named failure rather than an inherited
+// cwd (R2).
+//
+// A provider that cannot be told a directory resolves it itself; that fallback
+// keeps fakes and tests which never cared about directories working unchanged.
+func (m *Manager) resume(ctx context.Context, session storage.Session, observed claude.Session, sessionID, message string) (claude.ResumeResult, error) {
+	resumer, ok := m.provider.(claude.SessionResumerIn)
+	if !ok {
+		return m.provider.ResumeSession(ctx, sessionID, message)
+	}
+	workspace, err := claude.ResolveWorkspace(
+		firstNonEmpty(observed.RunsInPath, session.RunsInPath),
+		firstNonEmpty(observed.ProjectPath, session.ProjectPath),
+	)
+	if err != nil {
+		return claude.ResumeResult{}, err
+	}
+	if workspace.FellBack {
+		// R8: the fallback is announced rather than silent, because a recovery
+		// that ran in the checkout instead of the worktree is exactly the
+		// wrong-directory success this PRD exists to make visible.
+		m.log.Warn("the session's recorded run directory is gone; resuming in the project directory",
+			"session", sessionID, "missing", workspace.Missing, "using", workspace.Dir)
+	}
+	return resumer.ResumeSessionIn(ctx, sessionID, message, workspace.Dir)
+}
+
+// firstNonEmpty returns the first value that is not blank.
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }

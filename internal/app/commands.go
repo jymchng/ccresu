@@ -313,11 +313,16 @@ func (a *App) cmdSessions(ctx context.Context, args []string) error {
 			yesNo(session.Enabled),
 			yesNo(session.Recoverable),
 			truncateText(session.ProjectPath, 40),
+			// PRD 6 R12: where the session actually runs is its own column with
+			// its own label, because a background session's worktree and its
+			// launch directory are different facts and an operator should see
+			// the difference rather than infer it.
+			runsInCell(session),
 			formatTime(session.LastSeenAt, loc),
 			truncateText(note, 40),
 		})
 	}
-	a.table(a.stdout, []string{"SESSION", "STATE", "NEXT ATTEMPT", "ENABLED", "RECOVERABLE", "PROJECT", "LAST SEEN", "NOTE"}, rows)
+	a.table(a.stdout, []string{"SESSION", "STATE", "NEXT ATTEMPT", "ENABLED", "RECOVERABLE", "PROJECT", "RUNS IN", "LAST SEEN", "NOTE"}, rows)
 	fmt.Fprintln(a.stdout)
 	fmt.Fprint(a.stdout, sessionsFootnote(len(sessions), matching, *all, *limit))
 	return nil
@@ -495,6 +500,10 @@ func (a *App) writeSessionDetail(ctx context.Context, rt *Runtime, id string, w 
 		a.field(w, "last error", session.LastError)
 	}
 	a.field(w, "project", emptyDash(session.ProjectPath))
+	// PRD 6 R12: the second directory, labelled distinctly. "same as project"
+	// says the session never moved; a dash would leave the reader guessing
+	// between "not observed" and "identical".
+	a.field(w, "runs in", runsInDetail(session))
 	a.field(w, "transcript", emptyDash(session.TranscriptPath))
 	a.field(w, "type", session.Type)
 	a.field(w, "last seen", formatTime(session.LastSeenAt, loc))
@@ -879,6 +888,31 @@ func spendLine(spend storage.SpendRecord, limits recovery.SpendLimits) string {
 	return fmt.Sprintf("%s recorded across %s (session cap %s, attempt cap %s)",
 		formatUSD(spend.KnownUSD), attempts,
 		capOrOff(limits.PerSession), capOrOff(limits.PerAttempt))
+}
+
+// runsInCell renders where a session runs for the `sessions` table: a dash when
+// it runs where it started, because repeating one path in two columns is noise
+// rather than information (PRD 6 R12).
+func runsInCell(session storage.Session) string {
+	if strings.TrimSpace(session.RunsInPath) == "" || session.RunsInPath == session.ProjectPath {
+		return "-"
+	}
+	return truncateText(session.RunsInPath, 40)
+}
+
+// runsInDetail renders the run directory for `inspect`: the path when it differs,
+// the word that says why it is not repeated when it does not, and "unknown" when
+// no observation has recorded one yet.
+func runsInDetail(session storage.Session) string {
+	runsIn := strings.TrimSpace(session.RunsInPath)
+	switch {
+	case runsIn == "":
+		return "unknown (no observation has recorded one; the project directory is used)"
+	case runsIn == strings.TrimSpace(session.ProjectPath):
+		return runsIn + " (same as the project)"
+	default:
+		return runsIn
+	}
 }
 
 // cmdHistory prints the attempts and state transitions of one session.

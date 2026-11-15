@@ -141,8 +141,16 @@ type Session struct {
 	// Kind preserves the raw `kind` reported by `claude agents --json`
 	// ("interactive", "background") or "transcript" for on-disk discoveries.
 	Kind string
-	// ProjectPath is the working directory the session belongs to.
+	// ProjectPath is where the session started: the launch directory ccresu
+	// first saw, kept stable so the fallback and the display have a fixed
+	// meaning. The observed `cwd` no longer overwrites it (PRD 6 R1).
 	ProjectPath string
+	// RunsInPath is the directory the session actually runs in, refreshed from
+	// the published `cwd` on every observation (PRD 6 R1, R4). For a background
+	// session that is its worktree under `.claude/worktrees/`, which is the only
+	// correct answer for a recovery; empty means "not observed yet", and the
+	// resolver falls back to ProjectPath.
+	RunsInPath string
 	// TranscriptPath is the on-disk .jsonl transcript, when known.
 	TranscriptPath string
 	// Source records how the session was discovered.
@@ -376,6 +384,17 @@ type SessionProvider interface {
 	PublishedListing(ctx context.Context) (PublishedListing, error)
 	// ResumeSession continues an existing session and verifies the session id.
 	ResumeSession(ctx context.Context, sessionID, message string) (ResumeResult, error)
+}
+
+// SessionResumerIn is implemented by providers that can hand off in a directory
+// the caller has already resolved (PRD 6 R3).
+//
+// It is separate from SessionProvider because it is optional: a fake or a
+// provider without a working directory to choose does not need it, and the
+// recovery engine falls back to SessionProvider.ResumeSession — which resolves
+// the directory itself — when the provider does not implement it.
+type SessionResumerIn interface {
+	ResumeSessionIn(ctx context.Context, sessionID, message, dir string) (ResumeResult, error)
 }
 
 // sortSessions orders sessions by recency and then by id so discovery output is

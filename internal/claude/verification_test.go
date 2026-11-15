@@ -137,12 +137,15 @@ func TestHandoffCommandIsExactlyTheVerifiedOne(t *testing.T) {
 	}
 	provider := newProvider(t, exec, home)
 
-	// A transcript makes the session discoverable without the CLI listing.
-	dir := filepath.Join(home, "projects", claude.SlugifyCWD("/w"))
+	// A transcript makes the session discoverable without the CLI listing. The
+	// project directory is real, not a made-up path: PRD 6 R2 resolves it and
+	// refuses to hand off into a directory that does not exist.
+	project := t.TempDir()
+	dir := filepath.Join(home, "projects", claude.SlugifyCWD(project))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	line := `{"type":"user","sessionId":"` + sessionA + `","cwd":"/w","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"hello"}}` + "\n"
+	line := `{"type":"user","sessionId":"` + sessionA + `","cwd":"` + project + `","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"hello"}}` + "\n"
 	if err := os.WriteFile(filepath.Join(dir, sessionA+".jsonl"), []byte(line), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -194,11 +197,12 @@ func TestACopiedContinuationIsNotAFailure(t *testing.T) {
 	t.Parallel()
 
 	home := t.TempDir()
-	dir := filepath.Join(home, "projects", claude.SlugifyCWD("/w"))
+	project := t.TempDir()
+	dir := filepath.Join(home, "projects", claude.SlugifyCWD(project))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	line := `{"type":"user","sessionId":"` + sessionA + `","cwd":"/w","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"hello"}}` + "\n"
+	line := `{"type":"user","sessionId":"` + sessionA + `","cwd":"` + project + `","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"hello"}}` + "\n"
 	if err := os.WriteFile(filepath.Join(dir, sessionA+".jsonl"), []byte(line), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}

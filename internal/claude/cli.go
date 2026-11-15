@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -50,6 +51,11 @@ type CLIOptions struct {
 	// Guardrails are the flags every handoff carries (PRD 5 R2). The zero value
 	// adds none.
 	Guardrails Guardrails
+	// WorkDir is the working directory ccresu's own invocations run in — the
+	// version probe, `agents --json` and the lifecycle commands. Empty means the
+	// process's current directory, resolved once at construction so no child ever
+	// depends on inheritance (PRD 6 R2).
+	WorkDir string
 }
 
 // CLI is the version-aware adapter around the claude executable.
@@ -75,7 +81,10 @@ type CLI struct {
 	maxOutputBytes int
 	minVersion     Version
 	configDir      string
-	log            *slog.Logger
+	// workDir is ccresu's own working directory, resolved once so every query
+	// invocation passes it explicitly instead of inheriting (PRD 6 R2).
+	workDir string
+	log     *slog.Logger
 	// guardrails are the flags every handoff carries (PRD 5 R2).
 	guardrails Guardrails
 
@@ -94,8 +103,17 @@ func NewCLI(opts CLIOptions) *CLI {
 		handoffTimeout: opts.HandoffTimeout,
 		maxOutputBytes: opts.MaxOutputBytes,
 		configDir:      strings.TrimSpace(opts.ConfigDir),
+		workDir:        strings.TrimSpace(opts.WorkDir),
 		log:            opts.Logger,
 		guardrails:     opts.Guardrails,
+	}
+	if c.workDir == "" {
+		// Resolved once, at construction, rather than per invocation: the daemon
+		// does not change directory, and a resolution that could fail mid-pass
+		// would reintroduce the inherited-cwd ambiguity this field removes.
+		if wd, err := os.Getwd(); err == nil {
+			c.workDir = wd
+		}
 	}
 	if c.bin == "" {
 		c.bin = DefaultExecutable
@@ -328,19 +346,24 @@ func (c *CLI) Resume(ctx context.Context, sessionID, message, dir string) (Resum
 }
 
 // run executes one command with the per-command timeout applied when the caller
-// provided none. It inherits the caller's working directory, which is right for
-// the query commands: they inspect the CLI, not a session.
+// provided none.
+//
+// The working directory is ccresu's own, passed explicitly rather than inherited
+// (PRD 6 R2): an inherited cwd is the same directory, but only because of how the
+// daemon happened to be started — under the shipped systemd unit that is `$HOME`.
+// Making it explicit means no invocation depends on that accident, and the one
+// invocation whose directory is *not* ccresu's own (the handoff) is the only
+// caller that supplies a different one.
 func (c *CLI) run(ctx context.Context, timeout time.Duration, stdin []byte, args ...string) (Output, error) {
-	return c.runIn(ctx, timeout, "", stdin, args...)
+	return c.runIn(ctx, timeout, c.workDir, stdin, args...)
 }
 
 // runIn executes one command in dir.
 //
 // It exists because the handoff is the one invocation whose working directory is
 // part of its meaning: a recovery handed to the supervisor from the daemon's cwd
-// would continue the wrong tree. Everything else passes an empty dir and
-// inherits, so the deliberate choice is visible at the one call site that makes
-// it.
+// would continue the wrong tree. Everything else passes ccresu's own directory,
+// so the deliberate choice is visible at the one call site that makes it.
 func (c *CLI) runIn(ctx context.Context, timeout time.Duration, dir string, stdin []byte, args ...string) (Output, error) {
 	if err := ctx.Err(); err != nil {
 		return Output{ExitCode: -1}, err

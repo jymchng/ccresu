@@ -135,7 +135,7 @@ migrations under `internal/storage/migrations`, plus one bookkeeping table:
 
 | Table | Holds |
 | --- | --- |
-| `sessions` | one row per discovered session: `id` (the Claude Code UUID, primary key), `project_path`, `transcript_path`, `provider`, `session_type`, `pid`, `ppid`, `process_start_time`, `state`, `enabled`, `recoverable`, `reason`, `last_error`, `transcript_size`, `transcript_lines`, `retry_at`, `discovered_at`, `last_seen_at`, `updated_at` |
+| `sessions` | one row per discovered session: `id` (the Claude Code UUID, primary key), `project_path` (where the session **started**, recorded once), `runs_in_path` (where it **actually runs**, refreshed from every observation — the two differ when a background session has moved into a git worktree), `transcript_path`, `provider`, `session_type`, `pid`, `ppid`, `process_start_time`, `state`, `enabled`, `recoverable`, `reason`, `last_error`, `transcript_size`, `transcript_lines`, `retry_at`, `discovered_at`, `last_seen_at`, `updated_at` |
 | `usage_limits` | each detected limit: `session_id`, `limit_type`, `raw_message`, `reset_at`, `reset_timezone`, `reset_raw`, `confidence`, `paused_goal`, `detected_at` |
 | `recovery_attempts` | every continuation: `session_id`, `usage_limit_id`, `attempt_number`, `state`, `command`, `started_at`, `finished_at`, `success`, `output`, `error`, `session_id_verified`, `transcript_grew`, the handoff (`handoff_state_id`, `handoff_name`, `handoff_at`, `handoff_copied`) and the observation it rested on (`observed_state`, `observed_status`, `observed_waiting_for`, `observed_at`, `observed_listed`) |
 | `state_transitions` | the append-only audit trail: `session_id`, `attempt_id`, `from_state`, `to_state`, `reason`, `occurred_at` |

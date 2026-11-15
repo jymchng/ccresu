@@ -71,8 +71,12 @@ func (s *Server) decodeJSON(r *http.Request, dst any, allowEmpty bool) *apiError
 
 // sessionDTO is the wire form of a session.
 type sessionDTO struct {
-	ID              string    `json:"id"`
-	ProjectPath     string    `json:"project_path,omitempty"`
+	ID          string `json:"id"`
+	ProjectPath string `json:"project_path,omitempty"`
+	// RunsInPath is where the session actually runs (PRD 6 R1, R12). It is
+	// omitted when no observation has recorded one, because an empty string is
+	// "not observed", not "the project directory".
+	RunsInPath      string    `json:"runs_in_path,omitempty"`
 	TranscriptPath  string    `json:"transcript_path,omitempty"`
 	Provider        string    `json:"provider,omitempty"`
 	Type            string    `json:"type"`
@@ -94,6 +98,7 @@ func toSessionDTO(session storage.Session) sessionDTO {
 	return sessionDTO{
 		ID:              session.ID,
 		ProjectPath:     session.ProjectPath,
+		RunsInPath:      session.RunsInPath,
 		TranscriptPath:  session.TranscriptPath,
 		Provider:        session.Provider,
 		Type:            string(session.Type),

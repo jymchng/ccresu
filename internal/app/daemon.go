@@ -196,8 +196,12 @@ func storageSession(session claude.Session) storage.Session {
 		kind = storage.SessionTypeUnknown
 	}
 	return storage.Session{
-		ID:              session.ID,
-		ProjectPath:     session.ProjectPath,
+		ID:          session.ID,
+		ProjectPath: session.ProjectPath,
+		// PRD 6 R1/R4: where the session runs is persisted next to where it
+		// started, refreshed on every pass. A recovery reads it back from here,
+		// so the worktree survives a daemon restart.
+		RunsInPath:      session.RunsInPath,
 		TranscriptPath:  session.TranscriptPath,
 		Provider:        "claude",
 		Type:            kind,
@@ -337,6 +341,7 @@ func (d *Daemon) notifyLimit(ctx context.Context, session storage.Session, limit
 	data := telegram.EventData{
 		SessionID:     session.ID,
 		ProjectPath:   session.ProjectPath,
+		RunsInPath:    session.RunsInPath,
 		LimitID:       limit.ID,
 		LimitType:     limit.LimitType,
 		ResetAt:       limit.ResetAt,
@@ -549,6 +554,7 @@ func (d *Daemon) notifyCompleted(ctx context.Context) error {
 			Data: telegram.EventData{
 				SessionID:   session.ID,
 				ProjectPath: session.ProjectPath,
+				RunsInPath:  session.RunsInPath,
 				State:       string(session.State),
 			},
 		}); err != nil && !errors.Is(err, telegram.ErrDisabled) {

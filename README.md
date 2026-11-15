@@ -346,15 +346,20 @@ the configuration. Step 13 uses it.
 
 ```console
 $ ccresu sessions --all
-SESSION   STATE       NEXT ATTEMPT                    ENABLED  RECOVERABLE  PROJECT                                   LAST SEEN                NOTE
-1dd41fc3  DISCOVERED  none (session is not enabled)   no       yes                                                       2026-11-05 03:24:03 +08
-4a52c0c7  DISCOVERED  none (session is not enabled)   no       yes                                                       2026-11-05 03:24:03 +08
-88dfd995  DISCOVERED  none (session is not enabled)   no       yes                                                       2026-11-05 03:24:03 +08
-e1732e3d  DISCOVERED  none (session is not enabled)   no       yes                                                       2026-11-05 03:24:03 +08
-e60a3100  DISCOVERED  none (no usage limit detect...  yes      yes          /root/python_projects/python-password...  2026-11-05 03:24:03 +08
+SESSION   STATE       NEXT ATTEMPT                    ENABLED  RECOVERABLE  PROJECT                                   RUNS IN                                   LAST SEEN                NOTE
+1dd41fc3  DISCOVERED  none (session is not enabled)   no       yes                                                                                              2026-11-05 03:24:03 +08
+4a52c0c7  DISCOVERED  none (session is not enabled)   no       yes                                                                                              2026-11-05 03:24:03 +08
+88dfd995  DISCOVERED  none (session is not enabled)   no       yes                                                                                              2026-11-05 03:24:03 +08
+e1732e3d  DISCOVERED  none (session is not enabled)   no       yes                                                                                              2026-11-05 03:24:03 +08
+e60a3100  DISCOVERED  none (no usage limit detect...  yes      yes          /root/python_projects/python-password...  /root/python_projects/python-password...  2026-11-05 03:24:03 +08
 
 5 session(s) shown (--all: disabled and settled sessions included)
 ```
+
+- `PROJECT` is where the session **started**; `RUNS IN` is where it **actually
+  runs**, which differs when a background session has moved into its own git
+  worktree. `RUNS IN` is `-` when the two agree, and the directory it names is
+  the one a resume re-enters — never the daemon's own working directory.
 
 - `SESSION` is the first eight characters of the session ID; commands need the
   **full** ID (see step 6 for the one-liner that copies it).
@@ -425,6 +430,7 @@ state:         WAITING_FOR_RESET
 enabled:       yes
 recoverable:   yes
 project:       -
+runs in:       unknown (no observation has recorded one; the project directory is used)
 transcript:    /home/you/.claude/projects/-home-you-projects-demo/3f9d1c07-1111-4222-8333-444455556666.jsonl
 type:          unknown
 last seen:     2026-11-05 03:28:16 +08
@@ -986,6 +992,19 @@ The conversation is untouched — same session id, same transcript. There is no
 session id, no TTY and no keystroke injection, and if the stop fails the original
 refusal is reported unchanged. See
 [docs/recovery.md](docs/recovery.md) for the exact mechanism and its limitations.
+
+The handoff also runs **where the session runs**, not where `ccresu` runs. A
+session keeps two directories: `project` — where it started, recorded once — and
+`runs in` — where it actually is, refreshed from every observation. They differ
+when a background session has moved into its own git worktree under
+`.claude/worktrees/`, and in that case the handoff re-enters the worktree. A
+recorded directory that has since been deleted falls back to the project
+directory and says so once; a session with neither is a named failure, never an
+inherited working directory (under the shipped systemd unit that would be
+`$HOME`). A recovery only ever *re-enters* a tree: ccresu never passes
+`--worktree`, never runs `git worktree`, and never calls `claude rm`, so N
+attempts for one session leave exactly the worktrees that existed before the
+first attempt.
 
 ## Interfaces
 

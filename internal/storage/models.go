@@ -175,8 +175,16 @@ func (e NotificationEvent) Valid() bool {
 type Session struct {
 	// ID is the Claude Code session UUID and the natural primary key.
 	ID string
-	// ProjectPath is the working directory the session belongs to.
+	// ProjectPath is where the session started: the launch directory, kept
+	// stable across passes so the fallback and the display have a fixed meaning
+	// (PRD 6 R1).
 	ProjectPath string
+	// RunsInPath is where the session actually runs, refreshed from the
+	// published `cwd` on every observation (PRD 6 R1, R4). Empty means "not
+	// observed yet", which is a different fact from "the same as the project":
+	// the resolver falls back to ProjectPath, and the display says nothing
+	// rather than repeating one path twice.
+	RunsInPath string
 	// TranscriptPath is the on-disk .jsonl transcript, when known.
 	TranscriptPath string
 	// Provider records which adapter discovered the session.

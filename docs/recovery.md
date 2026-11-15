@@ -113,6 +113,87 @@ The message itself is never stored on the row: the column says how many bytes
 were sent, the log says what happened, and the conversation stays in the
 transcript where it belongs.
 
+## Where the resume runs
+
+A resume that re-enters the *wrong tree* is a recovery that quietly did nothing:
+the conversation continues, so every exit code says success, while the work
+happens in a checkout the session never occupied. The directory is therefore part
+of the resume's meaning, not an environment detail.
+
+A session carries two directories, and they are different facts:
+
+| Field | Meaning | Where it comes from |
+| --- | --- | --- |
+| `Session.ProjectPath` | where the session **started** — the launch directory, recorded once and never overwritten | the published `cwd` on first observation, or the transcript's project slug when the CLI does not list the session |
+| `Session.RunsInPath` | where the session **actually runs** — refreshed on every observation | the published `cwd` of the newest `claude agents --json` read |
+
+They disagree exactly when a background session has moved into a linked git
+worktree (`.claude/worktrees/…`, or one created with `git worktree add`
+elsewhere), which is the case the split exists for. `ccresu sessions` shows both,
+under `PROJECT` and `RUNS IN`, and `ccresu inspect` prints `runs in` with
+`(same as the project)` when the two agree — so an operator reads the difference
+instead of inferring it.
+
+### The resolution order is a rule
+
+`claude.ResolveWorkspace` answers "which directory does this session occupy?" in a
+fixed order:
+
+1. **the recorded run directory**, if it is a directory;
+2. **the project directory**, if it is a directory.
+
+There is no third step. An empty `exec.Cmd.Dir` inherits the process's working
+directory — under the shipped systemd unit, `$HOME` — so "neither is usable" is a
+named failure (`claude.ErrWorkspaceUnresolved`), never an inherited cwd. That
+error is deliberately **not** wrapped in `ErrUnrecoverable`: a deleted worktree
+can be restored and a checkout can be re-cloned, so it is a failed attempt rather
+than a verdict on the session.
+
+Recovery resolves from the freshest source first: the observation's `RunsInPath`,
+then the persisted row's, then the project directory. The observation is the only
+source that knows a session moved since the last pass; the persisted row is the
+only source, after a restart, for a session the CLI no longer lists.
+
+### What happens when a worktree disappears
+
+A recorded run directory that is no longer a directory falls back to the project
+directory, logs once naming the skipped path, and the attempt proceeds. A missing
+worktree is a fact to observe, not a reason to abandon the session — Claude Code
+documents clearing the worktree binding, and the clear is recorded in the
+transcript.
+
+### What ccresu never does to a worktree
+
+A recovery **re-enters** a tree; it never creates, deletes, locks or unlocks one:
+
+- no `--worktree` / `-w` on a handoff — that would fork the work into a second
+  checkout nobody asked for;
+- no `git worktree` invocation at all, not even to inspect: the lock is held by
+  Claude Code while a backgrounded session runs, and a recovery that waited on it
+  would deadlock against the session it is trying to resume;
+- no `claude rm` to tidy up: the documented refusals (unpushed commits, an
+  unremovable directory) are exactly the cases where automatic removal destroys
+  work.
+
+The rule that follows: **N recovery attempts for one session leave exactly the
+worktrees that existed before the first attempt.** The lifecycle belongs to Claude
+Code and the supervisor, and `ccresu` reports accumulation rather than repairing
+it. There is no configuration switch to disable any of this: a
+`respect_worktree: false` knob would exist only to reintroduce the bug.
+
+### What pins it
+
+| Test | Requirement |
+| --- | --- |
+| `TestResolveWorkspacePrefersTheRecordedRunDirectory`, `TestResolveWorkspaceUsesALinkedGitWorktree` | the fixed order, against a real `git worktree add` |
+| `TestResolveWorkspaceFallsBackToProjectPathWhenTheRunDirectoryIsGone`, `TestMissingRunDirectoryFallsBackAndProceeds` | a cleared worktree falls back, logs once and still resumes |
+| `TestResolveWorkspaceFailsWithANamedErrorWhenNeitherIsUsable`, `TestEmptyWorkingDirectoryIsANamedError` | an empty directory is a named error, and no child is spawned |
+| `TestRunDirectoryIsRefreshedOnEveryObservation`, `TestObservationBeatsThePersistedRow` | a mid-life move is picked up, and the newer observation wins over a stale binding |
+| `TestResumeSessionInRunsTheHandoffInTheGivenDirectory` | the child's `RunOptions.Dir` is the resolved directory, asserted on the invocation a fake execer received |
+| `TestResumeVectorHasNoWorktreeFlag` | the handoff vector contains no `--worktree`, `-w`, `git` or `rm` |
+| `TestRecoveryIsWorktreeNeutral` | three attempts leave `git worktree list` byte-identical |
+| `TestSessionsShowsTheRunDirectoryDistinctly`, `TestSessionsMarksTheRunDirectoryWhenItMatchesTheProject` | both directories are shown under distinct labels |
+
 ## Discovery and detection
 
 1. `claude agents --json` is parsed defensively: unknown field names, extra

@@ -346,7 +346,7 @@ func (b *browser) reload(ctx context.Context) error {
 // shows it, so `/flaky` finds a row by project, state or note.
 func matchesSearch(session storage.Session, needle string) bool {
 	fields := []string{
-		session.ID, session.ProjectPath, session.TranscriptPath,
+		session.ID, session.ProjectPath, session.RunsInPath, session.TranscriptPath,
 		string(session.State), session.Reason, session.LastError,
 		string(session.Type),
 	}
@@ -782,7 +782,7 @@ func (b *browser) drawList(out *strings.Builder) {
 // short id and the detail screen shows the whole one.
 func (b *browser) tableContent() ([]string, [][]string) {
 	loc := b.app.displayLocation(b.rt)
-	headers := []string{"SESSION", "STATE", "NEXT ATTEMPT", "ENABLED", "PROJECT", "LAST SEEN", "NOTE"}
+	headers := []string{"SESSION", "STATE", "NEXT ATTEMPT", "ENABLED", "PROJECT", "RUNS IN", "LAST SEEN", "NOTE"}
 	rows := make([][]string, 0, len(b.sessions))
 	for _, session := range b.sessions {
 		note := session.Reason
@@ -796,6 +796,10 @@ func (b *browser) tableContent() ([]string, [][]string) {
 			next,
 			yesNo(session.Enabled),
 			emptyDash(truncateText(session.ProjectPath, 28)),
+			// PRD 6 R12: the same second directory the CLI table shows, with
+			// the same dash-when-identical rule, so the two surfaces cannot
+			// disagree about where a session runs.
+			runsInCell(session),
 			formatTime(session.LastSeenAt, loc),
 			emptyDash(truncateText(note, 28)),
 		})
