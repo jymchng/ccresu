@@ -93,9 +93,11 @@ describe("documentation", () => {
     ).toBeInTheDocument();
 
     const body = document.body.textContent ?? "";
-    expect(body).toContain('"-p", "--resume", sessionID, "--output-format", "json", message');
-    expect(body).toContain("--output-format json <N-byte continuation message>");
-    expect(body).toContain("claude stop <job-id>");
+    expect(body).toContain('"--name", HandoffLabel(sessionID),');
+    expect(body).toContain(
+      "claude --bg --resume <session-id> --name ccresu-<hex> <N-byte continuation message>",
+    );
+    expect(body).toContain("claude attach <short-id>");
   });
 
   it("returns undefined for an unknown slug instead of inventing a page", () => {

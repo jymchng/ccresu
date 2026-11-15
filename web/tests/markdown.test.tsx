@@ -65,9 +65,9 @@ describe("documentation pages as Markdown", () => {
         { kind: "capture", id: "help" },
         {
           kind: "diagram",
-          id: "stop-then-resume",
-          label: "Stop then resume",
-          description: "The session is stopped before it is resumed.",
+          id: "handoff",
+          label: "One handoff",
+          description: "The continuation is handed to the background supervisor.",
         },
       ],
     };
@@ -87,8 +87,10 @@ describe("documentation pages as Markdown", () => {
     expect(markdown).toContain(captures.help.output.replace(/\n+$/, ""));
 
     // A diagram has no Markdown equivalent, but it must not vanish.
-    expect(markdown).toContain("**Figure: Stop then resume**");
-    expect(markdown).toContain("The session is stopped before it is resumed.");
+    expect(markdown).toContain("**Figure: One handoff**");
+    expect(markdown).toContain(
+      "The continuation is handed to the background supervisor.",
+    );
   });
 
   it("loses no block on any real page", () => {

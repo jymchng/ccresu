@@ -49,25 +49,26 @@ describe("content integrity", () => {
     );
     // The vector that is executed, in that order, message last.
     expect(code).toContain(
-      '"-p", "--resume", sessionID, "--output-format", "json", message',
+      '"--name", HandoffLabel(sessionID),',
     );
+    expect(code).toContain("return append(args, message)");
     // The audit preview must put the message where the real one goes: last.
     expect(code + JSON.stringify(doc?.blocks)).toContain(
-      "--output-format json <N-byte continuation message>",
+      "--name ccresu-<hex> <N-byte continuation message>",
     );
-    expect(code + JSON.stringify(doc?.blocks)).toContain("TestResumeArgsExact");
+    expect(code + JSON.stringify(doc?.blocks)).toContain("TestHandoffArgsExact");
   });
 
-  it("narrates the background-agent recovery and the operator reset", () => {
+  it("narrates the handoff and the operator reset", () => {
     const body = JSON.stringify(getDoc("recovery")?.blocks ?? []);
 
-    expect(body).toContain("claude stop <job-id>");
+    expect(body).toContain("backgrounded · <short-id> · <name>");
     expect(body).toContain("DISCOVERED");
     expect(body).toContain("ccresu retry");
     expect(body).toContain("keeps the attempt row");
-    // The reproduce-then-fix contrast is documented, not just the happy path.
-    expect(body).toContain("--pre-fix");
-    expect(body).toContain("00692e3");
+    // A stale figure is withheld rather than republished as if it described
+    // the handoff: the page says so, and says what brings it back.
+    expect(body).toContain("The recorded figure is pending");
   });
 
   it("keeps the site on the GitHub Pages base path", () => {

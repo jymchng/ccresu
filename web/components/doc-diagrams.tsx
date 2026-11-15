@@ -273,26 +273,19 @@ type Step = {
   note: readonly string[];
 };
 
-const STOP_RESUME_STEPS: readonly Step[] = [
+const HANDOFF_STEPS: readonly Step[] = [
   {
-    command: ['claude -p --resume <id>', '--output-format json "<message>"'],
+    command: ["claude --bg --resume <id>", '--name ccresu-<hex> "<message>"'],
     note: [
-      "refused: the session is still attached",
-      "to Claude Code's background agent",
+      "one invocation, in the session's own",
+      "working directory, never the daemon's",
     ],
   },
   {
-    command: ["claude stop <job-id>"],
+    command: ["backgrounded · <short-id> · <name>"],
     note: [
-      "the agent releases it. Written to the log,",
-      "never to the attempt row",
-    ],
-  },
-  {
-    command: ['claude -p --resume <id>', '--output-format json "<message>"'],
-    note: [
-      "byte-identical arguments, same attempt:",
-      "the result becomes the attempt's result",
+      "the supervisor's acceptance block:",
+      "the only proof ccresu keeps",
     ],
   },
 ];
@@ -300,15 +293,15 @@ const STOP_RESUME_STEPS: readonly Step[] = [
 const STEP = { x: 20, width: 300, centre: 170, arrow: 20, noteGap: 8, lineHeight: 13 };
 
 /**
- * Stop, then resume: what happens when the CLI refuses because a background
- * agent still holds the session. Three calls, one attempt.
+ * One handoff: the invocation, the supervisor's acceptance block, and the state
+ * that follows. The work itself happens after this drawing ends.
  */
-function StopThenResume({ titleId, descriptionId, label, description }: DiagramProps) {
+function Handoff({ titleId, descriptionId, label, description }: DiagramProps) {
   const stroke = "var(--muted-foreground)";
   const elements: ReactElement[] = [];
   let y = 8;
 
-  STOP_RESUME_STEPS.forEach((step, index) => {
+  HANDOFF_STEPS.forEach((step, index) => {
     const height = 24 + step.command.length * 16;
 
     elements.push(
@@ -349,7 +342,7 @@ function StopThenResume({ titleId, descriptionId, label, description }: DiagramP
         y2={y + STEP.arrow - 3}
         stroke={stroke}
         strokeWidth="1.25"
-        markerEnd="url(#diagram-stop-then-resume-arrow)"
+        markerEnd="url(#diagram-handoff-arrow)"
       />,
     );
     y += STEP.arrow;
@@ -386,7 +379,7 @@ function StopThenResume({ titleId, descriptionId, label, description }: DiagramP
       <desc id={descriptionId}>{description}</desc>
 
       <defs>
-        <Arrowhead id="diagram-stop-then-resume-arrow" colour={stroke} />
+        <Arrowhead id="diagram-handoff-arrow" colour={stroke} />
       </defs>
 
       {elements}
@@ -417,7 +410,7 @@ function StopThenResume({ titleId, descriptionId, label, description }: DiagramP
         fontSize="9.5"
         fill="var(--muted-foreground)"
       >
-        verified: same session id, transcript grew
+        accepted: the supervisor holds the session
       </text>
     </svg>
   );
@@ -425,7 +418,7 @@ function StopThenResume({ titleId, descriptionId, label, description }: DiagramP
 
 const DIAGRAMS: Record<DiagramId, (props: DiagramProps) => ReactElement> = {
   "state-machine": StateMachine,
-  "stop-then-resume": StopThenResume,
+  handoff: Handoff,
 };
 
 /**

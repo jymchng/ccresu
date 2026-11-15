@@ -125,7 +125,7 @@ describe("documentation figures", () => {
     }
 
     // Both hand-authored figures are actually used somewhere.
-    expect(Array.from(drawn).sort()).toEqual(["state-machine", "stop-then-resume"]);
+    expect(Array.from(drawn).sort()).toEqual(["handoff", "state-machine"]);
   });
 
   it("keeps every referenced capture registered", () => {

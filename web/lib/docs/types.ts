@@ -25,7 +25,7 @@ export type CaptureId = keyof typeof captures;
  * A closed list, because each id is hand-authored geometry: a new diagram is a
  * new drawing, not a new string.
  */
-export type DiagramId = "state-machine" | "stop-then-resume";
+export type DiagramId = "state-machine" | "handoff";
 
 export type Block =
   | { kind: "p"; text: string }
