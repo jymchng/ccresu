@@ -1,39 +1,72 @@
 
 == pass 1: discover, opt in, then `ccresu recover` each session
-reconcile pass complete (2 sessions)
-reconcile pass complete (2 sessions)
+reconcile pass complete (3 sessions)
+reconcile pass complete (3 sessions)
 --- recover aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa
 session:       aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa
 state:         RESUMED
 resumed:       yes
 attempt:       1
-verification:  proven: session id preserved and transcript grew
+verification:  proven: the continuation was handed to the background supervisor
 when:          (captured-at)
 --- recover bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb
-ccresu: recover bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb: recovery: session bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb ended its cycle in DISCOVERED: resume session bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb: claude: claude executable unavailable: claude -p --resume failed (exit 1): Invalid API key · Please run /login: claude -p --resume bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb --output-format json Continue working on the existing active goal from where execution was interrupted by the usage limit. Review the current state, avoid repeating completed work, and continue until the goal is completed.: exit status 1
+ccresu: recover bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb: recovery: session bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb ended its cycle in DISCOVERED: resume session bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb: claude --bg --resume failed (exit 1): Invalid API key · Please run /login: claude: exit status 1
+--- recover cccccccc-3333-4333-8333-cccccccccccc
+ccresu: recover cccccccc-3333-4333-8333-cccccccccccc: recovery: session cccccccc-3333-4333-8333-cccccccccccc ended its cycle in DISCOVERED: resume session cccccccc-3333-4333-8333-cccccccccccc: claude: the handoff printed no backgrounded block: Starting background service…
+ok    the handoff vector is --bg --resume <id> --name <label> <message>
+ok    no call carried a print-mode flag
+ok    no stop was issued
 ok    recover A exits 0
 ok    session A ends RESUMED
-ok    recover A proves the conversation continued
+ok    recover A is proven by the supervisor's acceptance
+ok    the handoff ran exactly once for A
 ok    recover B is refused (exit 1)
 ok    session B is rediscovered
-ok    the resume ran exactly twice for A
-ok    one stop call cleared the background agent
-ok    the stop named the eight-hex job, not the session
-ok    the session UUID was never passed to claude stop
-ok    both resumes used byte-identical arguments
-ok    the calls run resume, stop, resume
-ok    history records the stop-then-resume success
-ok    the audit row keeps the one resume command
-ok    session id was preserved
-ok    the transcript grew
+ok    recover C is refused (exit 1)
+ok    session C is rediscovered
+ok    the silent handoff ran exactly once for C
+ok    history records the handoff as the success
+ok    history does not credit transcript growth for the handoff
+ok    the audit row keeps the handoff command
+ok    the audit row keeps the supervisor's state id
+ok    the audit row keeps the handoff label
+ok    the audit row keeps the session id
+ok    the audit row does not claim growth proved the handoff
+ok    the reason names the acceptance, not the growth
+ok    C records the missing block verbatim
 
-== the stub claude call log (A only)
-CALL-p--resumeaaaaaaaa-1111-4111-8111-aaaaaaaaaaaa--output-formatjsonContinue working on the existing active goal from where execution was interrupted by the usage limit. Review the current state, avoid repeating completed work, and continue until the goal is completed.
-CALLstopaaaaaaaa
-CALL-p--resumeaaaaaaaa-1111-4111-8111-aaaaaaaaaaaa--output-formatjsonContinue working on the existing active goal from where execution was interrupted by the usage limit. Review the current state, avoid repeating completed work, and continue until the goal is completed.
+== the stub claude call log
+CALL --version
+CALL agents --json --all
+CALL --version
+CALL agents --json --all
+CALL daemon status
+CALL --version
+CALL agents --json --all
+CALL agents --json --all
+CALL agents --json --all
+CALL --bg --resume aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa --name ccresu-aaaaaaaa continue the existing goal
+CALL agents --json --all
+CALL daemon status
+CALL --version
+CALL agents --json --all
+CALL agents --json --all
+CALL agents --json --all
+CALL --bg --resume bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb --name ccresu-bbbbbbbb continue the existing goal
+CALL agents --json --all
+CALL daemon status
+CALL --version
+CALL agents --json --all
+CALL agents --json --all
+CALL agents --json --all
+CALL --bg --resume cccccccc-3333-4333-8333-cccccccccccc --name ccresu-cccccccc continue the existing goal
+CALL agents --json --all
+CALL daemon status
+CALL daemon status
+CALL daemon status
 
 == pass 2: the retired commands are gone
 ok    ccresu reset is an unknown command
 ok    ccresu sessions clear is an unknown subcommand
 
-PASSED: the background session was stopped, resumed and verified end to end
+PASSED: the session was handed to the supervisor once, and the block it printed is the proof

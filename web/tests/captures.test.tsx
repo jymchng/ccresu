@@ -92,11 +92,16 @@ describe("captured command output", () => {
     expect(status).toContain("sessions:");
     expect(status).toContain("recovery:");
     expect(history).toContain("USAGE_LIMIT_DETECTED -> WAITING_FOR_RESET");
-    // The proof shows the resume, the stop and the identical resume.
-    expect(e2e).toContain("CALL");
-    expect(e2e).toContain("--resume");
-    expect(e2e).toContain("stop");
+    // The proof is one handoff: the block the supervisor answered with, and the
+    // call log that shows no print-mode flag, no stop and no second resume.
+    expect(e2e).toContain("CALL --bg --resume");
+    expect(e2e).toContain("backgrounded");
+    expect(e2e).toContain("the handoff ran exactly once for A");
+    expect(e2e).toContain("no stop was issued");
     expect(e2e).toContain("PASSED");
+    expect(e2e).not.toContain("CALL -p");
+    expect(e2e).not.toContain("--output-format");
+    expect(e2e).not.toContain("CALL stop");
 
     for (const capture of captureList) {
       expect(capture.output.length).toBeGreaterThan(40);

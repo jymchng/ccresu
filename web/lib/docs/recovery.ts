@@ -153,10 +153,14 @@ export const recoveryDoc: DocPage = {
       text: "This is not only asserted against fakes. `make e2e` builds the real binary and puts a stub `claude` on `PATH`, so the handoff, the acceptance block it is judged on and the audit row it leaves are exercised as one run rather than three claims.",
     },
     {
+      kind: "capture",
+      id: "e2e",
+    },
+    {
       kind: "note",
-      tone: "warning",
-      title: "The recorded figure is pending",
-      text: "The end-to-end harness still drives the retired print-mode flow \u2014 it stops the background job and repeats the resume \u2014 so its recording is withheld here instead of being republished as if it described the handoff. The figure returns once the harness itself has been rewritten.",
+      tone: "info",
+      title: "What the recorded run is evidence of",
+      text: "The figure above is the whole harness, verbatim. One `--bg --resume` invocation carries the session id, the `ccresu-<first-8-hex>` label and the message; the supervisor answers with the `backgrounded` block; and the call log at the end is the record that nothing else was sent \u2014 no print-mode flag, no `claude stop`, no second resume. The two refused sessions are there as well: a handoff that fails authentication and one that prints no block both end `DISCOVERED`, because a continuation that failed is not a verdict on the conversation.",
     },
     {
       kind: "h2",

@@ -1021,26 +1021,24 @@ first attempt.
 go build ./...
 go test ./... && go test -race ./...
 make cover-check     # enforces the 80% statement-coverage gate
-make e2e             # stop-then-resume and `reset` against a stub `claude` CLI
+make e2e             # the `claude --bg --resume` handoff against a stub `claude` CLI
 ```
 
-`make e2e` runs `tests/scripts/background-resume-e2e.sh`. That script is **stale**:
-it still drives the retired print-mode resume (`claude -p --resume … --output-format
-json`) and asserts that verification proved growth, so it fails against the
-current binary. It is being rewritten against the handoff; until that lands, treat
-`make e2e` as red and `go test ./...` plus `go test -race ./...` as the gates.
+`make e2e` runs `tests/scripts/background-resume-e2e.sh`. It builds the real
+binary, puts a stub `claude` on `PATH` and drives the handoff end to end: one
+`--bg --resume <session-id> --name ccresu-<first-8-hex> <message>` invocation,
+the `backgrounded · <short-id> · <name>` block the supervisor answers with, and
+the audit row that keeps the state id and the label. The stub records every call
+with its argv, so the run also proves what was *not* sent: no print-mode flag, no
+`claude stop`, no second resume. Two sessions are refused on purpose -- one that
+fails authentication and one whose handoff prints no block -- and both end
+`DISCOVERED`, because a continuation that failed is not a verdict on the
+conversation.
 
-The same script with `--pre-fix` runs the identical scenario against a pre-fix
-checkout and expects the old outcome: `PERMANENTLY_FAILED` after one refused
-resume and no `stop` call (that binary predates the state's removal; the current
-one returns the session to `DISCOVERED`). That contrast is the regression test
-for the bug:
-
-```bash
-git worktree add /tmp/ccresu-prefix 00692e3
-(cd /tmp/ccresu-prefix && go build -o /tmp/ccresu-prefix/ccresu ./cmd/ccresu)
-tests/scripts/background-resume-e2e.sh --pre-fix /tmp/ccresu-prefix/ccresu
-```
+`scripts/web-captures.sh` runs the same harness and publishes its log verbatim as
+the end-to-end figure on the documentation site, so a change in the invocation
+vector shows up as a stale capture rather than as prose that quietly disagrees
+with the binary.
 
 ## License
 

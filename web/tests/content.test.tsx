@@ -66,9 +66,10 @@ describe("content integrity", () => {
     expect(body).toContain("DISCOVERED");
     expect(body).toContain("ccresu retry");
     expect(body).toContain("keeps the attempt row");
-    // A stale figure is withheld rather than republished as if it described
-    // the handoff: the page says so, and says what brings it back.
-    expect(body).toContain("The recorded figure is pending");
+    // The end-to-end figure is published again, now that the harness drives the
+    // handoff: the page must show it rather than describe it as withheld.
+    expect(body).toContain('"kind":"capture","id":"e2e"');
+    expect(body).not.toContain("withheld");
   });
 
   it("keeps the site on the GitHub Pages base path", () => {

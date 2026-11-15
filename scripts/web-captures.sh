@@ -69,7 +69,9 @@ cat >"$work/bin/claude" <<'STUB'
 #!/bin/sh
 case "${1:-}" in
 --version)
-	printf '2.1.223 (Claude Code)\n'
+	# 2.1.257 is the floor that retired print mode (PRD 1). Reporting the host's
+	# real version would make the captures depend on whatever is installed.
+	printf '2.1.257 (Claude Code)\n'
 	;;
 agents)
 	cat "$STUB_AGENTS"
@@ -154,7 +156,8 @@ capture history "$ccresu" history "$session"
 
 if [ "$with_e2e" -eq 1 ]; then
 	# The real proof, including the stub's call log: it is the only honest way to
-	# show that the resume, the stop and the second resume really happened.
+	# show the single `--bg --resume` handoff, the block the supervisor answered
+	# with, and the absence of any print-mode flag, stop or retry.
 	# Two kinds of line are dropped so the figure is the report and not the
 	# plumbing: module-download chatter from the build, and the daemon's JSON
 	# log lines, which repeat what the report already states.
@@ -222,7 +225,7 @@ manifest = [
     ("history", "The audit trail for one session", "ccresu history <session-id>",
      "The audit trail: discovery, detection, the wait and the reset instant, each recorded as it happened."),
     ("e2e", "The end-to-end proof", "make e2e",
-     "The end-to-end proof, verbatim: the stub claude CLI refuses the resume, is stopped, is resumed again, and the call log shows the two byte-identical resumes around one stop."),
+     "The end-to-end proof, verbatim: the stub claude CLI accepts one `--bg --resume` handoff, prints the `backgrounded` block ccresu judges it on, and the call log shows that single invocation -- no print mode, no stop, no second resume."),
 ]
 
 

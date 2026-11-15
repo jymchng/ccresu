@@ -773,46 +773,39 @@ CLI refuses again and the session is parked again with the same banner.
 
 ## Proving it end to end
 
-This is not only asserted against fakes, but the harness is currently **stale**.
-`make e2e` runs `tests/scripts/background-resume-e2e.sh`, which builds the real
-binary and puts a stub `claude` on `PATH`; the script still drives the retired
-print-mode resume (`claude -p --resume … --output-format json`), still asserts
-that the transcript grew, and still expects resume/stop/resume, so it fails
-against the current binary. Rewriting it against the handoff — the stub prints a
-`backgrounded · <short-id> · <name>` block, and the assertions become "the
-supervisor accepted the continuation" plus "the published state was read" — is
-tracked separately from this document.
+This is not only asserted against fakes. `make e2e` runs
+`tests/scripts/background-resume-e2e.sh`, which builds the real binary and puts a
+stub `claude` on `PATH`. The stub is the point: it answers `claude agents --json
+--all` from a published-state file it maintains, so the real published-state read
+is what ccresu decides on, and it records every call with its argv.
 
-Until that lands, the end-to-end proof of this mechanism is the Go suite:
-`go test ./...` (the PRD 2 acceptance tests live in
-`internal/recovery/published_test.go` and `internal/claude/published_test.go`)
-and `go test -race ./...`. Treat `make e2e` as red, not as evidence.
-
-The `--pre-fix` contrast below describes that same stale script and the
-`PERMANENTLY_FAILED` outcome it was written to pin; it stays here as the history
-of the refusal bug, not as a claim about the current harness.
-
-The same script with `--pre-fix` is the contrast, and it is the reason the fix
-exists:
+What the run asserts is the handoff, one invocation at a time:
 
 ```bash
-make e2e                              # the fixed binary: every check passes
-
-# the contrast, against the pre-fix commit (the script needs that binary):
-git worktree add /tmp/ccresu-prefix 00692e3
-(cd /tmp/ccresu-prefix && go build -o /tmp/ccresu-prefix/ccresu ./cmd/ccresu)
-tests/scripts/background-resume-e2e.sh --pre-fix /tmp/ccresu-prefix/ccresu
+make e2e
 ```
 
-| Binary | `ccresu recover <id>` | Stub saw | Final state |
-| --- | --- | --- | --- |
-| before the fix (`00692e3`) | exits 1, reporting the refusal | one resume, no stop | `PERMANENTLY_FAILED` (that binary predates the state's removal) |
-| with the fix | exits 0, verification proven | resume, stop, resume | `RESUMED` |
+| Session | Stub behaviour | What is asserted |
+| --- | --- | --- |
+| handed off | prints `backgrounded · <short-id> · <name>`, publishes `working` | one `--bg --resume` call with the exact vector, `RESUMED`, and an audit row carrying the state id and the `ccresu-<hex>` label |
+| refused | the handoff fails with an authentication error | `DISCOVERED` with the refusal recorded verbatim |
+| silent | the handoff exits 0 but prints no block | `DISCOVERED` with `claude.ErrHandoffNotAcknowledged`, and no retry |
 
-The second session in the same run is the one that cannot be resumed. It now ends
-in `DISCOVERED` with its attempt row, its reason and its transcript intact, and
-the script asserts that `ccresu reset` and `ccresu sessions clear` no longer
-exist (both exit 2 as unknown commands).
+The call log is asserted as an absence as well: no `-p`, no `--print`, no
+`--output-format`, no `claude stop` and no second resume for the same session.
+A regression that reintroduced the print-mode path or the stop-then-resume loop
+would appear there rather than passing quietly, and the invocation vector is
+compared field by field against `claude.HandoffArgs`, so a reordered flag fails
+the run too.
+
+The same harness feeds the documentation site: `scripts/web-captures.sh` captures
+its log verbatim as the end-to-end figure, and `scripts/web-captures.sh --check`
+fails when the committed figure no longer matches the binary.
+
+The Go suite remains the finer-grained proof of the same mechanism: the PRD 2
+acceptance tests live in `internal/recovery/published_test.go` and
+`internal/claude/published_test.go`, and `go test ./...` plus `go test -race
+./...` are the gates.
 
 ## The supervisor is a dependency, not a child
 
