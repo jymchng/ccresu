@@ -130,17 +130,18 @@ restart from double-sending; the notifier can never block or fail a recovery.
 ## Persistence
 
 The SQLite database (default `~/.local/share/ccresu/ccresu.db`,
-`internal/config/defaults.go:74`) holds eight tables, created by embedded
+`internal/config/defaults.go:74`) holds nine tables, created by embedded
 migrations under `internal/storage/migrations`, plus one bookkeeping table:
 
 | Table | Holds |
 | --- | --- |
-| `sessions` | one row per discovered session: `id` (the Claude Code UUID, primary key), `project_path` (where the session **started**, recorded once), `runs_in_path` (where it **actually runs**, refreshed from every observation — the two differ when a background session has moved into a git worktree), `transcript_path`, `provider`, `session_type`, `pid`, `ppid`, `process_start_time`, `state`, `enabled`, `recoverable`, `reason`, `last_error`, `transcript_size`, `transcript_lines`, `retry_at`, `discovered_at`, `last_seen_at`, `updated_at` |
+| `sessions` | one row per discovered session: `id` (the Claude Code UUID, primary key), `project_path` (where the session **started**, recorded once), `runs_in_path` (where it **actually runs**, refreshed from every observation — the two differ when a background session has moved into a git worktree), `transcript_path`, `provider`, `session_type`, `pid` (evidence only: no lifecycle decision reads it), `state`, `enabled`, `recoverable`, `reason`, `last_error`, `transcript_size`, `transcript_lines`, `retry_at`, `discovered_at`, `last_seen_at`, `updated_at` |
 | `usage_limits` | each detected limit: `session_id`, `limit_type`, `raw_message`, `reset_at`, `reset_timezone`, `reset_raw`, `confidence`, `paused_goal`, `detected_at` |
-| `recovery_attempts` | every continuation: `session_id`, `usage_limit_id`, `attempt_number`, `state`, `command`, `started_at`, `finished_at`, `success`, `output`, `error`, `session_id_verified`, `transcript_grew`, the handoff (`handoff_state_id`, `handoff_name`, `handoff_at`, `handoff_copied`) and the observation it rested on (`observed_state`, `observed_status`, `observed_waiting_for`, `observed_at`, `observed_listed`) |
+| `recovery_attempts` | every continuation: `session_id`, `usage_limit_id`, `attempt_number`, `state`, `command`, `started_at`, `finished_at`, `success`, `output`, `error`, `session_id_verified`, `transcript_grew`, `cost_usd` (NULL means the CLI reported no cost, which is *unknown*, not zero), the handoff (`handoff_state_id`, `handoff_name`, `handoff_at`, `handoff_copied`) and the observation it rested on (`observed_state`, `observed_status`, `observed_waiting_for`, `observed_at`, `observed_listed`) |
 | `state_transitions` | the append-only audit trail: `session_id`, `attempt_id`, `from_state`, `to_state`, `reason`, `occurred_at` |
 | `schedules` | the durable wait: `session_id` (primary key), `usage_limit_id`, `reset_at`, `reset_timezone`, `reset_raw`, `unknown_reset`, `attempts`, `next_poll_at`, `created_at`, `updated_at` |
 | `notifications` | queued/sent/failed messages: `session_id`, `attempt_id`, `event`, `dedupe_key`, `body`, `status`, `attempts`, `last_error`, `created_at`, `updated_at`, `sent_at` |
+| `attention_episodes` | the current "waiting for a human" stretch per session: `session_id` (primary key), `started_at`, `reason` — the instant both producers of a `needs_input` message key on, so one block is one message |
 | `settings` | operator overrides as `key`/`value`/`updated_at` (global enable/disable and the API token fingerprint) |
 | `deleted_sessions` | tombstones: `id`, `project_path`, `transcript_path`, `state`, `deleted_at` |
 | `schema_migrations` | bookkeeping: `version`, `name`, `checksum`, `applied_at` |

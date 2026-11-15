@@ -4,7 +4,10 @@ All notable changes to ccresu are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] - 2026-11-15
+
+Six PRDs on one theme: a recovery is decided by what the supervisor publishes, not
+by what ccresu infers from a transcript, a PID or its own working directory.
 
 ### Added
 
@@ -25,6 +28,32 @@ All notable changes to ccresu are recorded here. The format follows
   `observed_listed`, and `ccresu inspect` renders them — printing *not recorded*
   for attempts that predate the change, because "we did not look" and "nothing
   was happening" are different facts.
+- **`ccresu hook` announces a session that needs you, when the CLI says so.**
+  One `Notification` payload on stdin becomes one bounded
+  `claude agents --json --all` observation, and at most one `needs_input`
+  message — and nothing else: it always exits 0 and prints nothing, never writes
+  a Claude Code configuration file, and leaves an unknown session alone. The new
+  `telegram.notify_needs_input` key (default `false`) turns the message on, and
+  the `attention_episodes` table gives one block one dedupe key, so the hook and
+  the poll cannot announce the same block twice (PRD 4).
+- **The supervisor's own log, on demand.** `ccresu inspect` gains
+  `supervisor log` — the tail of `claude daemon logs` — and every pass reads
+  `claude daemon status`, so an operator can see the daemon ccresu depends on
+  rather than inferring it from a session that will not move (PRD 3).
+- **Spend guardrails.** `recovery.guardrails` adds `max_cost_usd_per_session`
+  and `max_cost_usd_per_attempt`, plus the four flags a `--bg` handoff accepts
+  (`model`, `effort`, `fallback_model`, `permission_mode`). Each attempt records
+  the CLI's own `total_cost_usd`, and a NULL there means *unknown*, never zero.
+  A session stopped by either cap is parked in `SPEND_CAP_REACHED`; `history`
+  gains a `COST` column and `inspect` shows the recorded spend against the caps
+  (PRD 5).
+- **Worktree-aware recovery.** `sessions.runs_in_path` records where a session
+  actually runs, distinct from `project_path`, which now means only where it
+  started. `sessions` gains a `RUNS IN` column, `inspect` a `runs in` line, the
+  API a `runs_in_path` field, and the browser, the Telegram message and the hook
+  payload carry it too. The handoff runs in the resolved directory — the recorded
+  run directory, then the project directory — and never in the daemon's cwd
+  (PRD 6).
 
 ### Changed
 
@@ -38,12 +67,36 @@ All notable changes to ccresu are recorded here. The format follows
   `agents --json` read is `ErrObservationUnavailable` and leaves the attempt
   open, while a session missing from a successful read is `HandoffUnobserved`
   and retried — neither is a failure verdict.
+- **The lifecycle belongs to the supervisor.** `ccresu` no longer spawns, kills
+  or respawns `claude`, and liveness comes from the published state plus
+  `claude daemon status`. `sessions` drops `ppid` and `process_start_time`,
+  which nothing ever wrote; `pid` stays as evidence and no decision reads it
+  (PRD 3).
+- **No `claude` invocation inherits a working directory.** The version probe,
+  `agents --json` and the handoff all pass one explicitly, so a recovery can no
+  longer run in `$HOME` under the shipped systemd unit and report success for it
+  (PRD 6).
 
 ### Fixed
 
 - **A blocked session can no longer be reported `RESUMED`.** The mapping covers
   every documented state, both sides of the handoff boundary, an absent entry
   and an unrecognised value; nothing falls through to success.
+- **An unfinished attempt is closed as interrupted** instead of being left open
+  for the next recovery to rewrite, so `history` shows what actually ended the
+  attempt (PRD 3).
+- **A cleared worktree no longer strands a session.** A recorded run directory
+  that is no longer a directory falls back to the project directory, is named
+  once in the log, and the attempt proceeds; only when neither is usable does the
+  attempt fail, and then with `ErrWorkspaceUnresolved` rather than an inherited
+  cwd (PRD 6).
+
+### Documentation
+
+- `docs/architecture.md`'s schema table now matches the migrations: `sessions` no
+  longer lists `ppid` and `process_start_time` (dropped in `0009`),
+  `recovery_attempts` lists `cost_usd` (`0011`), and `attention_episodes`
+  (`0010`) is named among the tables.
 
 ## [0.6.0] - 2026-11-13
 
