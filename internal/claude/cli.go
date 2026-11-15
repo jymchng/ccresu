@@ -47,6 +47,9 @@ type CLIOptions struct {
 	// Logger receives the recovery diagnostics for a handoff that needed a
 	// retry or a directory decision. Empty means slog.Default().
 	Logger *slog.Logger
+	// Guardrails are the flags every handoff carries (PRD 5 R2). The zero value
+	// adds none.
+	Guardrails Guardrails
 }
 
 // CLI is the version-aware adapter around the claude executable.

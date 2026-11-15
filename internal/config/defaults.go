@@ -47,6 +47,9 @@ func Defaults() Config {
 			VerificationTimeout:     NewDuration(120e9),
 			HealthCheckInterval:     NewDuration(10e9),
 			MaxConcurrentRecoveries: 3,
+			// Every guardrail is off: no cap, no flag. An upgrade must not
+			// change what a resume does or what it may cost (PRD 5 R1, R12).
+			Guardrails: Guardrails{},
 		},
 		Telegram: Telegram{
 			Enabled:                false,

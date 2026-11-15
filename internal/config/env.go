@@ -82,6 +82,12 @@ func envSetters() []envSetter {
 		{EnvPrefix + "RECOVERY__VERIFICATION_TIMEOUT", setDuration(func(c *Config) *Duration { return &c.Recovery.VerificationTimeout })},
 		{EnvPrefix + "RECOVERY__HEALTH_CHECK_INTERVAL", setDuration(func(c *Config) *Duration { return &c.Recovery.HealthCheckInterval })},
 		{EnvPrefix + "RECOVERY__MAX_CONCURRENT_RECOVERIES", setInt(func(c *Config) *int { return &c.Recovery.MaxConcurrentRecoveries })},
+		{EnvPrefix + "RECOVERY__GUARDRAILS__MAX_COST_USD_PER_SESSION", setFloat(func(c *Config) *float64 { return &c.Recovery.Guardrails.MaxCostUSDPerSession })},
+		{EnvPrefix + "RECOVERY__GUARDRAILS__MAX_COST_USD_PER_ATTEMPT", setFloat(func(c *Config) *float64 { return &c.Recovery.Guardrails.MaxCostUSDPerAttempt })},
+		{EnvPrefix + "RECOVERY__GUARDRAILS__MODEL", setString(func(c *Config) *string { return &c.Recovery.Guardrails.Model })},
+		{EnvPrefix + "RECOVERY__GUARDRAILS__EFFORT", setString(func(c *Config) *string { return &c.Recovery.Guardrails.Effort })},
+		{EnvPrefix + "RECOVERY__GUARDRAILS__FALLBACK_MODEL", setString(func(c *Config) *string { return &c.Recovery.Guardrails.FallbackModel })},
+		{EnvPrefix + "RECOVERY__GUARDRAILS__PERMISSION_MODE", setString(func(c *Config) *string { return &c.Recovery.Guardrails.PermissionMode })},
 
 		{EnvPrefix + "TELEGRAM__ENABLED", setBool(func(c *Config) *bool { return &c.Telegram.Enabled })},
 		{EnvPrefix + "TELEGRAM__BOT_TOKEN", setString(func(c *Config) *string { return &c.Telegram.BotToken })},

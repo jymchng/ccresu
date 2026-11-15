@@ -94,22 +94,67 @@ func StateIDFor(sessionID string) string {
 	return strings.ToLower(short)
 }
 
+// Guardrails is the part of PRD 5's configuration that rides a handoff: the
+// four flags the CLI documents without a print-mode restriction.
+//
+// The four print-mode-only flags are absent from this type on purpose, so a
+// caller cannot express them: `--max-budget-usd`, `--max-turns`, `--json-schema`
+// and `--permission-prompts` are all documented as print mode only, and a
+// `--bg` handoff is not print mode. `--permission-prompt-tool` is also absent,
+// not because the docs forbid it on a handoff but because ccresu configures no
+// MCP prompt server to answer with (PRD 5 §9.6).
+type Guardrails struct {
+	// Model is `--model <value>` when non-empty.
+	Model string
+	// Effort is `--effort <value>` when non-empty.
+	Effort string
+	// FallbackModel is `--fallback-model <value>` when non-empty.
+	FallbackModel string
+	// PermissionMode is `--permission-mode <value>` when non-empty.
+	PermissionMode string
+}
+
+// flags returns the guardrail flags in a fixed order, omitting every unset knob
+// entirely. An empty value never becomes an empty argument: `--model ""` would
+// ask the CLI for a model with no name.
+func (g Guardrails) flags() []string {
+	var flags []string
+	for _, flag := range []struct{ name, value string }{
+		{"--model", g.Model},
+		{"--effort", g.Effort},
+		{"--fallback-model", g.FallbackModel},
+		{"--permission-mode", g.PermissionMode},
+	} {
+		if value := strings.TrimSpace(flag.value); value != "" {
+			flags = append(flags, flag.name, value)
+		}
+	}
+	return flags
+}
+
 // HandoffArgs returns the handoff argument vector:
 //
-//	--bg --resume <session-id> --name <label> <message>
+//	--bg --resume <session-id> --name <label> [guardrail flags] <message>
 //
 // The print-mode flags are absent by construction: `--bg` cannot be combined
 // with `-p`/`--print`, so a vector that carries both would be rejected before a
 // session existed. No bare `--` separator is emitted either, because the
 // message is a positional argument and a separator would change how a leading
 // dash in it is read.
-func HandoffArgs(sessionID, message string) []string {
-	return []string{
+//
+// Guardrails are variadic so that "no guardrails configured" and "a caller that
+// does not know about guardrails" produce the identical vector; at most one set
+// is used, and an empty set adds nothing.
+func HandoffArgs(sessionID, message string, guardrails ...Guardrails) []string {
+	args := []string{
 		"--bg",
 		"--resume", sessionID,
 		"--name", HandoffLabel(sessionID),
-		message,
 	}
+	if len(guardrails) > 0 {
+		args = append(args, guardrails[0].flags()...)
+	}
+	return append(args, message)
 }
 
 var (
