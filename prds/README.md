@@ -182,3 +182,22 @@ Reviewing them out of order is fine; accepting them out of order is not, because
 PRDs 2 and 3 read state that only exists once PRD 1's sessions are background
 sessions, and PRD 6 changes *where* a recovery runs — a question that only has a
 meaning once PRD 1 has settled that recoveries run under the supervisor.
+
+## 8. Documents outside this set
+
+One later document lives in this directory without belonging to the six above. It
+is a defect PRD rather than an enhancement, it is not derived from the two
+documentation pages named in the header, and it measures itself against the
+release this set produced:
+
+| PRD | Problem it settles, in one line | Status |
+|---|---|---|
+| [`unresponsive-sessions-browser.md`](unresponsive-sessions-browser.md) | The sessions browser runs `claude` on the goroutine that reads the keyboard, so Enter paints nothing until the CLI answers and the keys pressed meanwhile act on the screen that answer produced | `Proposed` — design only |
+
+It keeps the standing constraints of §4 that apply to it — no new module
+dependency, linear history, no tag or release from a PRD, and a **Migration**
+subsection at the end of its §8 — and it needs no capability gate for the reason
+§2 gives for the withdrawn draft: where the new behaviour is unavailable, the
+browser behaves exactly as it does today. It follows the review structure §7
+describes, so it can be read with the same checklist; it is not one of the six and
+the dependency order above does not apply to it.
