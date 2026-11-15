@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Scope** | Six enhancements to `ccresu`, derived from two Claude Code documentation pages |
-| **Status** | PRDs 1–2 are **`Implemented`** on `main`, unreleased. PRDs 3–6 are **`Proposed`**. The §2 column below is the only place that is recorded — the PRD documents themselves are specifications and are not rewritten to describe what shipped |
+| **Status** | PRDs 1–3 are **`Implemented`** on `main`, unreleased. PRDs 4–6 are **`Proposed`**. The §2 column below is the only place that is recorded — the PRD documents themselves are specifications and are not rewritten to describe what shipped |
 | **Baseline** | `v0.6.0` (`55bf09e`) — the published version every PRD measures against |
 | **Sources** | <https://code.claude.com/docs/en/agent-view> and <https://code.claude.com/docs/en/cli-reference>, both read in full |
 | **Precedent** | [`usage-limit-refusal-misreported.md`](usage-limit-refusal-misreported.md), the accepted PRD that produced `v0.6.0` |
@@ -55,9 +55,12 @@ settled that recoveries run under the supervisor and therefore inherit the
 supervisor's worktree behaviour.
 
 `Implemented` means the requirement set is on `main` and unreleased: PRD 1's
-handoff (`claude.HandoffArgs`) and PRD 2's published-state read
+handoff (`claude.HandoffArgs`), PRD 2's published-state read
 (`claude.PublishedListing`, `recovery.Observe`, the `WAITING_FOR_INPUT` state and
-migration 0008) are in the tree, each with a test per requirement, while `v0.6.0`
+migration 0008) and PRD 3's supervisor surface (`claude.DaemonStatus`,
+`claude.DaemonLogs`, `recovery.SupervisorSource`,
+`claude.SupervisorVersionMismatch`, the interrupted attempt and the retimed unit)
+are in the tree, each with a test per requirement, while `v0.6.0`
 remains the published version (§4). It is not a claim that a release has happened,
 and it does not soften the guarantee the later PRDs make about the code they build
 on — it only records that the code now exists where they expect it.
