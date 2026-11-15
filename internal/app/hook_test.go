@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -364,4 +368,269 @@ func TestHookDegradesSilentlyWhenItCannotWork(t *testing.T) {
 			}
 		})
 	}
+}
+
+// callNames renders a provider call log for a failure message.
+func callNames(calls []claude.Call) []string {
+	names := make([]string, 0, len(calls))
+	for _, call := range calls {
+		names = append(names, call.Name)
+	}
+	return names
+}
+
+// TestHookMakesExactlyOneBoundedObservation is R5's "one bounded" read in its
+// literal form: one invocation performs exactly one observation of the published
+// listing, and nothing else. The observation is `claude agents --json --all`
+// behind PublishedListing — never a transcript tail, and never agent view, which
+// requires an interactive terminal the hook does not have.
+func TestHookMakesExactlyOneBoundedObservation(t *testing.T) {
+	h := newHarness(t)
+	h.seedSession(t, hookSession, nil)
+	publishBlocked(t, h, hookSession, "permission to edit .env")
+	h.stdin = hookJSON(hookNeedsInputType, hookSession)
+
+	if code, stdout, stderr := h.exec(t, "hook"); code != ExitOK || stdout != "" || stderr != "" {
+		t.Fatalf("hook = exit %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+	calls := h.provider.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("the provider was called %d time(s) %v, want exactly one observation",
+			len(calls), callNames(calls))
+	}
+	if calls[0].Name != "PublishedListing" {
+		t.Errorf("the hook called %q, want PublishedListing: a transcript read is not an observation",
+			calls[0].Name)
+	}
+}
+
+// TestHookEnqueuesThroughTheStoreSoTheKeyIsTheOnlyDedupe is R6: the hook does not
+// deduplicate — it hands the observation to the notifier, and the database's
+// `dedupe_key` unique constraint is the whole mechanism. The test therefore uses
+// the real notifier over the real store rather than the recording fake, because a
+// fake that merely records requests cannot prove that a second observation of one
+// block inserted nothing.
+func TestHookEnqueuesThroughTheStoreSoTheKeyIsTheOnlyDedupe(t *testing.T) {
+	h := newHarness(t)
+	h.seedSession(t, hookSession, nil)
+	publishBlocked(t, h, hookSession, "permission to edit .env")
+
+	notifier, err := telegram.New(telegram.Config{
+		Store:   h.store,
+		Sender:  &recordingSender{},
+		Clock:   h.clock,
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Enabled: map[storage.NotificationEvent]bool{storage.EventNeedsInput: true},
+	})
+	if err != nil {
+		t.Fatalf("build the real notifier: %v", err)
+	}
+	h.rt.Notifier = notifier
+
+	ctx := context.Background()
+	rows := func() []storage.Notification {
+		t.Helper()
+		notifications, err := h.store.ListNotificationsForSession(ctx, hookSession, 0)
+		if err != nil {
+			t.Fatalf("list notifications: %v", err)
+		}
+		return notifications
+	}
+
+	h.stdin = hookJSON(hookNeedsInputType, hookSession)
+	if code, stdout, stderr := h.exec(t, "hook"); code != ExitOK || stdout != "" || stderr != "" {
+		t.Fatalf("hook = exit %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+	if got := rows(); len(got) != 1 {
+		t.Fatalf("the hook queued %d notification(s), want exactly one", len(got))
+	}
+
+	// The stored key is the episode key, computed from the instant the storage
+	// layer persisted rather than from anything the hook invented.
+	episode, err := h.store.GetAttentionEpisode(ctx, hookSession)
+	if err != nil {
+		t.Fatalf("read the attention episode: %v", err)
+	}
+	want := string(storage.EventNeedsInput) + ":" + hookSession + ":" +
+		strconv.FormatInt(episode.StartedAt.UTC().Unix(), 10)
+	if first := rows()[0]; first.DedupeKey != want {
+		t.Errorf("dedupe key = %q, want the persisted episode key %q", first.DedupeKey, want)
+	}
+	if rows()[0].Event != storage.EventNeedsInput {
+		t.Errorf("event = %q, want %q", rows()[0].Event, storage.EventNeedsInput)
+	}
+
+	// The other documented type, for the same still-blocked session: a second
+	// observation of one episode, so the unique key must absorb it.
+	h.stdin = hookJSON(hookCompletedType, hookSession)
+	if code, _, _ := h.exec(t, "hook"); code != ExitOK {
+		t.Fatalf("second hook exit = %d, want %d", code, ExitOK)
+	}
+	if got := rows(); len(got) != 1 {
+		t.Fatalf("a second observation of one block queued %d notification(s), want 1: "+
+			"the store's unique key is the only dedupe", len(got))
+	}
+
+	// A block after the first one ended is a new episode, and therefore a new
+	// message. The clock has to move because the key is whole seconds, exactly as
+	// the storage layer truncates it.
+	h.clock.Advance(time.Minute)
+	if err := h.store.EndAttentionEpisode(ctx, hookSession); err != nil {
+		t.Fatalf("end the attention episode: %v", err)
+	}
+	if code, _, _ := h.exec(t, "hook"); code != ExitOK {
+		t.Fatalf("third hook exit = %d, want %d", code, ExitOK)
+	}
+	after := rows()
+	if len(after) != 2 {
+		t.Fatalf("a later block queued %d notification(s) in total, want 2: "+
+			"a second block of the same session is a second message", len(after))
+	}
+	if after[0].DedupeKey == after[1].DedupeKey {
+		t.Errorf("both blocks keyed %q, want distinct episode keys", after[0].DedupeKey)
+	}
+}
+
+// TestHookNeverWritesAClaudeCodeConfiguration is R12: installing the hook is
+// documented, never performed. Two forms of the same claim — one dynamic (a hook
+// invocation leaves a real ~/.claude tree byte-identical) and one static (no
+// production code path even names the CLI's settings file, so none can write it).
+func TestHookNeverWritesAClaudeCodeConfiguration(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o700); err != nil {
+		t.Fatalf("create %s: %v", claudeDir, err)
+	}
+	settings := filepath.Join(claudeDir, "settings.json")
+	sentinel := `{"hooks":{"Notification":[{"hooks":[{"type":"command",` +
+		`"command":"ccresu hook","timeout":15}]}]}}` + "\n"
+	if err := os.WriteFile(settings, []byte(sentinel), 0o600); err != nil {
+		t.Fatalf("write %s: %v", settings, err)
+	}
+	before := snapshotTree(t, claudeDir)
+	if len(before) == 0 {
+		t.Fatal("the fixture is empty: the test would assert nothing")
+	}
+
+	cases := []struct {
+		name  string
+		arm   func(*harness)
+		stdin string
+	}{
+		{"the successful path", func(*harness) {}, hookJSON(hookNeedsInputType, hookSession)},
+		{"a payload it cannot read", func(*harness) {}, "not JSON at all"},
+		{"a session it does not know", func(*harness) {}, hookJSON(hookNeedsInputType, hookUnknownSession)},
+		{"a configuration it cannot read", func(h *harness) {
+			h.loadErr = errors.New("config: permission denied")
+		}, hookJSON(hookNeedsInputType, hookSession)},
+		{"a database it cannot open", func(h *harness) {
+			h.buildErr = errors.New("storage: database is locked")
+		}, hookJSON(hookNeedsInputType, hookSession)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.seedSession(t, hookSession, nil)
+			publishBlocked(t, h, hookSession, "permission to edit .env")
+			tc.arm(h)
+			h.stdin = tc.stdin
+
+			if code, stdout, stderr := h.exec(t, "hook"); code != ExitOK || stdout != "" || stderr != "" {
+				t.Fatalf("hook = exit %d, stdout %q, stderr %q", code, stdout, stderr)
+			}
+			after := snapshotTree(t, claudeDir)
+			if diff := diffTrees(before, after); diff != "" {
+				t.Errorf("the hook changed the Claude Code configuration directory: %s", diff)
+			}
+		})
+	}
+
+	t.Run("no production code path names the settings file", func(t *testing.T) {
+		// A dynamic test can only prove the paths it exercised are clean; this
+		// proves the stronger claim, that no non-test source file in the module
+		// mentions the file at all — there is no write path to reach later.
+		root := filepath.Join("..", "..")
+		var offenders []string
+		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() {
+				switch entry.Name() {
+				case "node_modules", ".git", "dist", "bin":
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			contents, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return readErr
+			}
+			if strings.Contains(string(contents), "settings.json") {
+				offenders = append(offenders, path)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walk the module: %v", err)
+		}
+		if len(offenders) != 0 {
+			t.Errorf("production code names the CLI's settings file in %v, want no code path that can write it", offenders)
+		}
+	})
+}
+
+// snapshotTree reads every file under dir into a path-keyed map of its contents
+// and mode, which is what "the hook did not touch this" means concretely.
+func snapshotTree(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	tree := map[string]string{}
+	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		contents, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		info, statErr := entry.Info()
+		if statErr != nil {
+			return statErr
+		}
+		tree[path] = info.Mode().String() + "\x00" + string(contents)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("snapshot %s: %v", dir, err)
+	}
+	return tree
+}
+
+// diffTrees describes how after differs from before, or returns "" when the two
+// snapshots are identical.
+func diffTrees(before, after map[string]string) string {
+	var problems []string
+	for path, want := range before {
+		got, present := after[path]
+		switch {
+		case !present:
+			problems = append(problems, path+" was removed")
+		case got != want:
+			problems = append(problems, path+" was rewritten")
+		}
+	}
+	for path := range after {
+		if _, existed := before[path]; !existed {
+			problems = append(problems, path+" was created")
+		}
+	}
+	sort.Strings(problems)
+	return strings.Join(problems, "; ")
 }

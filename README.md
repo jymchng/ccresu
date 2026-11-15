@@ -159,6 +159,7 @@ Commands:
   doctor    check the environment ccresu runs in
   enable    allow ccresu to recover a session
   history   show the attempts and state transitions of a session
+  hook      consume a Claude Code Notification hook payload (always exits 0)
   inspect   show everything known about one session (same as 'sessions status')
   recover   resume one session now
   retry     retry a session whose attempt budget is spent
@@ -669,6 +670,47 @@ Each event is a separate switch (`notify_limit_detected`,
 of which default to `false`).
 Delivery is queued in SQLite by a sender goroutine, so a slow Telegram cannot
 delay a resume. Full details: [docs/telegram.md](docs/telegram.md).
+
+#### Hear about a blocked session immediately (optional)
+
+The daemon notices a `blocked` session at its next pass. A Claude Code
+`Notification` hook notices the moment the CLI announces it, and that is what
+`ccresu hook` is for: one observation, no state change, at most one message.
+
+ccresu never edits your Claude Code configuration — installing the hook is
+documented, never performed. Add it to the `hooks` object of
+`~/.claude/settings.json` yourself:
+
+```json
+{
+  "hooks": {
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ccresu hook",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Set the explicit `timeout`. A command hook's default is 600 seconds, and a hook
+that can hold a session for ten minutes is worse than no hook: `ccresu hook`
+bounds itself to a few seconds of stdin, one `claude agents --json --all` read
+and one database write, so 15 seconds is generous and the default is not.
+
+No `matcher` is given on purpose: the hook fires for every notification type and
+ignores all but `agent_needs_input` and `agent_completed`. It always exits 0 and
+prints nothing, it never creates, discovers, enables or recovers a session, and
+it cannot double up with the daemon — both producers compute the same
+attention-episode dedupe key, so the message arrives sooner, not twice.
+Requires `notify_needs_input: true`; the hook is an optimisation over the poll,
+so removing it changes nothing else.
 
 ### Step 13 — Script it: the REST and SSE API
 
