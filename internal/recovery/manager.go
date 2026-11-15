@@ -467,8 +467,9 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 		// The budget for this cycle is spent. The session goes back to
 		// DISCOVERED rather than to a terminal failure state: the daemon
 		// rediscovers it, re-reads the transcript and schedules the next reset,
-		// which starts a fresh budget. An operator never has to run
-		// `ccresu reset` to make that happen.
+		// which starts a fresh budget. No operator command is needed to make that
+		// happen; `ccresu retry` is only for an operator who would rather spend
+		// one more attempt now.
 		reason := fmt.Sprintf("maximum attempts reached (%d); returned to discovery for the next reset", m.maxAttempts)
 		if err := state.move(StateDiscovered, reason, 0); err != nil {
 			return Outcome{SessionID: sessionID, State: state.current}, err

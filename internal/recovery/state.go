@@ -50,7 +50,7 @@ const (
 	// why it is neither terminal nor settled, and why it is deliberately absent
 	// from PendingStates: no reconcile pass may resume it, or the cap would be
 	// defeated by rediscovery. It leaves only by an explicit operator action —
-	// `ccresu recover`, `ccresu reset`, or raising the cap.
+	// `ccresu recover`, `ccresu retry`, `ccresu disable`, or raising the cap.
 	StateSpendCapReached = storage.StateSpendCapReached
 )
 
@@ -84,7 +84,7 @@ var ErrInvalidTransition = errors.New("recovery: invalid state transition")
 // exhausted attempt budget produces. DISCOVERED is the start of a new cycle, not
 // the absence of one: entering it resets the attempt budget, so a session is
 // retried as often as its transcript still shows a usage limit, without an
-// operator running `ccresu reset`.
+// operator running anything.
 //
 // The only state that stops automatic work on its own is UNRECOVERABLE, and only
 // because ccresu has positively established that it has no verified way to

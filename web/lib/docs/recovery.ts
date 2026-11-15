@@ -129,19 +129,34 @@ export const recoveryDoc: DocPage = {
     },
     {
       kind: "h2",
-      text: "The operator exit from DISCOVERED",
+      text: "The operator exits from DISCOVERED",
     },
     {
       kind: "p",
-      text: "A session that ended `DISCOVERED` \u2014 for any reason \u2014 is not lost. `ccresu retry <session-id>` is how an operator says so, and it is deliberately narrow.",
+      text: "A session that ended `DISCOVERED` \u2014 for any reason \u2014 is not lost, and there is more than one way out. Which one to reach for depends on what you want to happen: spend another attempt now, or stop ccresu acting on the session at all.",
+    },
+    {
+      kind: "p",
+      text: "The first way out spends an attempt: `ccresu retry <id>` resumes the session now, which is `ccresu recover <id> --force` under a name that says what it is for \u2014 one more attempt on a session whose attempt budget is spent.",
     },
     {
       kind: "ul",
       items: [
-        "It moves `DISCOVERED` to `DISABLED` and nothing else: any other state is refused with exit code `4` and a message that names the state and the command to use instead.",
-        "It clears the stored error, so the session no longer looks broken.",
-        "It keeps the attempt row, its reason and the counter, so `ccresu history` still explains what happened.",
-        "It never resumes anything and never refunds an attempt. `ccresu retry <id>` refills the budget, `ccresu recover <id> --force` tries once more now, and `ccresu enable <id>` makes the session recoverable again with whatever budget it has left.",
+        "It is a manual request, and a manual request is the one thing the spend caps do not bind (PRD 5 R11). The attempt's cost is still recorded, and the refusal it walked past is still logged.",
+        "It refuses a session it cannot resume \u2014 one that is already `RESUMED`, or one in a settled state \u2014 with exit code `4` and a message naming the state and the command to use instead. Exit `3` means no such session.",
+        "It buys exactly one attempt and does not refill the budget. A fresh budget is what re-entering `DISCOVERED` gives, because the next discovery pass re-reads the transcript and schedules the next reset; the retry itself only spends past the spent one.",
+      ],
+    },
+    {
+      kind: "p",
+      text: "The second way out spends nothing: `ccresu disable <id>` parks the session in `DISABLED` from whatever state it is in, not only from `DISCOVERED`, and ccresu will not hand it off again.",
+    },
+    {
+      kind: "ul",
+      items: [
+        "It keeps the attempt row, its reason, the counter and the last recorded error, so `ccresu history` and `ccresu inspect` still explain what happened. It changes whether ccresu may act on the session, not the record of what happened to it \u2014 which is why a session parked this way still shows the error that ended it.",
+        "`ccresu enable <id>` is the edge back: it returns the session to `DISCOVERED`, where the next pass re-reads the transcript and decides afresh.",
+        "Exit codes: `3` for an unknown session, `2` for a bad argument.",
       ],
     },
     {
