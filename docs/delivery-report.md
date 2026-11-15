@@ -124,19 +124,27 @@ layer with only the process execution stubbed:
 3. Record the paused-goal companion message.
 4. Resolve 12:00 **Europe/Berlin** — not the host zone.
 5. Persist the schedule and wait.
-6. Reach the reset, recheck, and hand the continuation to the supervisor with the
-   same session id: `claude --bg --resume <session-id> --name
-   ccresu-<first-8-hex> "<message>"`.
-7. Prove the handoff from the CLI's `backgrounded · <short-id> · <name>` block,
-   which names what it created. Transcript growth is recorded as a diagnostic and
-   proves nothing on its own.
-8. Read the published state — one `claude agents --json --all` per pass, keyed by
-   `sessionId` — and reach `RESUMED` with the observation recorded on the attempt.
+6. Reach the reset, recheck, and hand the continuation to the supervisor, exactly
+   once, for the same session id and under a `ccresu-<first-8-hex>` label derived
+   from it: `--bg` first, `--resume <session-id>`, `--name <label>`, the message
+   last, and no print-mode flag anywhere.
+7. Prove the handoff from the CLI's `backgrounded · <short-id> · <name>` block. The
+   test asserts the handoff was accepted, carries a state id, and — explicitly —
+   that verification did **not** claim transcript growth.
+8. Reach `RESUMED`, persisted, with one session row and the same project path; the
+   attempt records the handoff state id, label, instant and copy flag, which is what
+   tells a restarting ccresu the work is the supervisor's.
 9. Queue and deliver exactly one Telegram success message.
 
-A `blocked` publication takes the other branch of the same map: it parks the
-session in `WAITING_FOR_INPUT` with the published `waitingFor` verbatim, sends no
-continuation, and raises exactly one needs-input milestone — never a success.
+This scenario proves the *handoff*, because that is where its proof now lies: its
+provider returns an empty listing on purpose (`tests/support`), so the session is
+"not observed" and the published state decides nothing here. The mapping that
+reads the published state — one `claude agents --json --all` per pass, keyed by
+`sessionId`, total over every documented value plus absent and unknown — is proven
+where the listing is scripted: the `internal/recovery` acceptance tests. Those
+also cover the other branch, where a `blocked` publication parks the session in
+`WAITING_FOR_INPUT` with the published `waitingFor` verbatim, sends no
+continuation, and raises exactly one needs-input milestone instead of a success.
 
 Plus two tighter scenarios: a restart in the middle of the wait
 (`TestScenarioSurvivesRestartMidWait`) and `ErrLimitNotCleared` — the limit is
