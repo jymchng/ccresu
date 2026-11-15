@@ -286,8 +286,13 @@ func TestRecoverEndpoint(t *testing.T) {
 	if !body.Resumed {
 		t.Errorf("resumed = false: %+v", body)
 	}
-	if !body.Verification.Proven || !body.Verification.SessionIDPreserved || !body.Verification.TranscriptGrew {
+	if !body.Verification.Proven || !body.Verification.SessionIDPreserved {
 		t.Errorf("verification = %+v", body.Verification)
+	}
+	// Growth is a diagnostic under PRD 2, so a handoff that was accepted must not
+	// claim the transcript it no longer owns grew.
+	if body.Verification.TranscriptGrew {
+		t.Errorf("verification = %+v, want no growth measured for a handoff", body.Verification)
 	}
 	if body.State != string(storage.StateResumed) {
 		t.Errorf("state = %q, want RESUMED", body.State)

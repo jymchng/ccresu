@@ -101,6 +101,22 @@ type Verification struct {
 	// It is reported but never used as proof: a launched process is not a
 	// resumed conversation.
 	Running bool
+	// PublishedState is the state the supervisor published for the conversation,
+	// verbatim: working, blocked, done, failed, stopped, a newer value ccresu
+	// does not know, or empty when it published none.
+	//
+	// It is kept as published rather than translated, because the one thing an
+	// operator needs to re-examine afterwards is what the CLI actually said.
+	PublishedState string
+	// ObservationRecorded reports that the supervisor's listing was read and
+	// carried an entry for this session. False means no observation was made or
+	// the session was not in the listing, and a verification that rests on
+	// published state cannot be proven without it.
+	ObservationRecorded bool
+	// Observation is the published state the verification rested on, verbatim,
+	// so the attempt row can record what was seen rather than what was inferred
+	// (PRD 2 / R13). Its zero value means no observation was made.
+	Observation StateObservation
 	// Notes explains every conclusion, including why a check could not be made.
 	Notes []string
 }
@@ -116,8 +132,14 @@ func (v Verification) Missing() []string {
 	if !v.SessionIDPreserved {
 		missing = append(missing, "the original session id was not confirmed")
 	}
-	if !v.TranscriptGrew {
-		missing = append(missing, "the transcript did not grow")
+	switch {
+	case !v.ObservationRecorded:
+		missing = append(missing,
+			"the supervisor published no session state for the resumed conversation")
+	case !v.Proven:
+		missing = append(missing, fmt.Sprintf(
+			"the supervisor published state %q, which does not establish that the conversation continued",
+			v.PublishedState))
 	}
 	return missing
 }
@@ -128,13 +150,44 @@ func (v Verification) Reason() string {
 		if v.HandoffAccepted {
 			return "the continuation was handed to the background supervisor"
 		}
-		return "the original session id was confirmed and its transcript grew"
+		return fmt.Sprintf("the supervisor published state %q for the conversation", v.PublishedState)
 	}
 	missing := v.Missing()
 	if len(missing) == 0 {
 		return "the resume could not be verified"
 	}
 	return strings.Join(missing, "; ")
+}
+
+// ObservePublished attaches the state the supervisor published and derives
+// Proven from it.
+//
+// This is the only way a non-handoff continuation can be proven. The decision is
+// passed in rather than re-derived so the manager and the verification cannot
+// disagree about what the same observation meant.
+func (v *Verification) ObservePublished(obs StateObservation, decision Decision) {
+	v.PublishedState = obs.State
+	v.ObservationRecorded = obs.InListing
+	v.Observation = obs
+	v.Proven = false
+	switch {
+	case decision.NeedsInput:
+		// A blocked session is not a recovered one. This is the defect PRD 2
+		// exists to close, and it is closed here as well as in the mapping so no
+		// single edit can reopen it.
+		v.Notes = append(v.Notes, decision.Reason)
+	case decision.State == StateResumed && v.SessionIDPreserved:
+		v.Proven = true
+		v.Notes = append(v.Notes, decision.Reason)
+	default:
+		if decision.Reason != "" {
+			v.Notes = append(v.Notes, decision.Reason)
+		}
+	}
+	if v.TranscriptGrew {
+		v.Notes = append(v.Notes,
+			"the transcript grew, which is recorded as a diagnostic: growth alone is not proof that the conversation continued")
+	}
 }
 
 // Verifier proves a resume continued the original conversation.
@@ -206,7 +259,13 @@ func (v Verifier) Verify(ctx context.Context, baseline Baseline, result claude.R
 		verification.Notes = append(verification.Notes,
 			"the session has a live process, but a live process is not proof that the conversation continued")
 	}
-	verification.Proven = verification.SessionIDPreserved && verification.TranscriptGrew
+	// Growth is recorded and stops there. R3: it is a diagnostic, and Proven is
+	// not computable from it — the caller attaches the supervisor's published
+	// state, which is the only evidence that can establish a continuation.
+	if verification.TranscriptGrew {
+		verification.Notes = append(verification.Notes,
+			"the transcript grew, but growth alone is not proof that the conversation continued")
+	}
 	return verification, nil
 }
 
@@ -246,9 +305,11 @@ func (v Verifier) await(ctx context.Context, baseline Baseline, result claude.Re
 		}
 
 		if measureGrowth(baseline, status, verification) {
+			// R3: growth is recorded and stops there. It is a diagnostic, not
+			// proof, so Proven is left alone: the caller attaches the
+			// supervisor's published state, which is the only evidence that can
+			// establish that the conversation continued.
 			verification.TranscriptGrew = true
-			verification.Proven = verification.SessionIDPreserved
-			verification.Proven = verification.Proven && verification.TranscriptGrew
 			return last, nil
 		}
 		if timeout < 0 || interval < 0 {

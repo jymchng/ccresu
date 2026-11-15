@@ -35,16 +35,22 @@ how the packages and tables fit together.
    `unknown_reset` and ccresu polls instead — 5m, 10m, 20m, then every 30m —
    rather than guessing. Both the instant and the poll count are persisted, so a
    restart continues the same wait instead of starting it again.
-5. **The resume.** When the schedule is due the session walks
+5. **The handoff.** When the schedule is due the session walks
    `WAITING_FOR_RESET → RESET_TIME_REACHED → CHECKING_SESSION → CHECKING_LIMIT →
-   RESUMING`, and ccresu runs
-   `claude -p --resume <session-id> --output-format json <message>` — the same
-   session id, with the continuation message last.
-6. **Verification.** Exit code 0 is not proof. The resume counts only when the
-   reported session id matches the stored one **and** the transcript has grown
-   past the stored baseline; the wait for that growth is bounded by 120s and
-   re-checked every 10s. Only then is the attempt closed as a success and the
-   session marked `RESUMED`.
+   RESUMING`, and ccresu hands the same session id to Claude Code's background
+   supervisor:
+   `claude --bg --resume <session-id> --name ccresu-<first-8-hex> "<message>"`.
+   The invocation returns as soon as the supervisor accepts the session, so the
+   work outlives `ccresu`; there is no print mode and no child process for
+   ccresu to own.
+6. **Observation.** Acceptance is proven by the `backgrounded · <short-id> ·
+   <name>` block the CLI prints. What happens afterwards is *read*, not inferred:
+   one `claude agents --json --all` per pass publishes `working`, `blocked`,
+   `done`, `failed` or `stopped` for the session, and that published state is
+   what the decision rests on. `blocked` parks the session in
+   `WAITING_FOR_INPUT` with the reason carried verbatim; a session missing from
+   the listing is `HandoffUnobserved`, never a failure; a transcript that grew is
+   recorded as a diagnostic and proves nothing on its own.
 7. **A refusal is a wait, not a failure.** If the CLI answers the resume with
    the limit banner, the attempt is finished with that banner, the banner is
    recorded as a usage limit, and the session returns to `WAITING_FOR_RESET`

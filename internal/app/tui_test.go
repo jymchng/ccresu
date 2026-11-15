@@ -482,6 +482,7 @@ func TestSessionsBrowserRecoversAndRetries(t *testing.T) {
 				Session:    resumed,
 				Transcript: claude.TranscriptInfo{Path: "/tmp/t.jsonl", Size: 400, Lines: 9},
 			}
+			// A handoff is what proves the continuation (PRD 2 / R3).
 			h.provider.OnResume = func(context.Context, string, string) (claude.ResumeResult, error) {
 				h.provider.Statuses[canonicalSessionID] = claude.SessionStatus{
 					Session:    resumed,
@@ -491,6 +492,9 @@ func TestSessionsBrowserRecoversAndRetries(t *testing.T) {
 					RequestedSessionID: canonicalSessionID,
 					SessionID:          canonicalSessionID,
 					Verified:           true,
+					Backgrounded:       true,
+					StateID:            claude.StateIDFor(canonicalSessionID),
+					Name:               claude.HandoffLabel(canonicalSessionID),
 				}, nil
 			}
 

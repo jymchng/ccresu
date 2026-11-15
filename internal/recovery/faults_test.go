@@ -404,14 +404,17 @@ func TestRecoverRecognisesAnAlreadyResumedSessionEvenIfBookkeepingFails(t *testi
 	inner := newTestStore(t)
 	seedSession(t, inner, recoverableSession(sessionA))
 	faulty := newFaultStore(inner, "SetSessionTranscriptMetrics", 0)
-	// The transcript must already have grown on the *first* status read: a
-	// provider that only grows on the second call would fall through to a real
+	// The supervisor must already publish the conversation as working on the
+	// *first* pass: a session it knows nothing about would fall through to a real
 	// resume, and the test would silently cover the wrong branch.
-	provider := &providerStub{statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
-		status := statusFor(sessionID, 14, 280)
-		status.Running = true
-		return status, nil
-	}}
+	provider := &providerStub{
+		statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
+			status := statusFor(sessionID, 14, 280)
+			status.Running = true
+			return status, nil
+		},
+		listingFn: publishedWorking(sessionA),
+	}
 	manager := testManager(t, faulty, provider, nil)
 
 	outcome, err := manager.Recover(context.Background(), sessionA)
@@ -422,13 +425,13 @@ func TestRecoverRecognisesAnAlreadyResumedSessionEvenIfBookkeepingFails(t *testi
 		t.Errorf("outcome = %+v, want RESSUMED with Resumed=true", outcome)
 	}
 	if !outcome.Verification.Proven {
-		t.Error("Proven = false, want true: the transcript grew on its own")
+		t.Error("Proven = false, want true: the supervisor published the session as working")
 	}
 	if provider.resumeCount() != 0 {
 		t.Errorf("resume calls = %d, want 0: the already-resumed shortcut must be taken, not a real resume",
 			provider.resumeCount())
 	}
-	if !containsNote(outcome.Verification.Notes, "already continued on its own") {
+	if !containsNote(outcome.Verification.Notes, "continued on its own") {
 		t.Errorf("notes = %v, want the already-resumed explanation", outcome.Verification.Notes)
 	}
 	if faulty.count("SetSessionTranscriptMetrics") == 0 {
@@ -613,8 +616,11 @@ func TestVerifierAppliesItsDocumentedDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if !got.Proven {
-		t.Errorf("Proven = false, want true: the transcript grew on the first check")
+	if !got.TranscriptGrew {
+		t.Error("TranscriptGrew = false, want true: the growth is the measurement the bound exists to collect")
+	}
+	if got.Proven {
+		t.Error("Proven = true, want false: growth is a diagnostic, not proof (PRD 2 / R3)")
 	}
 	if provider.statusCount() != 1 {
 		t.Errorf("status calls = %d, want 1: growth must be accepted immediately", provider.statusCount())

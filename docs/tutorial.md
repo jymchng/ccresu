@@ -310,7 +310,7 @@ WHEN                     TRANSITION                                 REASON
 2026-11-05 03:29:03 +08  RESET_TIME_REACHED -> CHECKING_SESSION     checking the session before resuming
 2026-11-05 03:29:03 +08  CHECKING_SESSION -> CHECKING_LIMIT         checking the usage limit has cleared
 2026-11-05 03:29:03 +08  CHECKING_LIMIT -> RESUMING                 resuming the original session
-2026-11-05 03:29:03 +08  RESUMING -> RESUMED                        the original session resumed and the conversation grew
+2026-11-05 03:29:03 +08  RESUMING -> RESUMED                        the supervisor accepted the continuation as 3f9d1c07 (ccresu-3f9d1c07)
 ```
 
 `--limit N` caps the number of transitions shown (default 50; the newest are
@@ -401,16 +401,16 @@ finds the next reset time and schedules another attempt with a fresh budget, so
 recovery resumes on its own. `ccresu retry <id>` and
 `ccresu recover <id> --force` are there if you would rather it happened now.
 
-One failure is not the session's fault at all: `claude -p --resume` refuses while
-the session is still attached to Claude Code's background agent
+One failure is not the session's fault at all: a handoff refuses while
+the session is still attached to a Claude Code background agent
 (`That session is running in the background (837eaaea) …`). ccresu treats that as
 "busy", not "gone". In the same attempt it runs `claude stop <job-id>` — the
 eight-hex job name that refusal prints, not the session UUID; `claude stop`
 answers a UUID with `No job matching` and exit 1 — and then repeats the
-*identical* resume once, so the session ends up `RESUMED` instead of failing
+*identical* handoff once, so the session ends up `RESUMED` instead of failing
 without you doing anything. The conversation is untouched — same session id, same
 transcript — and the stop appears in the log, not in the attempt row. If the stop
-fails, or the second resume refuses again, the original error is reported
+fails, or the second handoff refuses again, the original error is reported
 unchanged and the session returns to `DISCOVERED` like any other failed attempt.
 
 

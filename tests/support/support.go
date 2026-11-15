@@ -351,6 +351,16 @@ func (p *GrowingProvider) GetSessionStatus(_ context.Context, _ string) (claude.
 	}, nil
 }
 
+// PublishedListing implements claude.SessionProvider.
+//
+// The suite's provider predates the published-state read, so it reports nothing:
+// an empty successful listing means the supervisor has no opinion, which the
+// recovery mapping treats as "not observed" rather than as a verdict. Tests that
+// need a published state script it explicitly.
+func (p *GrowingProvider) PublishedListing(context.Context) (claude.PublishedListing, error) {
+	return claude.PublishedListing{ReadAt: BaseTime}, nil
+}
+
 // ResumeSession implements claude.SessionProvider.
 func (p *GrowingProvider) ResumeSession(_ context.Context, id, message string) (claude.ResumeResult, error) {
 	if p.ResumeErr != nil {

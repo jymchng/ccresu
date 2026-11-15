@@ -199,6 +199,9 @@ func TestDaemonActsOnADueSchedule(t *testing.T) {
 		Session:    claude.Session{ID: canonicalSessionID, Recoverable: true},
 		Transcript: claude.TranscriptInfo{Path: "/tmp/t.jsonl", Size: 400, Lines: 9},
 	}
+	// A handoff is what proves the continuation (PRD 2 / R3): the CLI's
+	// `backgrounded` block, not a transcript measurement. The fake still appends
+	// to the transcript, and it is recorded as a diagnostic.
 	h.provider.OnResume = func(context.Context, string, string) (claude.ResumeResult, error) {
 		h.provider.Statuses[canonicalSessionID] = claude.SessionStatus{
 			Session:    claude.Session{ID: canonicalSessionID, Recoverable: true},
@@ -208,8 +211,11 @@ func TestDaemonActsOnADueSchedule(t *testing.T) {
 			RequestedSessionID: canonicalSessionID,
 			SessionID:          canonicalSessionID,
 			Verified:           true,
+			Backgrounded:       true,
+			StateID:            claude.StateIDFor(canonicalSessionID),
+			Name:               claude.HandoffLabel(canonicalSessionID),
 			Subtype:            "success",
-			Result:             "continued",
+			Result:             "backgrounded",
 		}, nil
 	}
 

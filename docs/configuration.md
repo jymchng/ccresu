@@ -161,7 +161,7 @@ detector:
 | `multiplier` | `2.0` | Exponential growth factor. |
 | `jitter` | `0.15` | ±15% randomisation so retries do not synchronise. |
 | `startup_timeout` | `60s` | How long a resumed child may take to show life. |
-| `verification_timeout` | `120s` | How long the verifier watches for transcript growth. |
+| `verification_timeout` | `120s` | How long ccresu waits for the supervisor to accept a handoff and for the published state to settle. Bounds the watch, not the work: the supervisor keeps running after the attempt closes. |
 | `health_check_interval` | `10s` | Liveness polling of a running attempt. |
 | `max_concurrent_recoveries` | `3` | Parallel resumes. |
 

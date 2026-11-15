@@ -33,6 +33,16 @@ const (
 	StateUserTerminated     = storage.StateUserTerminated
 	StateDisabled           = storage.StateDisabled
 	StateUnrecoverable      = storage.StateUnrecoverable
+	// StateWaitingForInput is a session the supervisor reports as `blocked`: it
+	// needs a permission, a sandbox decision, an answer or an expired login
+	// cleared before it can continue, and nothing ccresu can do unblocks it.
+	//
+	// It is Pending — a restarted daemon re-observes it, because the operator
+	// may have answered the prompt while ccresu was down — and it is not
+	// Settled, because the conversation is not finished. What it is not is a
+	// destination for a handoff: a continuation queued behind an unanswered
+	// prompt is waste, so a session in this state is observed, never resumed.
+	StateWaitingForInput = storage.StateWaitingForInput
 )
 
 // ErrInvalidTransition reports an attempt to move a session along an edge that
@@ -110,13 +120,15 @@ var transitions = map[State]map[State]struct{}{
 		StateDiscovered:      {},
 	},
 	StateCheckingSession: {
-		StateCheckingLimit:  {},
-		StateResumed:        {}, // it resumed on its own; nothing to do
-		StateRetryWait:      {}, // the status check itself failed
-		StateUnrecoverable:  {},
-		StateUserTerminated: {},
-		StateDisabled:       {},
-		StateDiscovered:     {},
+		StateCheckingLimit:   {},
+		StateResumed:         {}, // it resumed on its own; nothing to do
+		StateCompleted:       {}, // it had already finished its last turn
+		StateRetryWait:       {}, // the status check itself failed
+		StateUnrecoverable:   {},
+		StateUserTerminated:  {},
+		StateDisabled:        {},
+		StateDiscovered:      {},
+		StateWaitingForInput: {}, // the supervisor says a human must act
 	},
 	StateCheckingLimit: {
 		StateResuming:        {},
@@ -135,6 +147,9 @@ var transitions = map[State]map[State]struct{}{
 		StateUnrecoverable:   {},
 		StateUserTerminated:  {},
 		StateDisabled:        {},
+		// A resume that lands on a blocked session parks instead of pretending
+		// the continuation was delivered.
+		StateWaitingForInput: {},
 	},
 	StateRetryWait: {
 		StateCheckingSession: {},
@@ -142,6 +157,24 @@ var transitions = map[State]map[State]struct{}{
 		StateDiscovered:      {},
 		StateUserTerminated:  {},
 		StateDisabled:        {},
+	},
+	// WAITING_FOR_INPUT is a park, not a verdict: the supervisor published
+	// `blocked`, so ccresu cannot act, but the conversation is not finished. The
+	// state therefore needs every edge a live state has — including DISCOVERED,
+	// so a failure while parked can still be recorded — plus itself, because a
+	// pass that observes `blocked` again re-enters the same state and writes the
+	// audit row. It is deliberately not settled (a restarted daemon must
+	// re-observe it) and deliberately not resumable from (a continuation would
+	// queue behind a prompt nobody is there to answer).
+	StateWaitingForInput: {
+		StateRunning:         {},
+		StateResumed:         {},
+		StateRetryWait:       {},
+		StateUserTerminated:  {},
+		StateDisabled:        {},
+		StateUnrecoverable:   {},
+		StateDiscovered:      {},
+		StateWaitingForInput: {},
 	},
 	// RESUMED is not strictly terminal — a resumed session can hit its limit
 	// again — but a second recovery is only legal after the session has been
@@ -214,6 +247,9 @@ func Terminal(s State) bool {
 // was terminated, was disabled or proved unrecoverable. Recovery refuses to
 // touch a settled session, which is what stops a completed conversation from
 // being resumed again.
+//
+// WAITING_FOR_INPUT is deliberately absent: the conversation is not finished,
+// so ccresu must keep observing it until the operator unblocks it.
 func Settled(s State) bool {
 	switch s {
 	case StateResumed, StateCompleted, StateUserTerminated, StateDisabled, StateUnrecoverable:
@@ -224,12 +260,21 @@ func Settled(s State) bool {
 }
 
 // Pending reports whether a session in state s still wants automatic work: it
-// is waiting for a reset, being checked, resuming, or waiting to retry. These
-// are the states a restarted daemon must pick up.
+// is waiting for a reset, being checked, resuming, waiting to retry, or parked
+// because the supervisor published `blocked`. These are the states a restarted
+// daemon must pick up.
+//
+// WAITING_FOR_INPUT is pending even though ccresu cannot act on it: the
+// conversation is not finished, and the pass that re-observes it is what notices
+// the operator unblocked it. Dropping it here would strand a parked session
+// across a restart, which is the failure R11 exists to prevent. Being pending is
+// not the same as being resumable — a session in this state is observed, never
+// handed off.
 func Pending(s State) bool {
 	switch s {
 	case StateUsageLimitDetected, StateWaitingForReset, StateResetTimeReached,
-		StateCheckingSession, StateCheckingLimit, StateResuming, StateRetryWait:
+		StateCheckingSession, StateCheckingLimit, StateResuming, StateRetryWait,
+		StateWaitingForInput:
 		return true
 	default:
 		return false
@@ -246,6 +291,7 @@ func PendingStates() []State {
 		StateCheckingLimit,
 		StateResuming,
 		StateRetryWait,
+		StateWaitingForInput,
 	}
 }
 

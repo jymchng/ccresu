@@ -85,7 +85,9 @@ relate.
 These hold for the whole set and for any implementation that follows it:
 
 - **PRDs only.** This directory changes; `internal/`, `cmd/` and `web/` do not.
-  No PRD here may claim work is done, in progress, or released.
+  The §2 status column is the one place implementation state is recorded; the PRD
+  documents themselves stay specifications and are never rewritten to describe
+  what shipped.
 - **No new module dependencies.** `go.mod` is unchanged by this set.
 - **No tag, no release, no publish.** `v0.6.0` remains the published version.
   An accepted PRD that ships later would bump the version then, not now.

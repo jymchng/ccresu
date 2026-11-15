@@ -525,7 +525,7 @@ WHEN                     TRANSITION                                 REASON
 2026-11-05 03:29:03 +08  RESET_TIME_REACHED -> CHECKING_SESSION     checking the session before resuming
 2026-11-05 03:29:03 +08  CHECKING_SESSION -> CHECKING_LIMIT         checking the usage limit has cleared
 2026-11-05 03:29:03 +08  CHECKING_LIMIT -> RESUMING                 resuming the original session
-2026-11-05 03:29:03 +08  RESUMING -> RESUMED                        the original session resumed and the conversation grew
+2026-11-05 03:29:03 +08  RESUMING -> RESUMED                        the supervisor accepted the continuation as 3f9d1c07 (ccresu-3f9d1c07)
 ```
 
 `--limit N` caps the number of transitions shown (default 50; the newest are
@@ -622,16 +622,16 @@ finds the next reset time and schedules another attempt with a fresh budget, so
 recovery resumes on its own. `ccresu retry <id>` and
 `ccresu recover <id> --force` are there if you would rather it happened now.
 
-One failure is not the session's fault at all: `claude -p --resume` refuses while
-the session is still attached to Claude Code's background agent
+One failure is not the session's fault at all: a handoff refuses while the
+session is still attached to a Claude Code background agent
 (`That session is running in the background (837eaaea) …`). ccresu treats that as
 "busy", not "gone". In the same attempt it runs `claude stop <job-id>` — the
 eight-hex job name that refusal prints, not the session UUID; `claude stop`
 answers a UUID with `No job matching` and exit 1 — and then repeats the
-*identical* resume once, so the session ends up `RESUMED` instead of failing
+*identical* handoff once, so the session ends up `RESUMED` instead of failing
 without you doing anything. The conversation is untouched — same session id, same
 transcript — and the stop appears in the log, not in the attempt row. If the stop
-fails, or the second resume refuses again, the original error is reported
+fails, or the second handoff refuses again, the original error is reported
 unchanged and the session returns to `DISCOVERED` like any other failed attempt.
 
 ### Step 12 — Turn on Telegram notifications (optional)
@@ -862,26 +862,37 @@ The in-repository sources:
 ## Verified Claude Code interfaces
 
 ccresu only uses interfaces that exist in the installed CLI (inspected with
-`claude --help` / `claude agents --help`, currently Claude Code 2.1.223):
+`claude --help` / `claude agents --help`; the verified floor is Claude Code
+2.1.257):
 
 | Purpose | Interface |
 |---|---|
 | Discover sessions | `claude agents --json` (`--all`, `--cwd <path>`) |
+| Read what the supervisor published | `claude agents --json --all` (one read per recovery pass, keyed by `sessionId`) |
 | Session transcripts | `~/.claude/projects/<slugified-cwd>/<session-id>.jsonl` |
 | Per-session environment | `~/.claude/session-env/<session-id>/` |
-| Resume the original session | `claude -p --resume <session-id> "<continuation message>"` |
+| Continue the original session | `claude --bg --resume <session-id> --name ccresu-<first-8-hex> "<continuation message>"` |
 | Release a session a background agent still holds | `claude stop <job-id>` (the eight-hex job name the refusal prints) |
 
-`--resume` is the command ccresu lives on. `claude stop` is the one exception, and
-it exists for one situation: `claude -p --resume` refuses while the session is
-still attached to the interactive CLI's background agent, so ccresu stops that
-agent and repeats the identical resume. The job name is taken from the refusal
-itself ("or `claude stop 837eaaea` first"); the session UUID is never passed,
-because `claude stop` resolves only eight-hex job names and answers anything else
-with `No job matching` and exit 1. The conversation is untouched — same
-session id, same transcript. There is no `--fork-session` (it would continue a
-copy instead of your conversation), no new session id, no TTY and no keystroke
-injection, and if the stop fails the original refusal is reported unchanged. See
+`--bg --resume` is the command ccresu lives on. It is a **handoff**, not a run:
+the invocation returns as soon as the supervisor accepts the session, and the
+supervisor — not `ccresu` — owns the process afterwards, which is why a resume
+survives `ccresu` exiting and appears in agent view. Acceptance is proven by the
+`backgrounded · <short-id> · <name>` block the CLI prints; the session id is the
+same conversation UUID as before, and the label is derived from it, so two
+handoffs of one session cannot produce two names. There is no print mode
+(`-p --resume`, `--output-format json`) and no transcript-growth proof: `--bg`
+cannot be combined with `-p`, and the published state is what the decision reads.
+`claude stop` is the one exception to "no lifecycle commands", and it exists for
+one situation: a handoff refuses while the session is still attached to a
+background agent, so ccresu stops that agent and repeats the identical handoff.
+The job name is taken from the refusal itself ("or `claude stop 837eaaea`
+first"); the session UUID is never passed, because `claude stop` resolves only
+eight-hex job names and answers anything else with `No job matching` and exit 1.
+The conversation is untouched — same session id, same transcript. There is no
+`--fork-session` (it would continue a copy instead of your conversation), no new
+session id, no TTY and no keystroke injection, and if the stop fails the original
+refusal is reported unchanged. See
 [docs/recovery.md](docs/recovery.md) for the exact mechanism and its limitations.
 
 ## Interfaces
@@ -902,12 +913,11 @@ make cover-check     # enforces the 80% statement-coverage gate
 make e2e             # stop-then-resume and `reset` against a stub `claude` CLI
 ```
 
-`make e2e` runs `tests/scripts/background-resume-e2e.sh`: it builds the real
-binary, puts a stub `claude` on `PATH` that refuses the first resume because the
-session is still attached to a background agent, and then asserts that `ccresu
-recover` stops the session, repeats the identical resume, verifies that the
-conversation grew, and reports `RESUMED` — followed by a session that cannot be
-resumed and is therefore returned to `DISCOVERED`.
+`make e2e` runs `tests/scripts/background-resume-e2e.sh`. That script is **stale**:
+it still drives the retired print-mode resume (`claude -p --resume … --output-format
+json`) and asserts that verification proved growth, so it fails against the
+current binary. It is being rewritten against the handoff; until that lands, treat
+`make e2e` as red and `go test ./...` plus `go test -race ./...` as the gates.
 
 The same script with `--pre-fix` runs the identical scenario against a pre-fix
 checkout and expects the old outcome: `PERMANENTLY_FAILED` after one refused

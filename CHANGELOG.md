@@ -4,6 +4,47 @@ All notable changes to ccresu are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A recovery is now proven by what the supervisor says, not by a transcript.**
+  `claude --bg --resume <session-id> --name ccresu-<first-8-hex> "<message>"`
+  hands the continuation to Claude Code's background supervisor and returns as
+  soon as the CLI prints its `backgrounded · <short-id> · <name>` block, so a
+  resume outlives `ccresu` and is visible in agent view (PRD 1). Print mode —
+  `-p --resume`, `--output-format json`, stop-then-resume — is gone rather than
+  kept behind a flag, and the version floor is `2.1.257`.
+- **`WAITING_FOR_INPUT`.** A session the supervisor publishes as `blocked` is
+  parked instead of resumed: the reason it published (`waitingFor`) is carried
+  verbatim, no continuation is sent, and the session is observed again rather
+  than settled, so unblocking it is noticed. One `claude agents --json --all`
+  query per pass serves every session in that pass (PRD 2).
+- **The observation is on the attempt row.** `recovery_attempts` gains
+  `observed_state`, `observed_status`, `observed_waiting_for`, `observed_at` and
+  `observed_listed`, and `ccresu inspect` renders them — printing *not recorded*
+  for attempts that predate the change, because "we did not look" and "nothing
+  was happening" are different facts.
+
+### Changed
+
+- **Transcript growth is a diagnostic, never proof.** A longer transcript
+  alongside a published `blocked` no longer proves anything, and `ccresu recover`
+  reports the proof it actually has ("the continuation was handed to the
+  background supervisor", or the published state) instead of the retired
+  "session id preserved and transcript grew" sentence. The success notification
+  says the conversation continues under the supervisor for the same reason.
+- **A failed listing is recorded, not read as empty.** An unreadable
+  `agents --json` read is `ErrObservationUnavailable` and leaves the attempt
+  open, while a session missing from a successful read is `HandoffUnobserved`
+  and retried — neither is a failure verdict.
+
+### Fixed
+
+- **A blocked session can no longer be reported `RESUMED`.** The mapping covers
+  every documented state, both sides of the handoff boundary, an absent entry
+  and an unrecognised value; nothing falls through to success.
+
 ## [0.6.0] - 2026-11-13
 
 ### Fixed

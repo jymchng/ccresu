@@ -102,7 +102,10 @@ state="$STUB_STATE"
 
 case "${1:-}" in
 --version)
-	printf '2.1.223 (Claude Code)\n'
+	# The version floor moved to 2.1.257 when print mode was retired (PRD 1), so
+	# the stub must report a CLI that can hand off. Reporting the host's real
+	# version would make this suite depend on whatever is installed.
+	printf '2.1.257 (Claude Code)\n'
 	exit 0
 	;;
 agents)

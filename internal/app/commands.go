@@ -528,6 +528,36 @@ func (a *App) writeSessionDetail(ctx context.Context, rt *Runtime, id string, w 
 		if attempt.Error != "" {
 			a.field(w, "error", attempt.Error)
 		}
+
+		// PRD 2 / R13: what the supervisor published about the session when the
+		// attempt was made, verbatim. This is the evidence the decision rested
+		// on, so `inspect` must be able to say what was seen rather than what
+		// was inferred from a file size.
+		//
+		// "not recorded" is a distinct answer, not an empty one. An attempt
+		// recorded before the observation columns existed genuinely has no
+		// observation, and rendering that as a blank state would present
+		// "we did not look" as "nothing was there" (R8).
+		fmt.Fprintln(w, "")
+		fmt.Fprintln(w, "Observed")
+		observation := attempt.Observation
+		if !observation.Recorded() {
+			a.field(w, "state", "not recorded")
+		} else {
+			a.field(w, "state", emptyDash(observation.State))
+			if observation.Status != "" {
+				a.field(w, "status", observation.Status)
+			}
+			if observation.WaitingFor != "" {
+				a.field(w, "waiting for", observation.WaitingFor)
+			}
+			a.field(w, "at", formatTime(observation.ObservedAt, loc))
+			listed := "not recorded"
+			if observation.Listed != nil {
+				listed = yesNo(*observation.Listed)
+			}
+			a.field(w, "in listing", listed)
+		}
 	}
 
 	if scheduleErr == nil {
@@ -948,6 +978,13 @@ func (a *App) reportOutcome(rt *Runtime, outcome recovery.Outcome) error {
 
 // describeVerification renders the proof that the original conversation
 // continued, so a failed resume is never mistaken for a successful one.
+//
+// A proven resume has had two shapes since print mode was retired: the
+// supervisor accepted a handoff, or it published a state that establishes the
+// conversation continued. Naming growth in either case would describe evidence
+// ccresu no longer collects as proof, so the proof is rendered from the
+// verification itself (recovery.Verification.Reason) rather than from a fixed
+// sentence.
 func describeVerification(outcome recovery.Outcome) string {
 	verification := outcome.Verification
 	if !verification.Proven {
@@ -956,7 +993,7 @@ func describeVerification(outcome recovery.Outcome) string {
 		}
 		return "not proven"
 	}
-	return "proven: session id preserved and transcript grew"
+	return "proven: " + verification.Reason()
 }
 
 // requireRecovery returns the recovery manager or a clear error when automatic

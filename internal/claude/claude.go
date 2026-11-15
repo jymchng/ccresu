@@ -356,6 +356,15 @@ type SessionProvider interface {
 	GetSession(ctx context.Context, sessionID string) (Session, error)
 	// GetSessionStatus returns the current status of one session.
 	GetSessionStatus(ctx context.Context, sessionID string) (SessionStatus, error)
+	// PublishedListing returns the supervisor's published state for every
+	// session it knows, in one query.
+	//
+	// It is separate from GetSessionStatus because the two answer different
+	// questions. Discovery answers "which conversations exist on this machine",
+	// merging the listing with the on-disk store; this answers "what does the
+	// supervisor say is happening", and the one thing it can say that discovery
+	// cannot is that a session is not in the listing at all.
+	PublishedListing(ctx context.Context) (PublishedListing, error)
 	// ResumeSession continues an existing session and verifies the session id.
 	ResumeSession(ctx context.Context, sessionID, message string) (ResumeResult, error)
 }

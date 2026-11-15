@@ -1,6 +1,9 @@
 package recovery
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // MilestoneKind names a recovery moment an operator may want to be told about.
 //
@@ -39,6 +42,18 @@ const (
 	// verdict about the conversation, and calling it "automatic recovery
 	// stopped" would be a false alarm every night.
 	MilestonePermanent MilestoneKind = "permanent_failure"
+	// MilestoneNeedsInput is reported when the supervisor publishes `blocked`
+	// for a session: it is waiting on a permission prompt, a sandbox decision,
+	// an answer, or an expired login that only the operator can clear.
+	//
+	// The kind is named for the event PRD 4 maps it onto (`needs_input`), so the
+	// two vocabularies cannot drift apart.
+	//
+	// It is raised whether or not the observation carried a `waitingFor`. A live
+	// payload shows blocked entries with no reason at all, and a missing reason
+	// is a fact worth reporting rather than a reason to stay silent. Use
+	// Milestone.NeedsInputReason to render both cases honestly.
+	MilestoneNeedsInput MilestoneKind = "needs_input"
 )
 
 // Milestone is one recovery moment, carrying the facts a message needs.
@@ -54,6 +69,23 @@ type Milestone struct {
 	MaxAttempts int
 	// Cause is the failure, for the two failure kinds. Nil otherwise.
 	Cause error
+	// Observation is the published state a needs-input milestone was raised
+	// from, verbatim. It is the payload the message is built from, so the
+	// operator sees what the CLI said — including that it said no reason —
+	// rather than a paraphrase.
+	Observation StateObservation
+}
+
+// NeedsInputReason returns the reason the supervisor published, verbatim, and
+// whether it published one at all.
+//
+// The two answers are what keep the operator-facing message honest: a blocked
+// session with `waitingFor: "permission prompt"` names the prompt, and a blocked
+// session with no `waitingFor` says no reason was reported. Neither case invents
+// the other, and neither suppresses the milestone.
+func (m Milestone) NeedsInputReason() (reason string, reported bool) {
+	reason = strings.TrimSpace(m.Observation.WaitingFor)
+	return reason, reason != ""
 }
 
 // Observer receives the milestones of every recovery.

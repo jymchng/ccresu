@@ -468,15 +468,21 @@ func TestRecoverResumesAWaitingSession(t *testing.T) {
 		Session:    resumed,
 		Transcript: claude.TranscriptInfo{Path: "/tmp/t.jsonl", Size: 400, Lines: 9},
 	}
+	// A handoff, because print mode is retired (PRD 1): the CLI's `backgrounded`
+	// block is what proves the continuation, and the transcript is a diagnostic
+	// from that moment on (PRD 2 / R3).
 	h.provider.ResumeResults[canonicalSessionID] = claude.ResumeResult{
 		RequestedSessionID: canonicalSessionID,
 		SessionID:          canonicalSessionID,
 		Verified:           true,
-		Result:             "continued",
+		Backgrounded:       true,
+		StateID:            claude.StateIDFor(canonicalSessionID),
+		Name:               claude.HandoffLabel(canonicalSessionID),
+		Result:             "backgrounded",
 		Subtype:            "success",
 	}
-	// The resumed run appends to the transcript; verification must observe that
-	// growth rather than a frozen measurement.
+	// The supervisor's own process writes the transcript now, so the fake still
+	// appends to it: the numbers are reported as a diagnostic, never as proof.
 	h.provider.OnResume = func(context.Context, string, string) (claude.ResumeResult, error) {
 		h.provider.Statuses[canonicalSessionID] = claude.SessionStatus{
 			Session:    resumed,

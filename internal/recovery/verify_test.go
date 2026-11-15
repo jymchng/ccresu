@@ -36,7 +36,7 @@ func statusFor(id string, lines, size int64) claude.SessionStatus {
 	}
 }
 
-func TestVerifierProvesGrowthByLineCount(t *testing.T) {
+func TestVerifierMeasuresGrowthByLineCount(t *testing.T) {
 	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
 		return statusFor(sessionA, 9, 180), nil
 	}}
@@ -46,21 +46,25 @@ func TestVerifierProvesGrowthByLineCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify = %v, want nil", err)
 	}
-	if !got.SessionIDPreserved || !got.TranscriptGrew || !got.Proven {
-		t.Fatalf("Verification = %+v, want a proven resume", got)
+	// PRD 2 / R3: growth is measured, recorded and never believed.
+	if !got.SessionIDPreserved || !got.TranscriptGrew {
+		t.Fatalf("Verification = %+v, want the growth measured and the id preserved", got)
+	}
+	if got.Proven {
+		t.Fatal("Proven = true, want false: growth alone is not proof that the conversation continued")
 	}
 	if got.LinesBefore != 5 || got.LinesAfter != 9 || got.SizeBefore != 100 || got.SizeAfter != 180 {
 		t.Errorf("measurements = %+v, want the before/after snapshots", got)
 	}
-	if reason := got.Reason(); !strings.Contains(reason, "grew") {
-		t.Errorf("Reason = %q, want it to explain the success", reason)
+	if !containsNote(got.Notes, "growth alone is not proof") {
+		t.Errorf("Notes = %v, want the diagnostic disclaimer", got.Notes)
 	}
-	if missing := got.Missing(); len(missing) != 0 {
-		t.Errorf("Missing = %v, want none", missing)
+	if missing := got.Missing(); len(missing) != 1 {
+		t.Errorf("Missing = %v, want only the missing published state", missing)
 	}
 }
 
-func TestVerifierProvesGrowthBySizeWhenLinesDoNotMove(t *testing.T) {
+func TestVerifierMeasuresGrowthBySizeWhenLinesDoNotMove(t *testing.T) {
 	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
 		return statusFor(sessionA, 5, 240), nil
 	}}
@@ -70,11 +74,53 @@ func TestVerifierProvesGrowthBySizeWhenLinesDoNotMove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify = %v, want nil", err)
 	}
-	if !got.TranscriptGrew || !got.Proven {
-		t.Fatalf("Verification = %+v, want the byte-count to prove growth", got)
+	if !got.TranscriptGrew {
+		t.Fatalf("Verification = %+v, want the byte-count growth measured", got)
+	}
+	if got.Proven {
+		t.Fatal("Proven = true, want false: a byte count is not the supervisor's verdict")
 	}
 	if !containsNote(got.Notes, "size grew") {
 		t.Errorf("Notes = %v, want the byte-count explanation", got.Notes)
+	}
+}
+
+// TestVerificationProvenByPublishedState covers the one way a non-handoff resume
+// can be proven now that growth is a diagnostic: the supervisor publishes a
+// state that establishes the conversation continued.
+func TestVerificationProvenByPublishedState(t *testing.T) {
+	obs := StateObservation{SessionID: sessionA, State: "done", ObservedAt: time.Unix(1, 0).UTC(), InListing: true}
+	decision := Observe(obs, true, false)
+
+	verification := Verification{SessionIDPreserved: true, TranscriptGrew: true}
+	verification.ObservePublished(obs, decision)
+
+	if !verification.Proven {
+		t.Fatalf("Proven = false, want true for a handed-off session the supervisor reports as done: %+v", verification)
+	}
+	if verification.PublishedState != "done" || !verification.ObservationRecorded {
+		t.Errorf("Verification = %+v, want the published state recorded verbatim", verification)
+	}
+	if missing := verification.Missing(); len(missing) != 0 {
+		t.Errorf("Missing = %v, want none", missing)
+	}
+
+	// The same observation with no handoff outstanding means the conversation
+	// had already finished, which is not a resumed one.
+	if decision := Observe(obs, false, false); decision.State != StateCompleted {
+		t.Errorf("decision = %+v, want COMPLETED for a done session with no handoff", decision)
+	}
+
+	// A blocked session is never a recovered one.
+	blocked := StateObservation{SessionID: sessionA, State: "blocked", WaitingFor: "permission prompt",
+		ObservedAt: time.Unix(1, 0).UTC(), InListing: true}
+	verification = Verification{SessionIDPreserved: true}
+	verification.ObservePublished(blocked, Observe(blocked, true, false))
+	if verification.Proven {
+		t.Fatal("Proven = true for a blocked session, want false")
+	}
+	if verification.PublishedState != "blocked" {
+		t.Errorf("PublishedState = %q, want the raw value", verification.PublishedState)
 	}
 }
 
@@ -94,8 +140,8 @@ func TestVerifierReportsUnprovenResumeOnceChecked(t *testing.T) {
 	if !containsNote(got.Notes, "checked once") {
 		t.Errorf("Notes = %v, want the single-check explanation", got.Notes)
 	}
-	if reason := got.Reason(); !strings.Contains(reason, "did not grow") {
-		t.Errorf("Reason = %q, want it to name the failed check", reason)
+	if reason := got.Reason(); !strings.Contains(reason, "no session state") {
+		t.Errorf("Reason = %q, want it to name the missing observation", reason)
 	}
 }
 
@@ -302,13 +348,16 @@ func TestVerificationMissingAndReason(t *testing.T) {
 	}
 	partial := Verification{SessionIDPreserved: true}
 	if got := partial.Missing(); len(got) != 1 {
-		t.Errorf("Missing() = %v, want only the growth check", got)
+		t.Errorf("Missing() = %v, want only the missing published state", got)
 	}
-	inconsistent := Verification{SessionIDPreserved: true, TranscriptGrew: true}
-	if got := inconsistent.Reason(); got != "the resume could not be verified" {
+	// A preserved id and a handoff that was never proven: nothing is missing,
+	// because a handoff has no checks to miss, so the reason is the generic
+	// refusal to claim success.
+	unproven := Verification{SessionIDPreserved: true, HandoffAccepted: true}
+	if got := unproven.Reason(); got != "the resume could not be verified" {
 		t.Errorf("Reason() = %q, want the generic unproven message", got)
 	}
-	if got := empty.Reason(); !strings.Contains(got, "session id") || !strings.Contains(got, "did not grow") {
+	if got := empty.Reason(); !strings.Contains(got, "session id") || !strings.Contains(got, "no session state") {
 		t.Errorf("Reason() = %q, want both failures", got)
 	}
 }

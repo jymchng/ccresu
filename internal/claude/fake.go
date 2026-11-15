@@ -113,6 +113,13 @@ type FakeProvider struct {
 	Statuses map[string]SessionStatus
 	// ResumeBehaviour is returned by ResumeSession for the matching id.
 	ResumeResults map[string]ResumeResult
+	// Published is the listing PublishedListing returns, scripted per test. A
+	// test that sets only Entries still gets the by-session index production
+	// builds, because PublishedListing indexes the scripted entries itself.
+	Published PublishedListing
+	// PublishedErr, when set, makes PublishedListing fail, which is how the
+	// "the read failed" path is exercised without a real CLI.
+	PublishedErr error
 
 	// Now supplies timestamps; nil means time.Now.
 	Now func() time.Time
@@ -232,6 +239,29 @@ func (f *FakeProvider) GetSessionStatus(ctx context.Context, sessionID string) (
 		Running:    sessionRunning(session),
 		CheckedAt:  f.now().UTC(),
 	}, nil
+}
+
+// PublishedListing implements SessionProvider.
+//
+// It records the call and returns the scripted listing. Indexing is done here so
+// a test can set Entries alone and still get the by-session lookup production
+// gets from the real provider.
+func (f *FakeProvider) PublishedListing(ctx context.Context) (PublishedListing, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, Call{Name: "PublishedListing"})
+	if err := ctx.Err(); err != nil {
+		return PublishedListing{}, err
+	}
+	if f.PublishedErr != nil {
+		return PublishedListing{Err: f.PublishedErr}, f.PublishedErr
+	}
+	listing := f.Published
+	listing.BySessionID = indexBySessionID(listing.Entries)
+	if listing.ReadAt.IsZero() {
+		listing.ReadAt = f.now().UTC()
+	}
+	return listing, nil
 }
 
 // ResumeSession implements SessionProvider.

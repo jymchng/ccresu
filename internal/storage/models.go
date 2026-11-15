@@ -25,6 +25,15 @@ const (
 	StateUserTerminated     State = "USER_TERMINATED"
 	StateDisabled           State = "DISABLED"
 	StateUnrecoverable      State = "UNRECOVERABLE"
+	// StateWaitingForInput is a session the supervisor reports as `blocked`:
+	// it needs a permission, a sandbox decision, an answer or an expired login
+	// cleared before it can continue, and nothing ccresu can do unblocks it.
+	//
+	// It is its own state rather than a reason on RETRY_WAIT because the two
+	// have different remedies: a retry is ccresu's to make, and this is the
+	// operator's. Handing a continuation to a blocked session would queue it
+	// behind a prompt nobody is there to answer.
+	StateWaitingForInput State = "WAITING_FOR_INPUT"
 )
 
 // allStates is the closed set of states accepted by the database. Validation in
@@ -44,6 +53,7 @@ var allStates = map[State]struct{}{
 	StateUserTerminated:     {},
 	StateDisabled:           {},
 	StateUnrecoverable:      {},
+	StateWaitingForInput:    {},
 }
 
 // Valid reports whether s is a known state.
@@ -245,6 +255,10 @@ type RecoveryAttempt struct {
 	// HandoffCopied reports whether the continuation landed in a copy rather
 	// than in place. Nil means no handoff was recorded.
 	HandoffCopied *bool
+	// Observation is the published session state this attempt saw. Its zero
+	// value means nothing was recorded, which `ccresu inspect` renders as "not
+	// recorded" — never as "nothing was happening".
+	Observation ObservationRecord
 }
 
 // Transition is one entry in the persisted state history.

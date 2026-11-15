@@ -78,9 +78,10 @@ What the unit does, and why:
 - `Restart=on-failure` with `RestartSec=10s` — a watchdog that silently dies is
   worse than no watchdog. A broken configuration still stops the unit, because
   systemd's default start limit ends the restart loop instead of spinning.
-- `KillSignal=SIGTERM`, `TimeoutStopSec=60s` — an in-flight
-  `claude -p --resume` child gets 60 seconds to finish or be killed cleanly
-  before SIGKILL.
+- `KillSignal=SIGTERM`, `TimeoutStopSec=60s` — an in-flight handoff or `claude
+  stop` invocation gets 60 seconds to finish or be killed cleanly before
+  SIGKILL. The work itself no longer depends on this: it runs under the
+  supervisor, not as a child of the daemon.
 - `After=network-online.target` — the daemon discovers locally, but benefits from
   DNS being up before it talks to Telegram.
 - `Environment=CCRESU_APP__LOG_FORMAT=json` — journald already timestamps and

@@ -190,11 +190,19 @@ func (h *harness) makeRecoverable(id string) {
 		Session:    resumed,
 		Transcript: claude.TranscriptInfo{Path: "/tmp/t.jsonl", Size: 400, Lines: 9},
 	}
+	// The resume is a handoff, because print mode is retired (PRD 1): the CLI
+	// acknowledges it with a `backgrounded` block, and that acknowledgement is
+	// what proves the continuation — the transcript is a diagnostic afterwards
+	// (PRD 2 / R3).
 	h.provider.ResumeResults[id] = claude.ResumeResult{
 		RequestedSessionID: id,
 		SessionID:          id,
 		Verified:           true,
-		Result:             "continued",
+		Backgrounded:       true,
+		StateID:            claude.StateIDFor(id),
+		Name:               claude.HandoffLabel(id),
+		Handoff:            claude.Handoff{Acknowledged: true, StateID: claude.StateIDFor(id), Name: claude.HandoffLabel(id)},
+		Result:             "backgrounded",
 		Subtype:            "success",
 	}
 	h.provider.OnResume = func(context.Context, string, string) (claude.ResumeResult, error) {

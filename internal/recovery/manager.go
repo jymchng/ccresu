@@ -116,6 +116,9 @@ type Manager struct {
 	limitCheck  LimitRecheck
 	limitPark   LimitPark
 	observer    Observer
+	// observations reads the supervisor's published state. It caches one read
+	// per pass, so every session in a pass is answered from the same instant.
+	observations *ObservationSource
 
 	locks *sessionLocks
 	sem   chan struct{}
@@ -178,20 +181,21 @@ func New(cfg Config) (*Manager, error) {
 	}
 
 	return &Manager{
-		store:       cfg.Store,
-		provider:    cfg.Provider,
-		clock:       clk,
-		log:         logger,
-		enabled:     cfg.Enabled,
-		maxAttempts: maxAttempts,
-		backoff:     backoff,
-		message:     message,
-		verifier:    verifier,
-		limitCheck:  cfg.LimitRecheck,
-		limitPark:   cfg.LimitPark,
-		observer:    cfg.Observer,
-		locks:       newSessionLocks(),
-		sem:         make(chan struct{}, maxConcurrent),
+		store:        cfg.Store,
+		provider:     cfg.Provider,
+		clock:        clk,
+		log:          logger,
+		enabled:      cfg.Enabled,
+		maxAttempts:  maxAttempts,
+		backoff:      backoff,
+		message:      message,
+		verifier:     verifier,
+		limitCheck:   cfg.LimitRecheck,
+		limitPark:    cfg.LimitPark,
+		observer:     cfg.Observer,
+		observations: NewObservationSource(cfg.Provider, clk),
+		locks:        newSessionLocks(),
+		sem:          make(chan struct{}, maxConcurrent),
 	}, nil
 }
 
@@ -211,6 +215,57 @@ func (m *Manager) announce(ctx context.Context, kind MilestoneKind, outcome Outc
 		MaxAttempts: m.maxAttempts,
 		Cause:       cause,
 	})
+}
+
+// announceObservation reports a milestone together with the published state it
+// was raised from, so the message can quote the CLI instead of paraphrasing it.
+//
+// It exists next to announce because a needs-input milestone is only honest if
+// it carries the observation: "blocked on a permission prompt" and "blocked, no
+// reason reported" are different messages, and only the observation can tell
+// them apart. Like announce it does nothing when no observer is installed.
+func (m *Manager) announceObservation(ctx context.Context, kind MilestoneKind, outcome Outcome, observation StateObservation) {
+	if m.observer == nil {
+		return
+	}
+	m.observer(ctx, Milestone{
+		Kind:        kind,
+		Outcome:     outcome,
+		MaxAttempts: m.maxAttempts,
+		Observation: observation,
+	})
+}
+
+// attemptObservation picks the observation an attempt row should carry: the one
+// taken after the resume when there is one, and the pass's pre-resume read
+// otherwise (PRD 2 / R13).
+//
+// Preferring the later read is the point — it is the observation the verdict
+// rests on. Falling back rather than leaving it empty is the other half: a
+// handoff is proven by the CLI's block, and the row still owes an operator what
+// the supervisor had said about the session before it was handed over.
+func attemptObservation(before, after StateObservation) StateObservation {
+	if after.Recorded() {
+		return after
+	}
+	return before
+}
+
+// recordTranscriptMetrics stores the transcript measurement a status check
+// observed, so the next pass compares against what is actually on disk.
+//
+// It is a diagnostic and nothing else (R3): no decision is read back out of it,
+// and a failure to record is logged rather than returned. A session that was
+// observed, parked or recognised as already resumed still owes the operator its
+// state even if the measurement could not be stored.
+func (m *Manager) recordTranscriptMetrics(ctx context.Context, sessionID string, status claude.SessionStatus) {
+	if strings.TrimSpace(status.Transcript.Path) == "" {
+		return
+	}
+	if err := m.store.SetSessionTranscriptMetrics(ctx, sessionID, status.Transcript.Path,
+		status.Transcript.Size, status.Transcript.Lines); err != nil {
+		m.log.Warn("record transcript metrics", "session", sessionID, "error", err)
+	}
 }
 
 // FromConfig builds a Manager from the application configuration.
@@ -413,43 +468,81 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 	}
 	merged := mergeBaseline(baseline, BaselineFromStatus(status))
 
-	// It may have continued on its own once the window reset. That is a
-	// success, and it must be recognised without issuing a resume — resuming a
-	// session that is already working would duplicate its work.
+	// What the supervisor published decides what this session is. One read of
+	// `claude agents --json --all` serves the whole pass (R1), and the mapping
+	// takes "is a handoff outstanding" as an argument (R5) rather than inferring
+	// it — here nothing has been handed off yet, so it is false.
 	//
-	// The comparison uses the snapshot taken *before* the merge: merging copies
-	// the fresh line count over the stored one, which would make every status
-	// look unchanged. Only the persisted snapshot can prove movement.
-	if status.Running && grew(baseline, status) {
-		verification := Verification{
-			SessionIDPreserved: true,
-			TranscriptGrew:     true,
-			Proven:             true,
-			LinesBefore:        baseline.TranscriptLines,
-			LinesAfter:         status.Transcript.Lines,
-			SizeBefore:         baseline.TranscriptSize,
-			SizeAfter:          status.Transcript.Size,
-			Running:            true,
-			Notes: []string{
-				"the session had already continued on its own, so no resume was needed",
-			},
-		}
-		if err := m.store.SetSessionTranscriptMetrics(ctx, sessionID, status.Transcript.Path,
-			status.Transcript.Size, status.Transcript.Lines); err != nil {
-			m.log.Warn("record transcript metrics", "session", sessionID, "error", err)
-		}
-		if err := state.move(StateResumed, "session had already resumed after the limit reset", 0); err != nil {
+	// A read that failed is an outage, not a verdict (R8): no observation means
+	// no decision, and the attempt stays open for the next pass.
+	observation, obsErr := m.observations.Observe(ctx, sessionID)
+	if obsErr != nil {
+		return m.fail(ctx, state, Outcome{SessionID: sessionID}, baseline,
+			storage.RecoveryAttempt{}, Verification{}, obsErr)
+	}
+	// stopIssuedByCCRESU is false because nothing in this path has issued a
+	// stop; a `stopped` observation therefore keeps its documented retry
+	// meaning instead of becoming the operator's decision.
+	decision := Observe(observation, false, false)
+	observed := Verification{
+		LinesBefore: baseline.TranscriptLines,
+		LinesAfter:  status.Transcript.Lines,
+		SizeBefore:  baseline.TranscriptSize,
+		SizeAfter:   status.Transcript.Size,
+		Running:     status.Running,
+		// Nothing in this path resumed anything, so the only identity fact to
+		// check is that the status describes the session that was asked about.
+		// An empty id is the CLI declining to name it, which is not a mismatch.
+		SessionIDPreserved: status.Session.ID == "" || status.Session.ID == sessionID,
+	}
+	observed.ObservePublished(observation, decision)
+
+	switch {
+	case decision.NeedsInput:
+		// A session waiting on a human is never handed a continuation: it would
+		// queue behind a prompt nobody is there to answer (R4, R11). It parks
+		// instead, and the operator is told once, with whatever reason the CLI
+		// published — including none.
+		m.recordTranscriptMetrics(ctx, sessionID, status)
+		if err := state.move(StateWaitingForInput, decision.Reason, 0); err != nil {
 			return Outcome{SessionID: sessionID, State: state.current}, err
 		}
 		outcome.State = state.current
-		outcome.Verification = verification
+		outcome.Verification = observed
+		m.announceObservation(ctx, MilestoneNeedsInput, outcome, observation)
+		return outcome, nil
+	case decision.State == StateResumed:
+		// It continued on its own once the window reset: a success, and one that
+		// must be recognised without issuing a resume, because resuming a session
+		// that is already working would duplicate its work.
+		m.recordTranscriptMetrics(ctx, sessionID, status)
+		if err := state.move(StateResumed, decision.Reason, 0); err != nil {
+			return Outcome{SessionID: sessionID, State: state.current}, err
+		}
+		outcome.State = state.current
+		outcome.Verification = observed
 		outcome.Resumed = true
-		// The conversation is proven to continue, so this is a success even
-		// though ccresu issued no resume: announcing it here is what keeps
+		// The supervisor says the conversation is alive, so this is a success
+		// even though ccresu issued no resume: announcing it here is what keeps
 		// "recovery succeeded" from meaning "ccresu ran a command".
 		m.announce(ctx, MilestoneSucceeded, outcome, nil)
 		return outcome, nil
+	case decision.State == StateCompleted:
+		// `done` with no handoff outstanding: the last turn finished what was
+		// asked for, so there is nothing to continue and no continuation is sent
+		// (R6). Handing a finished conversation a "continue" message is the
+		// mistake this branch exists to prevent.
+		m.recordTranscriptMetrics(ctx, sessionID, status)
+		if err := state.move(StateCompleted, decision.Reason, 0); err != nil {
+			return Outcome{SessionID: sessionID, State: state.current}, err
+		}
+		outcome.State = state.current
+		outcome.Verification = observed
+		return outcome, nil
 	}
+	// Every other observation — failed, stopped, an unknown value, or a session
+	// the supervisor has not heard of — leaves the resume path as it was: the
+	// limit has reset, and continuing the conversation is what recovery does.
 	baseline = merged
 
 	if err := state.move(StateCheckingLimit, "checking the usage limit has cleared", 0); err != nil {
@@ -503,6 +596,23 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 		return m.fail(ctx, state, outcome, baseline, attempt, verification,
 			fmt.Errorf("verify session %s: %w", sessionID, verifyErr))
 	}
+
+	// PRD 2 / R3: a resume that was not handed off is proven by what the
+	// supervisor publishes about the conversation, and growth of the transcript
+	// is a diagnostic that is reported but never believed. The pass read the
+	// listing before the resume, so that read is ended here — an observation
+	// taken before the continuation cannot attest to it.
+	var published StateObservation
+	if !verification.HandoffAccepted {
+		m.observations.Reset()
+		obs, obsErr := m.observations.Observe(ctx, sessionID)
+		if obsErr != nil {
+			return m.fail(ctx, state, outcome, baseline, attempt, verification,
+				fmt.Errorf("observe session %s after resume: %w", sessionID, obsErr))
+		}
+		published = obs
+		verification.ObservePublished(obs, Observe(obs, true, false))
+	}
 	if !verification.Proven {
 		return m.fail(ctx, state, outcome, baseline, attempt, verification,
 			VerificationFailedError(sessionID, verification))
@@ -518,7 +628,12 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 		HandoffName:       verification.HandoffName,
 		HandoffAt:         handoffTime(verification, m.now()),
 		HandoffCopied:     handoffCopied(verification),
-		FinishedAt:        m.now(),
+		// R13: the state the supervisor published is stored verbatim, so a
+		// decision can be re-examined later instead of being re-argued from a
+		// transcript measurement. A handoff has no post-resume observation, so
+		// the pass's pre-resume read is what the row carries.
+		Observation: RecordedObservation(attemptObservation(observation, published)),
+		FinishedAt:  m.now(),
 	})
 	if err != nil {
 		return Outcome{SessionID: sessionID, State: state.current}, fmt.Errorf("finish attempt: %w", err)
@@ -613,7 +728,10 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 			Error:             truncate(cause.Error()),
 			SessionIDVerified: boolPtr(verification.SessionIDPreserved),
 			TranscriptGrew:    boolPtr(verification.TranscriptGrew),
-			FinishedAt:        m.now(),
+			// R13: a failed attempt records what was seen as well, because that
+			// is the fact an operator needs when asking why ccresu gave up.
+			Observation: RecordedObservation(verification.Observation),
+			FinishedAt:  m.now(),
 		}); err != nil {
 			m.log.Warn("record failed attempt", "session", outcome.SessionID, "error", err)
 		}

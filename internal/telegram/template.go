@@ -117,7 +117,7 @@ func Render(event storage.NotificationEvent, data EventData) (string, error) {
 		fmt.Fprintf(&body, "%s\n", Bold("Recovery succeeded"))
 		fmt.Fprintf(&body, "Session: %s\n", session)
 		fmt.Fprintf(&body, "Attempt: %s\n", Escape(attemptText(data)))
-		body.WriteString("The original conversation resumed and its transcript grew.")
+		body.WriteString("The original conversation continues under the background supervisor.")
 		if data.Duration > 0 {
 			fmt.Fprintf(&body, "\nDuration: %s", Escape(data.Duration.Round(time.Second).String()))
 		}

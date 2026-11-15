@@ -312,7 +312,7 @@ Code's background agent
 (`That session is running in the background (837eaaea) …`). ccresu treats that as
 "the conversation is busy", not as "the conversation is gone": inside the same
 attempt it runs `claude stop <job-id>`, then repeats the *identical*
-`claude -p --resume <session-id> …` once. `<job-id>` is the eight lower-case
+`claude --bg --resume <session-id> …` handoff once. `<job-id>` is the eight lower-case
 hex job name the refusal itself prints (`837eaaea`), not the session UUID:
 `claude stop` resolves job names only, and answers a UUID with
 `No job matching` and exit 1. The stop keeps the conversation — same
@@ -323,8 +323,8 @@ before. See [recovery.md](recovery.md).
 
 #### When the limit has not reset yet
 
-The other refusal is the one the limit itself causes: `claude -p --resume` exits
-1 with the banner the CLI prints.
+The other refusal is the one the limit itself causes: a
+`--bg --resume` handoff exits 1 with the banner the CLI prints.
 
 ```console
 Claude usage limit reached. Your limit will reset at 10am (Europe/Berlin).
@@ -336,7 +336,7 @@ banner is recorded as a usage limit (so `Latest usage limit` shows the CLI's own
 phrase next to the resolved instant), the next attempt is scheduled at the reset
 instant the banner named, and the session stays in `WAITING_FOR_RESET` until
 then. Nothing is retried in the meantime: five reconcile passes inside one window
-issue exactly one `claude -p --resume`, and the next one is issued after the
+issue exactly one `--bg --resume` handoff, and the next one is issued after the
 reset.
 
 ```console
@@ -379,12 +379,15 @@ $ ccresu history 4d1f9c2a-... --limit 20
 ```
 
 Each transition carries the reason it was recorded with, which is the audit
-trail for a wait. The two proofs live on the attempt, not in the table:
-`ccresu recover` prints them as
-`verification: proven: session id preserved and transcript grew` (or
-`not proven: …`, naming what is missing), and `ccresu history --json` carries
-them per attempt as `SessionIDVerified` and `TranscriptGrew`. The human attempt
-table shows `RESULT` (`in progress`, `succeeded`, `failed`) instead.
+trail for a wait. The proof of a recovery lives on the attempt, not in the table:
+`ccresu recover` prints it as
+`verification: proven: the continuation was handed to the background supervisor`
+— or `proven: the supervisor published state "working" for the conversation`
+when a published state is what established it — and `not proven: …`, naming what
+is missing, otherwise. `ccresu history --json` carries the same evidence per
+attempt: `HandoffAccepted`/`HandoffStateID`, `PublishedState`, and the recorded
+observation (`ObservedState`, `ObservedStatus`, `ObservedWaitingFor`). The human
+attempt table shows `RESULT` (`in progress`, `succeeded`, `failed`) instead.
 
 ### Machine-readable output
 

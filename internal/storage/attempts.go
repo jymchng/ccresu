@@ -12,7 +12,8 @@ import (
 // attemptColumns is the canonical column list for attempt queries.
 const attemptColumns = `id, session_id, usage_limit_id, attempt_number, state, command,
 	started_at, finished_at, success, output, error, session_id_verified, transcript_grew,
-	handoff_state_id, handoff_name, handoff_at, handoff_copied`
+	handoff_state_id, handoff_name, handoff_at, handoff_copied,
+	observed_state, observed_status, observed_waiting_for, observed_at, observed_listed`
 
 // maxAttemptAllocationRetries bounds the retry loop used when two goroutines
 // allocate the same attempt number concurrently. The unique index on
@@ -131,9 +132,40 @@ type AttemptResult struct {
 	HandoffName    string
 	HandoffAt      time.Time
 	HandoffCopied  *bool
+	// Observation is what the supervisor published about the session, as it was
+	// seen. It is recorded verbatim rather than reduced: R13 exists because the
+	// decision "the transcript grew" could not be re-examined afterwards, while
+	// "state blocked, status idle, waitingFor permission prompt" can.
+	//
+	// Listed is nil when no observation was made at all — an attempt recorded
+	// before observations existed, or one that never got as far as looking.
+	// That nil is *not* the same as Listed=false, which means ccresu looked and
+	// the session was not in the listing.
+	Observation ObservationRecord
 	// FinishedAt overrides the finish timestamp; zero means "now".
 	FinishedAt time.Time
 }
+
+// ObservationRecord is the published session state an attempt saw, verbatim.
+//
+// Zero value means "not recorded": ObservedAt is zero and Listed is nil. The
+// distinction between that and a recorded absence is the whole point of R8, so
+// nothing here infers one from the other.
+type ObservationRecord struct {
+	// State, Status and WaitingFor are the raw CLI values, lower-cased by the
+	// tolerant parser and never coerced afterwards.
+	State      string
+	Status     string
+	WaitingFor string
+	// ObservedAt is when the listing was read. Zero means no observation.
+	ObservedAt time.Time
+	// Listed reports whether the session appeared in the listing. Nil means no
+	// observation was made.
+	Listed *bool
+}
+
+// Recorded reports whether an observation was made.
+func (o ObservationRecord) Recorded() bool { return !o.ObservedAt.IsZero() || o.Listed != nil }
 
 // FinishAttempt records the outcome of an attempt, atomically.
 func (s *Store) FinishAttempt(ctx context.Context, attemptID int64, result AttemptResult) (RecoveryAttempt, error) {
@@ -151,6 +183,11 @@ func (s *Store) FinishAttempt(ctx context.Context, attemptID int64, result Attem
 	if !result.HandoffAt.IsZero() {
 		handoffAt = timeToDB(result.HandoffAt.UTC())
 	}
+	observation := result.Observation
+	var observedAt any
+	if !observation.ObservedAt.IsZero() {
+		observedAt = timeToDB(observation.ObservedAt.UTC())
+	}
 
 	var attempt RecoveryAttempt
 	err := s.InTx(ctx, func(tx *sql.Tx) error {
@@ -158,13 +195,17 @@ func (s *Store) FinishAttempt(ctx context.Context, attemptID int64, result Attem
 			UPDATE recovery_attempts SET
 				state = ?, finished_at = ?, success = ?, output = ?, error = ?,
 				session_id_verified = ?, transcript_grew = ?,
-				handoff_state_id = ?, handoff_name = ?, handoff_at = ?, handoff_copied = ?
+				handoff_state_id = ?, handoff_name = ?, handoff_at = ?, handoff_copied = ?,
+				observed_state = ?, observed_status = ?, observed_waiting_for = ?,
+				observed_at = ?, observed_listed = ?
 			WHERE id = ?`,
 			string(result.State), timeToDB(finishedAt), boolToInt(result.Success),
 			result.Output, result.Error, nullableBool(result.SessionIDVerified),
 			nullableBool(result.TranscriptGrew),
 			result.HandoffStateID, result.HandoffName, handoffAt,
-			nullableBool(result.HandoffCopied), attemptID)
+			nullableBool(result.HandoffCopied),
+			observation.State, observation.Status, observation.WaitingFor,
+			observedAt, nullableBool(observation.Listed), attemptID)
 		if err != nil {
 			return fmt.Errorf("finish attempt %d: %w", attemptID, err)
 		}
@@ -294,11 +335,15 @@ func scanAttempt(row scanner) (RecoveryAttempt, error) {
 		startedAt      any
 		handoffAt      any
 		handoffCopied  sql.NullInt64
+		observedAt     any
+		observedListed sql.NullInt64
 	)
 	err := row.Scan(&attempt.ID, &attempt.SessionID, &usageLimitID, &attempt.AttemptNumber,
 		&state, &attempt.Command, &startedAt, &finishedAt, &success, &attempt.Output,
 		&attempt.Error, &verified, &transcriptGrew,
-		&attempt.HandoffStateID, &attempt.HandoffName, &handoffAt, &handoffCopied)
+		&attempt.HandoffStateID, &attempt.HandoffName, &handoffAt, &handoffCopied,
+		&attempt.Observation.State, &attempt.Observation.Status,
+		&attempt.Observation.WaitingFor, &observedAt, &observedListed)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return RecoveryAttempt{}, err
@@ -323,5 +368,9 @@ func scanAttempt(row scanner) (RecoveryAttempt, error) {
 	if attempt.HandoffAt, err = timeFromDB(handoffAt); err != nil {
 		return RecoveryAttempt{}, err
 	}
+	if attempt.Observation.ObservedAt, err = timeFromDB(observedAt); err != nil {
+		return RecoveryAttempt{}, err
+	}
+	attempt.Observation.Listed = scanNullableBool(observedListed)
 	return attempt, nil
 }

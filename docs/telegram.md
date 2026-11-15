@@ -82,7 +82,7 @@ successful recovery looks like this (`internal/telegram/template.go:116-124`):
 Recovery succeeded
 Session: 4d1f9c2a-7e35-4b18-9a6f-2c8d0e1f3a45
 Attempt: 1/10
-The original conversation resumed and its transcript grew.
+The original conversation continues under the background supervisor.
 Duration: 2m14s
 ```
 

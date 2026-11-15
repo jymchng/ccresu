@@ -20,12 +20,14 @@ import (
 // providerStub is a claude.SessionProvider driven by functions, so each test
 // states exactly what the CLI reports and when.
 type providerStub struct {
-	mu          sync.Mutex
-	statusFn    func(call int, sessionID string) (claude.SessionStatus, error)
-	resumeFn    func(sessionID, message string) (claude.ResumeResult, error)
-	statusCalls int
-	resumes     []resumeCall
-	discovers   int
+	mu           sync.Mutex
+	statusFn     func(call int, sessionID string) (claude.SessionStatus, error)
+	resumeFn     func(sessionID, message string) (claude.ResumeResult, error)
+	listingFn    func(call int) (claude.PublishedListing, error)
+	statusCalls  int
+	listingCalls int
+	resumes      []resumeCall
+	discovers    int
 }
 
 // resumeCall records one resume invocation.
@@ -63,9 +65,32 @@ func (p *providerStub) ResumeSession(_ context.Context, sessionID, message strin
 	fn := p.resumeFn
 	p.mu.Unlock()
 	if fn == nil {
-		return goodResult(sessionID), nil
+		return handoffResult(sessionID), nil
 	}
 	return fn(sessionID, message)
+}
+
+// handoffResult is what a real `claude --bg --resume` acknowledges: a
+// `backgrounded` block naming the state id and the supervisor's label.
+//
+// It is the default because print mode is retired (PRD 1): every resume ccresu
+// issues is a handoff, so a stub that answered with an in-place result would be
+// exercising a path production no longer has. A test that wants the retired
+// shape sets resumeFn explicitly.
+func handoffResult(id string) claude.ResumeResult {
+	short := id
+	if len(short) > 8 {
+		short = short[:8]
+	}
+	return claude.ResumeResult{
+		RequestedSessionID: id,
+		SessionID:          id,
+		Verified:           true,
+		Backgrounded:       true,
+		StateID:            "ab12cd34",
+		Name:               "ccresu-" + short,
+		Result:             "backgrounded",
+	}
 }
 
 func (p *providerStub) resumeCount() int {
@@ -78,6 +103,32 @@ func (p *providerStub) statusCount() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.statusCalls
+}
+
+// PublishedListing implements claude.SessionProvider.
+//
+// The default is an empty, successful listing: a test that does not script the
+// supervisor's opinion exercises the path where the supervisor has nothing to
+// say about the session, which the mapping treats as "not observed" rather than
+// as a verdict.
+func (p *providerStub) PublishedListing(context.Context) (claude.PublishedListing, error) {
+	p.mu.Lock()
+	p.listingCalls++
+	call := p.listingCalls
+	fn := p.listingFn
+	p.mu.Unlock()
+	if fn == nil {
+		return claude.PublishedListing{ReadAt: time.Unix(0, 0).UTC()}, nil
+	}
+	return fn(call)
+}
+
+// publishedCount reports how many listing reads the stub has served, which is
+// how a test asserts that one pass issues one `agents --json --all`.
+func (p *providerStub) publishedCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.listingCalls
 }
 
 // growthProvider reports the baseline on the first status check and a grown
@@ -96,6 +147,29 @@ func staticProvider(lines, size int64) *providerStub {
 	return &providerStub{statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
 		return statusFor(sessionID, lines, size), nil
 	}}
+}
+
+// publishedWorking scripts the supervisor's listing with the given sessions in
+// the `working` state.
+//
+// It is what the "it continued on its own" branch rests on now that growth is a
+// diagnostic (PRD 2 / R3): a test that wants that branch must script the state
+// the supervisor published, because no transcript measurement can produce it.
+func publishedWorking(ids ...string) func(int) (claude.PublishedListing, error) {
+	entries := make([]claude.AgentEntry, 0, len(ids))
+	byID := make(map[string]claude.AgentEntry, len(ids))
+	for _, id := range ids {
+		entry := claude.AgentEntry{SessionID: id, Kind: "background", State: "working", Status: "busy"}
+		entries = append(entries, entry)
+		byID[id] = entry
+	}
+	return func(int) (claude.PublishedListing, error) {
+		return claude.PublishedListing{
+			Entries:     entries,
+			BySessionID: byID,
+			ReadAt:      time.Unix(0, 0).UTC(),
+		}, nil
+	}
 }
 
 // storeSeq makes every in-memory database distinct even when several are opened
@@ -397,8 +471,12 @@ func TestRecoverResumesAndProvesTheConversationContinued(t *testing.T) {
 	if stored.LastError != "" {
 		t.Errorf("LastError = %q, want it cleared after success", stored.LastError)
 	}
-	if stored.TranscriptLines != 12 {
-		t.Errorf("TranscriptLines = %d, want the post-resume measurement", stored.TranscriptLines)
+	if stored.TranscriptLines != 10 {
+		// The handoff is not measured under ccresu's process: the transcript
+		// belongs to the supervisor from the moment the block is printed, so the
+		// stored snapshot keeps the pre-resume measurement instead of pretending
+		// ccresu watched it grow (PRD 2 / R3).
+		t.Errorf("TranscriptLines = %d, want the pre-resume snapshot kept", stored.TranscriptLines)
 	}
 
 	history, err := manager.History(context.Background(), sessionA)
@@ -459,11 +537,16 @@ func TestRecoverUsesTheRequestMessageAndLimit(t *testing.T) {
 func TestRecoverRecognisesASessionThatAlreadyContinued(t *testing.T) {
 	store := newTestStore(t)
 	seedSession(t, store, recoverableSession(sessionA))
-	provider := &providerStub{statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
-		status := statusFor(sessionID, 14, 280)
-		status.Running = true
-		return status, nil
-	}}
+	provider := &providerStub{
+		statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
+			status := statusFor(sessionID, 14, 280)
+			status.Running = true
+			return status, nil
+		},
+		// The supervisor says the conversation is working, which is what makes
+		// this a resume ccresu must recognise instead of re-issue (PRD 2 / R3).
+		listingFn: publishedWorking(sessionA),
+	}
 	manager := testManager(t, store, provider, nil)
 
 	outcome, err := manager.Recover(context.Background(), sessionA)
@@ -476,7 +559,7 @@ func TestRecoverRecognisesASessionThatAlreadyContinued(t *testing.T) {
 	if provider.resumeCount() != 0 {
 		t.Error("an already-working session must not be resumed again")
 	}
-	if !containsNote(outcome.Verification.Notes, "already continued on its own") {
+	if !containsNote(outcome.Verification.Notes, "continued on its own") {
 		t.Errorf("notes = %v, want the already-resumed explanation", outcome.Verification.Notes)
 	}
 	stored, err := store.GetSession(context.Background(), sessionA)
@@ -1197,6 +1280,12 @@ func TestRecoverRetriesWhenThePostResumeCheckFails(t *testing.T) {
 		}
 		return claude.SessionStatus{}, errors.New("transcript vanished")
 	}}
+	// The resume is scripted as an in-place continuation rather than a handoff,
+	// because this test is about the post-resume check failing: a handoff is
+	// proven by the CLI's own block and never re-reads the status.
+	provider.resumeFn = func(sessionID, _ string) (claude.ResumeResult, error) {
+		return goodResult(sessionID), nil
+	}
 	manager := testManager(t, store, provider, nil)
 
 	outcome, err := manager.Recover(context.Background(), sessionA)

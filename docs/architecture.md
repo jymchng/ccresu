@@ -87,29 +87,38 @@ reason `waiting until <RFC3339>` when the reset is known. The row, not a timer,
 is the source of truth: a restart, an upgrade or a reboot mid-wait resumes from
 the database. `LoadSchedules` orders the earliest deadline first and excludes
 rows with no deadline at all, because such a row could never become due.
-6. **Resume** — when a schedule is due, `actOnSchedules` records
+6. **Handoff** — when a schedule is due, `actOnSchedules` records
 `RESET_TIME_REACHED` first and then asks for a recovery
 (`daemon.go:387-406`, `markResetReached` at `442-461`). The manager records the
-attempt *before* it issues the resume (`StartAttempt` at `manager.go:451-454`)
-and calls `claude.ResumeArgs`, whose vector is
-`[]string{"-p", "--resume", sessionID, "--output-format", "json", message}`
-(`internal/claude/cli.go:353-355`). The continuation message is the **last**
-element because the CLI takes the prompt as a positional argument after the
-flags, so it follows the session id it belongs to instead of sitting between
-flags. The attempt's `command` column is a preview rendered in the same order
-(`manager.go:1007-1013`) — a preview that printed the flags after the message
-described a command that was never run.
-7. **Verification** — `Verifier.Verify` (`internal/recovery/verify.go:66-77`)
-performs two independent checks and sets `Proven` only when
-`SessionIDPreserved && TranscriptGrew`. The session-id check requires that the
-CLI reported an id and that it equals the baseline; the growth check compares
-the transcript against the stored `transcript_size`/`transcript_lines` baseline,
-accepting a line-count increase, or an unchanged line count with a larger size
-when the baseline size is non-zero. A live process is reported but never used as
-proof — a launched process is not a resumed conversation. A failed resume's own
-writes are absorbed into the baseline by `absorbAttemptWrites`
-(`manager.go:967-1001`) before any decision, otherwise the next status check
-would see growth it caused itself and report a refused resume as a success.
+attempt *before* it issues the continuation (`StartAttempt` at
+`manager.go:451-454`) and calls `claude.HandoffArgs`, whose vector is
+`[]string{"--bg", "--resume", sessionID, "--name", HandoffLabel(sessionID), message}`
+(`internal/claude/handoff.go:106`). The message is the **last** element because
+the CLI takes the prompt as a positional argument after the flags, so it follows
+the session id it belongs to instead of sitting between flags; `--bg` and `-p`
+cannot be combined, so the print-mode vector is absent by construction. The label
+is `ccresu-<first-8-hex>` derived from the session id, which makes a recovered
+session identifiable in agent view without consulting the database. The attempt's
+`command` column is a preview rendered in the same order
+(`manager.go:1184-1202`). The CLI answers a handoff with a
+`backgrounded · <short-id> · <name>` block that `claude` parses into
+`Handoff{StateID, Name, Copied, …}`; a handoff that prints no block is
+`ErrHandoffNotAcknowledged`, because ccresu could not then name what it created.
+7. **Observation** — acceptance is the proof, and the supervisor's published
+state is what happens next. `ObservationSource.Observe`
+(`internal/recovery/observation.go:71`) reads one `claude agents --json --all`
+per pass — always `--all`, whatever `claude.discover_all_sessions` says — indexes
+it by `sessionId` (`claude.PublishedListing`, `internal/claude/published.go:62`),
+and hands the entry to the total mapping `recovery.Observe`
+(`internal/recovery/published.go:115`). `working` after a handoff is `RESUMED`;
+`blocked` is `WAITING_FOR_INPUT` with the reason verbatim, and no continuation is
+sent; `done` before a handoff is `COMPLETED`; `failed` and `stopped` are retries;
+an unrecognised value is a retry with the value recorded. A session missing from
+the listing while a handoff is outstanding is `HandoffUnobserved` → `RETRY_WAIT`,
+never a failure, and a read that fails is `ErrObservationUnavailable`, which keeps
+the attempt open: an outage is not a verdict. Transcript growth is still
+measured, but only as a diagnostic (`verify.go:189`), and it can never make a
+blocked session read as recovered.
 8. **Refusal** — if the CLI ran but said the limit is still in force, the
 session does **not** go to `RETRY_WAIT`: it returns to `WAITING_FOR_RESET`
 through the `RESUMING → WAITING_FOR_RESET` edge, because a backoff would ask the
@@ -128,7 +137,7 @@ migrations under `internal/storage/migrations`, plus one bookkeeping table:
 | --- | --- |
 | `sessions` | one row per discovered session: `id` (the Claude Code UUID, primary key), `project_path`, `transcript_path`, `provider`, `session_type`, `pid`, `ppid`, `process_start_time`, `state`, `enabled`, `recoverable`, `reason`, `last_error`, `transcript_size`, `transcript_lines`, `retry_at`, `discovered_at`, `last_seen_at`, `updated_at` |
 | `usage_limits` | each detected limit: `session_id`, `limit_type`, `raw_message`, `reset_at`, `reset_timezone`, `reset_raw`, `confidence`, `paused_goal`, `detected_at` |
-| `recovery_attempts` | every resume: `session_id`, `usage_limit_id`, `attempt_number`, `state`, `command`, `started_at`, `finished_at`, `success`, `output`, `error`, `session_id_verified`, `transcript_grew` |
+| `recovery_attempts` | every continuation: `session_id`, `usage_limit_id`, `attempt_number`, `state`, `command`, `started_at`, `finished_at`, `success`, `output`, `error`, `session_id_verified`, `transcript_grew`, the handoff (`handoff_state_id`, `handoff_name`, `handoff_at`, `handoff_copied`) and the observation it rested on (`observed_state`, `observed_status`, `observed_waiting_for`, `observed_at`, `observed_listed`) |
 | `state_transitions` | the append-only audit trail: `session_id`, `attempt_id`, `from_state`, `to_state`, `reason`, `occurred_at` |
 | `schedules` | the durable wait: `session_id` (primary key), `usage_limit_id`, `reset_at`, `reset_timezone`, `reset_raw`, `unknown_reset`, `attempts`, `next_poll_at`, `created_at`, `updated_at` |
 | `notifications` | queued/sent/failed messages: `session_id`, `attempt_id`, `event`, `dedupe_key`, `body`, `status`, `attempts`, `last_error`, `created_at`, `updated_at`, `sent_at` |
@@ -225,8 +234,8 @@ failure state: every state that permits automatic work has an edge back to
 budget is a pause rather than a failure. `Terminal(s)` is true only when no edge
 leaves `s` (`COMPLETED`, `USER_TERMINATED`, `UNRECOVERABLE`); `Pending(s)` is
 what a restarted daemon must pick up (`USAGE_LIMIT_DETECTED`,
-`WAITING_FOR_RESET`, `RESET_TIME_REACHED`, `CHECKING_SESSION`, `CHECKING_LIMIT`,
-`RESUMING`, `RETRY_WAIT`).
+`WAITING_FOR_RESET`, `WAITING_FOR_INPUT`, `RESET_TIME_REACHED`,
+`CHECKING_SESSION`, `CHECKING_LIMIT`, `RESUMING`, `RETRY_WAIT`).
 
 ## Concurrency and shutdown
 
