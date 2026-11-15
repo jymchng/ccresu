@@ -2,12 +2,49 @@
 
 `web/` is a **marketing and documentation site** for ccresu. It is a static
 export published on GitHub Pages. It never talks to a running daemon, has no
-authentication, holds no state and ships no data-fetching code.
+authentication, holds no state and ships no client-side data fetching.
 
 That distinction matters: ccresu the tool has no web UI. The surfaces are the
 CLI, the daemon and the loopback REST/SSE API. If you are looking for a
 dashboard to drive sessions from a browser, the honest answer is that there
 isn't one — `ccresu` in a terminal, or `curl` against `127.0.0.1:8787`.
+
+## What the site says a recovery does
+
+The site documents **one** resume vector, and it is the one the binary runs: a
+handoff to Claude Code's background supervisor.
+
+```text
+claude --bg --resume <session-id> --name ccresu-<first 8 hex of the id> "<continuation message>"
+```
+
+That is `claude.HandoffArgs` (`internal/claude/handoff.go`) argument for
+argument — `--bg`, `--resume <id>`, `--name <label>`, message last — and the
+copy is written to match it rather than to a remembered version of it:
+
+- **Acceptance, not a child process.** The CLI prints one
+  `backgrounded · <short-id> · <name>` block when the supervisor has taken the
+  session and returns. `claude.ParseHandoff` reads that block; the block *is* the
+  acceptance — the supervisor has taken the session — and the short id in it is
+  what `claude attach`, `claude logs` and `claude stop` take.
+- **Verification is the acceptance or the published state.** A handoff returns
+  through `acceptHandoff` the moment the `backgrounded` block is printed, so the
+  verifier never waits on the supervisor's schedule; the supervisor's published
+  listing is the only evidence that can establish a continuation. Transcript
+  growth is a diagnostic — measured on the non-handoff path and recorded, never
+  read as proof — and the transcript itself is only read for discovery and, when
+  a recovery fails, to explain why.
+- **No print mode, no stop-then-resume.** `claude -p --resume`,
+  `--output-format json` and the retry loop that stopped a session to start it
+  again are all gone from the binary and from every page. The one print-mode
+  sentence that survives is a negation — "`--bg` cannot be combined with
+  `-p`/`--print`, so print mode is not a fallback" — because it is true and it
+  explains why there is no second path.
+
+`web/tests/handoff-contract.test.ts` is what keeps that honest: it reads the
+copy modules and the diagram, not a list of remembered phrases, and fails if a
+mention reorders the arguments, if a retired claim comes back, or if the scope
+boundary below is crossed. See [Tests](#tests).
 
 ## Stack
 
@@ -83,7 +120,7 @@ make web-install web-lint web-typecheck web-test web-build
 
 ## Tests
 
-Eighteen test files under `web/tests`, driven by Vitest with jsdom:
+Nineteen test files under `web/tests`, driven by Vitest with jsdom:
 
 | File | Covers |
 | --- | --- |
@@ -93,6 +130,7 @@ Eighteen test files under `web/tests`, driven by Vitest with jsdom:
 | `copy-button.test.tsx` | Copy-to-clipboard, including the failure path. |
 | `doc-figures.test.tsx` | The two figure blocks: a capture renders the captured bytes, a diagram is inline SVG with an accessible name, and every figure id resolves. |
 | `docs.test.tsx` | Every documentation page renders its headings and body blocks. |
+| `handoff-contract.test.ts` | The handoff contract, read from the artefacts: the documented invocation is `claude --bg --resume <id> --name <label> <message>` in that order and agrees with `claude.HandoffArgs` in the Go source; no doc, landing or diagram module carries `-p --resume`, `--output-format`, a stop-then-resume retry or a positive print-mode claim; and the scope boundary holds — 15 routes, no dashboard/auth/analytics dependency, and one build-time GitHub call as the site's entire network surface. |
 | `install-commands.test.tsx` | The install snippets and their exact release asset names. |
 | `install-one-liner.test.ts` | The site and CI agree about what a documented command is, by rendering the commands the way CI does. |
 | `landing.test.tsx` | Hero copy, the eight feature cards, the how-it-works steps. |

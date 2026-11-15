@@ -50,14 +50,34 @@ python3 -m http.server 8899 --directory /tmp/site
 ## Content rules
 
 - Nothing on the site may claim a behaviour the Go implementation does not have.
-  The resume command, the discovery command, the notification events and the
-  limits documented here all exist in the source.
+  The resume vector is the clearest case: every page describes the **handoff**
+  `claude --bg --resume <session-id> --name ccresu-<first 8 hex of the id>
+  "<continuation message>"`, which is `claude.HandoffArgs` argument for argument,
+  and the attempt ends when the CLI prints its `backgrounded · <short-id> ·
+  <name>` block and returns. Print mode (`claude -p --resume`), `--output-format
+  json`, stop-then-resume retries and "wait for the transcript to grow" are
+  retired: they are not described anywhere, and the one print-mode sentence the
+  copy keeps is the negation that explains why there is no second path (`--bg`
+  cannot be combined with `-p`/`--print`).
+- `tests/handoff-contract.test.ts` enforces that rule from the artefacts rather
+  than from memory. It pins the argument order against `internal/claude/handoff.go`,
+  fails on any retired claim returning to a doc, landing or diagram module, and
+  pins the scope boundary: 15 routes, no dashboard, no auth, no analytics, and no
+  client-side request to the loopback API.
 - No placeholder copy, no fake metrics, no dead links: `tests/` fails on
   placeholder text, on an internal link outside the known routes, and on
   external links that do not point at the repository.
 - Release asset names live in `lib/site.ts` and must match what
   `.github/workflows/release.yml` publishes:
   `ccresu_<version>_<os>_<arch>.tar.gz` (`.zip` on Windows) plus `checksums.txt`.
+
+## Tests
+
+`npm run test` runs the Vitest suite in jsdom; `npm run test:mobile` drives the
+built export in a real browser. The suite that matters most for this directory's
+credibility is `tests/handoff-contract.test.ts` — it is the reason a page cannot
+quietly go back to describing the recovery the binary stopped running. The rest
+are listed in `docs/website.md`.
 
 ## Deployment
 
