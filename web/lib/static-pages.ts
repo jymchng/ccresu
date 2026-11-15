@@ -50,8 +50,8 @@ export const aboutPage: StaticPage = {
       id: "what-it-is",
       heading: "What ccresu is",
       paragraphs: [
-        "Claude Code stops a session when you reach a usage limit. The work is not lost \u2014 the session is on disk \u2014 but nothing resumes it until you come back, read the reset time and type into the terminal yourself. ccresu closes that gap: it reads the limit message, works out when the limit actually resets, waits for that moment, and then resumes the same session with `claude -p --resume <session-id>` with the continuation message as the last argument.",
-        "Resuming is only half of it. ccresu then inspects the transcript to confirm the conversation really continued, and records the attempt. If the resume was rejected \u2014 because the window had not opened yet, or because the same session was already running in a background agent \u2014 the attempt is retried on a schedule instead of being reported as a success it never had.",
+        "Claude Code stops a session when you reach a usage limit. The work is not lost \u2014 the session is on disk \u2014 but nothing resumes it until you come back, read the reset time and type into the terminal yourself. ccresu closes that gap: it reads the limit message, works out when the limit actually resets, waits for that moment, and then hands the same session back to Claude Code's supervisor with `claude --bg --resume <session-id> --name ccresu-<hex>` and the continuation message as the last argument.",
+        "Resuming is only half of it. ccresu records the attempt as resumed only when the supervisor accepts the handoff and prints its `backgrounded` block; the transcript is still read, but as a diagnostic rather than as proof. If the handoff is refused \u2014 because the window had not opened yet, because the workspace is not trusted, or because no block ever appeared \u2014 the session goes back to discovery rather than being reported as a success it never had, and the daemon re-reads it on the next pass.",
         "It runs as a CLI you invoke, or as a user-level daemon that watches for interruptions in the background. Both share one SQLite database and one configuration file.",
       ],
     },
@@ -60,7 +60,7 @@ export const aboutPage: StaticPage = {
       heading: "What it deliberately does not do",
       bullets: [
         "It does not lift, bypass or reset a quota. It reads the reset time, waits for it, and acts afterwards.",
-        "It does not simulate keystrokes or allocate a pseudo-terminal. A resume is one `claude` process with one argv element per value.",
+        "It does not simulate keystrokes or allocate a pseudo-terminal. A resume is one `claude` invocation with one argv element per value.",
         "It does not fork, rewrite or replay your conversation. The same session id is resumed.",
         "It does not host anything. State is a local file, the optional API binds `127.0.0.1`, and the binary ships no web UI.",
       ],

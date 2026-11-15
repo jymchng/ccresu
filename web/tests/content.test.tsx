@@ -8,13 +8,14 @@ import { fallbackReleaseVersion, repo, site } from "@/lib/site";
 import { themeBootstrapScript, themeStorageKey } from "@/lib/theme";
 import { normalizeHref } from "./helpers";
 
+const landingText = [
+  ...features.map((feature) => `${feature.title} ${feature.description} ${feature.detail}`),
+  ...workflow.map((step) => `${step.title} ${step.command} ${step.description}`),
+].join("\n");
+
 function allText(): string {
   const pages = docs.map((doc) => JSON.stringify(doc.blocks)).join("\n");
-  const landing = [
-    ...features.map((feature) => `${feature.title} ${feature.description} ${feature.detail}`),
-    ...workflow.map((step) => `${step.title} ${step.command} ${step.description}`),
-  ].join("\n");
-  return `${pages}\n${landing}`;
+  return `${pages}\n${landingText}`;
 }
 
 const text = allText();
@@ -26,10 +27,30 @@ describe("content integrity", () => {
     }
   });
 
-  it("documents the verified resume command, not a guessed one", () => {
-    expect(text).toContain("claude -p --resume");
+  it("documents the handoff that is executed, not the retired print-mode resume", () => {
+    // `claude.HandoffArgs` builds `claude --bg --resume <id> --name <label>
+    // <message>`. Print mode was retired with the supervisor handoff, so a
+    // `-p --resume` string anywhere in the copy is drift, not documentation.
+    // This assertion used to demand that stale string, which is how the
+    // landing page kept advertising a command the binary no longer runs.
+    expect(text).toContain("claude --bg --resume");
     expect(text).toContain("claude agents --json");
+    expect(text).not.toContain("claude -p --resume");
+    expect(text).not.toContain("--output-format");
     expect(text).not.toContain("claude --resume-fork");
+  });
+
+  it("describes the handoff on the landing copy, not only in the docs", () => {
+    // The landing surfaces are the ones a reader sees before the docs, so they
+    // have to carry the same contract: the invocation, the acceptance block,
+    // and no claim that a longer transcript is the proof.
+    expect(landingText).toContain("claude --bg --resume");
+    expect(landingText).toContain("--name ccresu-<hex>");
+    expect(landingText).toContain("backgrounded");
+    expect(landingText).toContain("supervisor");
+    expect(landingText).not.toContain("transcript grew before");
+    expect(landingText).not.toMatch(/longer transcript/);
+    expect(landingText).not.toContain("-p --resume");
   });
 
   it("says the binary ships no web UI", () => {

@@ -42,15 +42,15 @@ export const features: readonly Feature[] = [
     icon: Cpu,
     title: "Resumes the same session",
     description:
-      "Runs the documented `claude -p --resume <session-id>` with a continuation message. No forking, no new conversation, no keystroke injection.",
+      "Hands the session to Claude Code's supervisor with one `claude --bg --resume <session-id> --name ccresu-<hex>` call and a continuation message. No forking, no new conversation, no keystroke injection.",
     detail: "Conversation history, working directory and active goal are preserved.",
   },
   {
     icon: CircleCheckBig,
-    title: "Proves the resume happened",
+    title: "Proves the handoff was accepted",
     description:
-      "A launch is not a recovery. ccresu verifies the session id is unchanged and the transcript grew before it records RESUMED.",
-    detail: "Verification timeout and health checks are configurable.",
+      "A launch is not a recovery. ccresu records RESUMED only when the supervisor prints its `backgrounded` block or publishes the state that says so. The transcript is read, but as a diagnostic rather than as proof.",
+    detail: "Acceptance is the evidence; growth alone is not.",
   },
   {
     icon: Database,
@@ -111,12 +111,12 @@ export const workflow: readonly WorkflowStep[] = [
     title: "Resume",
     command: "ccresu recover <session-id>",
     description:
-      "After the reset, checks the session and the limit, then resumes with `claude -p --resume` in the original working directory.",
+      "After the reset, checks the session and the limit, then hands off with `claude --bg --resume --name ccresu-<hex>` in the session's own working directory, never the daemon's.",
   },
   {
     title: "Verify",
     command: "ccresu status",
     description:
-      "Confirms the same session id still exists with a longer transcript before recording RESUMED, and notifies you if Telegram is configured.",
+      "Records RESUMED only once the supervisor accepted the handoff and printed its `backgrounded` block, keeps the transcript growth as a diagnostic, and notifies you if Telegram is configured.",
   },
 ];
