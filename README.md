@@ -153,7 +153,7 @@ Usage:
   ccresu --help | --version
 
 Commands:
-  config    create, validate (or print) the configuration
+  config    init, validate or show the configuration
   daemon    run the watchdog loop until interrupted
   disable   stop ccresu from recovering a session
   doctor    check the environment ccresu runs in

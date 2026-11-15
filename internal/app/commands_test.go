@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -22,18 +23,34 @@ import (
 // canonicalSessionID is a realistic Claude Code session UUID.
 const canonicalSessionID = "11111111-1111-4111-8111-111111111111"
 
+// TestHelpListsEveryCommand pins the command index to the command table: every
+// spec gets a row, and no row outlives its spec.
+//
+// The expected names come from commands() instead of being retyped here. A
+// retyped list is what let the index keep promising `sessions clear`, and what
+// left a `reset` entry in this very test long after that command was removed
+// (it still passed, because the tagline says "usage limit resets"): the
+// assertion named the commands someone remembered, not the ones that exist.
 func TestHelpListsEveryCommand(t *testing.T) {
 	h := newHarness(t)
 	code, stdout, stderr := h.exec(t, "--help")
 	if code != ExitOK {
 		t.Fatalf("exit = %d, want %d (stderr %q)", code, ExitOK, stderr)
 	}
-	for _, name := range []string{
-		"daemon", "status", "sessions", "inspect", "recover", "retry", "enable",
-		"reset", "disable", "history", "config", "doctor", "serve", "version",
-	} {
-		if !strings.Contains(stdout, name) {
-			t.Errorf("help does not mention %q", name)
+	index := helpIndex(t, stdout)
+
+	declared := make(map[string]bool)
+	// A zero App is enough: commands() only names the specs, and each run field
+	// is a method value this test never calls.
+	for _, spec := range (&App{}).commands() {
+		declared[spec.name] = true
+		if _, ok := index[spec.name]; !ok {
+			t.Errorf("help has no %q row, but the command table declares it", spec.name)
+		}
+	}
+	for name := range index {
+		if !declared[name] {
+			t.Errorf("help lists %q, which the command table does not declare", name)
 		}
 	}
 	if !strings.Contains(stdout, "Exit codes:") {
@@ -41,72 +58,169 @@ func TestHelpListsEveryCommand(t *testing.T) {
 	}
 }
 
-// TestSessionsHelpNamesOnlyDispatchableActions pins the sessions summary to the
-// operations the CLI actually has.
+// helpRowProse is the reason a summary that describes its own command needs no
+// action table: the command is the action.
+const helpRowProse = "describes the command itself; it advertises no sub-action"
+
+// helpRow is this test's decision about one row of the `ccresu --help` index:
+// either its summary advertises actions — and each one has the argv that
+// performs it — or it is prose that names no action.
+type helpRow struct {
+	command string
+	// tail is the closing phrase an action-list summary ends with: "list,
+	// inspect or delete sessions" ends with "sessions", "init, validate or show
+	// the configuration" ends with "the configuration". A prose row leaves it
+	// empty.
+	tail string
+	// actions maps an advertised action to the argv that performs it. A nil map
+	// means the summary is prose.
+	actions map[string][]string
+	// prose says why a summary names no action, so that a new command has to
+	// make that claim deliberately instead of being skipped for looking unlike
+	// the two rows below.
+	prose string
+}
+
+// helpRows classifies every row of the help index. Adding a command means adding
+// a row: the test fails on an unclassified summary rather than assuming it is
+// prose.
+func helpRows(t *testing.T) []helpRow {
+	t.Helper()
+	// The config invocations run against paths inside a temp directory, so
+	// `config init` writes nothing near the operator's real configuration. The
+	// session id does not exist on purpose: what is asserted is that dispatch
+	// reaches the action, not that the action finds a session, so "not found"
+	// passes and only a usage rejection means the action is not there.
+	initPath := filepath.Join(t.TempDir(), "config.yaml")
+	missingPath := filepath.Join(t.TempDir(), "missing.yaml")
+	return []helpRow{
+		{command: "config", tail: "the configuration", actions: map[string][]string{
+			"init":     {"config", "init", initPath},
+			"validate": {"config", "validate", missingPath},
+			"show":     {"config", "show"},
+		}},
+		{command: "sessions", tail: "sessions", actions: map[string][]string{
+			"list":    {"sessions"},
+			"inspect": {"inspect", canonicalSessionID},
+			"delete":  {"sessions", "delete", canonicalSessionID},
+		}},
+		{command: "daemon", prose: helpRowProse},
+		{command: "status", prose: "a list of the state it summarises, not of actions"},
+		{command: "inspect", prose: helpRowProse},
+		{command: "recover", prose: helpRowProse},
+		{command: "retry", prose: helpRowProse},
+		{command: "enable", prose: helpRowProse},
+		{command: "disable", prose: helpRowProse},
+		{command: "history", prose: helpRowProse},
+		{command: "doctor", prose: helpRowProse},
+		{command: "serve", prose: helpRowProse},
+		{command: "hook", prose: helpRowProse},
+		{command: "version", prose: helpRowProse},
+	}
+}
+
+// TestHelpSummariesNameOnlyDispatchableActions pins every action a help summary
+// advertises to an operation the CLI actually performs.
 //
-// `ccresu --help` advertised "list, inspect, delete or clear sessions" while no
-// `sessions clear` subcommand existed: `ccresu sessions clear` answers "sessions
-// takes no arguments, got \"clear\"". A summary is prose, so nothing failed when
-// the promise and the dispatch drifted apart. This reads the action words out of
-// the published summary and requires an invocation for each — the check that
-// would have caught `clear`.
-func TestSessionsHelpNamesOnlyDispatchableActions(t *testing.T) {
+// `ccresu --help` summarised sessions as "list, inspect, delete or clear
+// sessions" with no `sessions clear` subcommand, and config as "create, validate
+// (or print) the configuration" where neither verb exists — `ccresu config
+// print` answers "unknown config subcommand \"print\" (want init, validate or
+// show)". A summary is prose, so nothing failed when the promise and the
+// dispatch drifted apart, twice. This reads the action words out of every
+// published summary and requires an invocation for each.
+func TestHelpSummariesNameOnlyDispatchableActions(t *testing.T) {
 	h := newHarness(t)
 	code, stdout, stderr := h.exec(t, "--help")
 	if code != ExitOK {
 		t.Fatalf("exit = %d, want %d (stderr %q)", code, ExitOK, stderr)
 	}
-	summary := helpSummary(t, stdout, "sessions")
+	index := helpIndex(t, stdout)
 
-	// The invocation that performs each advertised action. The session id does
-	// not exist: what is asserted is that dispatch reaches the action, not that
-	// the action finds a session, so "not found" is a pass and only a usage
-	// rejection means the action is not there.
-	invocations := map[string][]string{
-		"list":    {"sessions"},
-		"inspect": {"inspect", canonicalSessionID},
-		"delete":  {"sessions", "delete", canonicalSessionID},
-	}
-	for _, action := range summaryActions(t, summary, "sessions") {
-		args, ok := invocations[action]
+	classified := make(map[string]bool, len(index))
+	for _, row := range helpRows(t) {
+		classified[row.command] = true
+		summary, ok := index[row.command]
 		if !ok {
-			t.Errorf("the sessions summary advertises %q, which no command performs: "+
-				"add the action or drop it from the summary", action)
+			t.Errorf("helpRows classifies %q, which the command index does not list", row.command)
 			continue
 		}
-		code, out, errOut := h.exec(t, args...)
-		if code == ExitUsage {
-			t.Errorf("ccresu %s exits %d (usage) for the advertised action %q: stdout %q stderr %q",
-				strings.Join(args, " "), code, action, out, errOut)
+		if row.actions == nil {
+			if row.prose == "" {
+				t.Errorf("the %s row is classified as prose with no reason given", row.command)
+			}
+			continue
+		}
+		for _, action := range summaryActions(t, summary, row.tail) {
+			args, ok := row.actions[action]
+			if !ok {
+				t.Errorf("the %s summary advertises %q, which no command performs: "+
+					"add the action or drop it from the summary", row.command, action)
+				continue
+			}
+			code, out, errOut := h.exec(t, args...)
+			if code == ExitUsage {
+				t.Errorf("ccresu %s exits %d (usage) for the advertised action %q: stdout %q stderr %q",
+					strings.Join(args, " "), code, action, out, errOut)
+			}
+		}
+	}
+	for command := range index {
+		if !classified[command] {
+			t.Errorf("the command index lists %q with no entry in helpRows: "+
+				"say whether its summary advertises actions", command)
 		}
 	}
 }
 
-// helpSummary returns the summary column of one command in the `ccresu --help`
-// index, whose rows are "  <name>  <summary>" with the summary padded to a
-// common column.
-func helpSummary(t *testing.T, help, command string) string {
+// helpIndex returns the command index of `ccresu --help`: the command name of
+// every row mapped to its summary. The rows are "  <name>  <summary>", with the
+// summary padded to a common column, and the index ends at the blank line before
+// the global flags.
+func helpIndex(t *testing.T, help string) map[string]string {
 	t.Helper()
+	index := make(map[string]string)
+	inIndex := false
 	for _, line := range strings.Split(help, "\n") {
-		fields := strings.SplitN(strings.TrimSpace(line), "  ", 2)
-		if len(fields) == 2 && strings.TrimSpace(fields[0]) == command {
-			return strings.TrimSpace(fields[1])
+		switch {
+		case strings.HasPrefix(line, "Commands:"):
+			inIndex = true
+			continue
+		case inIndex && strings.TrimSpace(line) == "":
+			inIndex = false
+			continue
 		}
+		if !inIndex {
+			continue
+		}
+		fields := strings.SplitN(strings.TrimSpace(line), "  ", 2)
+		if len(fields) != 2 {
+			continue
+		}
+		index[strings.TrimSpace(fields[0])] = strings.TrimSpace(fields[1])
 	}
-	t.Fatalf("no %q row in the command index:\n%s", command, help)
-	return ""
+	if len(index) == 0 {
+		t.Fatalf("no command index in the help:\n%s", help)
+	}
+	return index
 }
 
 // summaryActions returns the action words a summary advertises: everything before
-// the trailing noun, split on commas and "or". "list, inspect or delete sessions"
-// gives ["list" "inspect" "delete"].
-func summaryActions(t *testing.T, summary, noun string) []string {
+// the trailing phrase, split on commas and "or". "list, inspect or delete
+// sessions" gives ["list" "inspect" "delete"].
+func summaryActions(t *testing.T, summary, tail string) []string {
 	t.Helper()
-	clause := strings.TrimSuffix(strings.TrimSpace(summary), " "+noun)
-	if clause == strings.TrimSpace(summary) {
-		t.Fatalf("the %s summary %q does not end with %q, so its actions cannot be read",
-			noun, summary, noun)
+	if tail == "" {
+		t.Fatalf("the summary %q is classified as an action list with no closing phrase", summary)
 	}
+	clause := strings.TrimSuffix(strings.TrimSpace(summary), " "+tail)
+	if clause == strings.TrimSpace(summary) {
+		t.Fatalf("the summary %q does not end with %q, so its actions cannot be read",
+			summary, tail)
+	}
+	// A parenthetical gloss still advertises an action: "create, validate (or
+	// print)" names print, so the brackets come off before the split.
+	clause = strings.NewReplacer("(", "", ")", "").Replace(clause)
 	clause = strings.ReplaceAll(clause, " or ", ", ")
 	var actions []string
 	for _, action := range strings.Split(clause, ",") {
@@ -115,7 +229,7 @@ func summaryActions(t *testing.T, summary, noun string) []string {
 		}
 	}
 	if len(actions) == 0 {
-		t.Fatalf("the %s summary %q names no actions", noun, summary)
+		t.Fatalf("the summary %q names no actions", summary)
 	}
 	return actions
 }

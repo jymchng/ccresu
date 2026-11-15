@@ -487,7 +487,7 @@ func (a *App) commands() []commandSpec {
 		},
 		{
 			name:    "config",
-			summary: "create, validate (or print) the configuration",
+			summary: "init, validate or show the configuration",
 			usage:   "config init [PATH] [--force] | config validate [PATH] | config show",
 			run:     (*App).cmdConfig,
 		},

@@ -249,7 +249,9 @@ func TestConfigInitIsDiscoverable(t *testing.T) {
 	if !found {
 		t.Fatal("the config command is missing from the command index")
 	}
-	if !strings.Contains(stdout.String(), "create, validate (or print) the configuration") {
+	// The summary names the three subcommands the dispatch accepts, so the row
+	// cannot describe an operation `ccresu config` does not perform.
+	if !strings.Contains(stdout.String(), "init, validate or show the configuration") {
 		t.Errorf("--help does not describe config init:\n%s", stdout.String())
 	}
 
