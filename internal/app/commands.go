@@ -1124,6 +1124,12 @@ type supervisorReport struct {
 	LogTarget string `json:"log_target,omitempty"`
 	// RecentOutput is the tail of `claude logs <state-id>`, newest last.
 	RecentOutput []string `json:"recent_output,omitempty"`
+	// DaemonOutput is the tail of `claude daemon logs` — the supervisor's own
+	// log, which is where a failed handoff or a restart explains itself (R10).
+	DaemonOutput []string `json:"daemon_output,omitempty"`
+	// DaemonError is why the supervisor's log could not be read, when the read
+	// failed while the supervisor itself answered.
+	DaemonError string `json:"daemon_error,omitempty"`
 	// Error explains an "unreadable" or "unavailable" status.
 	Error string `json:"error,omitempty"`
 }
@@ -1180,6 +1186,16 @@ func (a *App) readSupervisor(ctx context.Context, reader SupervisorReader, attem
 	}
 	report.Socket = status.SocketDir
 
+	// The supervisor's own log is read only while it is running: it is the file
+	// its process follows, so a "not running" answer has nothing to read and
+	// asking would report a failure where the honest answer is "there is no
+	// supervisor yet" (R1). Both reads are on demand, for `inspect` only (R10).
+	if daemon, daemonErr := reader.DaemonLogs(ctx); daemonErr != nil {
+		report.DaemonError = daemonErr.Error()
+	} else {
+		report.DaemonOutput = lastLines(daemon.Text, supervisorLogLines)
+	}
+
 	// The recent output belongs to a session the supervisor hosts, and its name for
 	// that session is the short state id the handoff printed. Without one there is
 	// nothing to ask about, and saying so is better than printing an empty log as if
@@ -1216,6 +1232,17 @@ func (a *App) writeSupervisorDetail(w io.Writer, report supervisorReport) {
 	}
 	if len(report.Argv) > 0 {
 		a.field(w, "command", "claude "+strings.Join(report.Argv, " "))
+	}
+	switch {
+	case len(report.DaemonOutput) > 0:
+		a.field(w, "supervisor log", fmt.Sprintf("last %d line(s) of `claude daemon logs`", len(report.DaemonOutput)))
+		for _, line := range report.DaemonOutput {
+			fmt.Fprintf(w, "  %s\n", truncateText(line, 200))
+		}
+	case report.DaemonError != "":
+		a.field(w, "supervisor log", "`claude daemon logs` failed: "+truncateText(report.DaemonError, 200))
+	default:
+		a.field(w, "supervisor log", "`claude daemon logs` printed nothing")
 	}
 	switch {
 	case report.LogTarget != "" && len(report.RecentOutput) > 0:

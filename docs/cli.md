@@ -303,9 +303,18 @@ version:       2.1.300
 workers:       3
 socket dir:    /run/user/1000/claude
 command:       claude daemon status
+supervisor log: last 2 line(s) of `claude daemon logs`
+  supervisor started
+  respawned worker 1
 recent output: last 20 line(s) of `claude logs ab12cd34`
   …
 ```
+
+`supervisor log` is the tail of `claude daemon logs` — the supervisor's own log,
+which is where a restart, a failed handoff or a rotated worker explains itself.
+It is read only while the supervisor is running (a stopped supervisor has no log
+to follow), and a failed read is reported with its own words rather than shown as
+an empty log.
 
 `status` is one of four words, because four different facts lead to four
 different actions:
@@ -323,8 +332,8 @@ attempt. When the latest attempt carries no supervisor state id, the block says
 so instead of printing an empty log, and when the session is not hosted by the
 supervisor at all (`status: not running`) no log read is attempted. With
 `--json`, the same read appears as a `supervisor` object: `status`, `state`,
-`version`, `workers`, `socket_dir`, `argv`, `log_target`, `recent_output` and
-`error` (all omitted when empty).
+`version`, `workers`, `socket_dir`, `argv`, `log_target`, `recent_output`,
+`daemon_output`, `daemon_error` and `error` (all omitted when empty).
 
 `sessions` carries the same answer as its `NEXT ATTEMPT` column: `in 2h14m` while
 a wait is pending, `none (<reason>)` when nothing is scheduled. Both read the

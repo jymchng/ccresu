@@ -12,6 +12,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -31,10 +32,13 @@ type supervisorProvider struct {
 	statusErr error
 	logs      claude.LogsResult
 	logsErr   error
+	daemonLog claude.LogsResult
+	daemonErr error
 
-	statusCalls int
-	logCalls    int
-	logTargets  []string
+	statusCalls    int
+	logCalls       int
+	daemonLogCalls int
+	logTargets     []string
 }
 
 func (p *supervisorProvider) DaemonStatus(context.Context) (claude.SupervisorStatus, error) {
@@ -49,7 +53,8 @@ func (p *supervisorProvider) SessionLogs(_ context.Context, stateID string) (cla
 }
 
 func (p *supervisorProvider) DaemonLogs(context.Context) (claude.LogsResult, error) {
-	return p.logs, p.logsErr
+	p.daemonLogCalls++
+	return p.daemonLog, p.daemonErr
 }
 
 // seedHandedOffAttempt records the attempt a handoff left behind, including the
@@ -94,6 +99,10 @@ func TestInspectReadsTheSupervisorOnDemand(t *testing.T) {
 			Argv:         claude.DaemonStatusArgs(),
 		},
 		logs: claude.LogsResult{Argv: claude.SessionLogsArgs("ab12cd34"), Text: "line one\nline two"},
+		daemonLog: claude.LogsResult{
+			Argv: claude.DaemonLogsArgs(),
+			Text: "supervisor started\nrespawned worker 1",
+		},
 	}
 	h.rt.Provider = provider
 
@@ -107,6 +116,9 @@ func TestInspectReadsTheSupervisorOnDemand(t *testing.T) {
 		"running",
 		"2.1.300",
 		"claude daemon status",
+		"claude daemon logs",
+		"supervisor started",
+		"respawned worker 1",
 		"claude logs ab12cd34",
 		"line one",
 		"line two",
@@ -117,6 +129,10 @@ func TestInspectReadsTheSupervisorOnDemand(t *testing.T) {
 	}
 	if got := provider.logTargets; len(got) != 1 || got[0] != "ab12cd34" {
 		t.Errorf("`claude logs` targets = %v, want the handoff's state id ab12cd34", got)
+	}
+	if provider.daemonLogCalls != 1 {
+		t.Errorf("`claude daemon logs` reads = %d, want 1: the supervisor's own log is evidence (R10)",
+			provider.daemonLogCalls)
 	}
 }
 
@@ -144,9 +160,9 @@ func TestNothingButInspectReadsTheSupervisor(t *testing.T) {
 			t.Fatalf("%v exit = %d (stderr %q)", args, code, stderr)
 		}
 	}
-	if provider.statusCalls != 0 || provider.logCalls != 0 {
-		t.Errorf("supervisor reads = %d status, %d logs, want 0: it is read on demand, never polled",
-			provider.statusCalls, provider.logCalls)
+	if provider.statusCalls != 0 || provider.logCalls != 0 || provider.daemonLogCalls != 0 {
+		t.Errorf("supervisor reads = %d status, %d logs, %d daemon logs, want 0: it is read on demand, never polled",
+			provider.statusCalls, provider.logCalls, provider.daemonLogCalls)
 	}
 }
 
@@ -172,5 +188,31 @@ func TestInspectSaysWhenThereIsNoSupervisor(t *testing.T) {
 	}
 	if provider.logCalls != 0 {
 		t.Error("`claude logs` was read for a session the supervisor does not host")
+	}
+	if provider.daemonLogCalls != 0 {
+		t.Error("`claude daemon logs` was read with no supervisor running: there is no log to read")
+	}
+}
+
+// TestInspectReportsAFailedSupervisorLog keeps a failed daemon-log read a named
+// fact rather than an empty log: the nonexistent and the unreadable are different
+// answers, and only one of them means "the supervisor has nothing to say".
+func TestInspectReportsAFailedSupervisorLog(t *testing.T) {
+	h := newHarness(t)
+	h.seedSession(t, supervisorSessionID, nil)
+	provider := &supervisorProvider{
+		FakeProvider: h.provider,
+		status:       claude.SupervisorStatus{Running: true, State: "running"},
+		daemonErr:    errors.New("claude daemon logs: exit 2: permission denied"),
+	}
+	h.rt.Provider = provider
+
+	code, out, stderr := h.exec(t, "inspect", supervisorSessionID)
+	if code != ExitOK {
+		t.Fatalf("inspect exit = %d, want %d: an unreadable log is not a failed inspection (stderr %q)",
+			code, ExitOK, stderr)
+	}
+	if !strings.Contains(out, "permission denied") {
+		t.Errorf("inspect does not report why the supervisor's log could not be read:\n%s", out)
 	}
 }
