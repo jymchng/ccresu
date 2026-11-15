@@ -29,7 +29,7 @@ export type Capture = {
 export const captureSource = {
   generator: "scripts/web-captures.sh",
   generated: "2026-11-15",
-  commit: "43f7988",
+  commit: "2ed3fc0",
   binary: "ccresu (built from this commit)",
 } as const;
 
