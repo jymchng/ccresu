@@ -471,3 +471,156 @@ func TestTheRecoveryReadAlwaysPassesAll(t *testing.T) {
 		t.Errorf("argv = %q, want it to contain `agents --json --all` even with discover_all_sessions off", joined)
 	}
 }
+
+func TestABlockedObservationParksTheSessionAndTellsTheOperatorOnce(t *testing.T) {
+	// R4, R11 and R12 asserted at the engine, not at the mapping. The pure
+	// function can be right while a pass still hands a continuation to a blocked
+	// session, parks it without recording the state it saw, or raises the
+	// milestone from a paraphrase \u2014 so this drives one real pass through
+	// Recover, with an observer installed, which is the branch a deployment with
+	// notifications takes.
+	//
+	// Both payload shapes are exercised because R12 turns on the difference:
+	// a blocked session whose `waitingFor` names a permission prompt and one that
+	// reports no reason at all must both reach the operator, and neither may
+	// invent the other's message.
+	for _, tc := range []struct {
+		name       string
+		waitingFor string
+	}{
+		{name: "with the reason the supervisor published", waitingFor: "permission prompt"},
+		{name: "with no reason reported at all", waitingFor: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const id = sessionA
+			entry := claude.AgentEntry{
+				StateID:    "ab12cd34",
+				SessionID:  id,
+				Kind:       "background",
+				State:      "blocked",
+				Status:     "waiting",
+				WaitingFor: tc.waitingFor,
+			}
+			store := newTestStore(t)
+			seedSession(t, store, recoverableSession(id))
+			provider := &providerStub{
+				statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
+					return statusFor(sessionID, 10, 200), nil
+				},
+				// The supervisor's opinion, which is the only state input allowed.
+				listingFn: func(int) (claude.PublishedListing, error) {
+					return claude.PublishedListing{
+						Entries:     []claude.AgentEntry{entry},
+						BySessionID: map[string]claude.AgentEntry{id: entry},
+						ReadAt:      observedAt,
+					}, nil
+				},
+			}
+			var milestones []Milestone
+			manager := testManager(t, store, provider, func(cfg *Config) {
+				cfg.Observer = func(_ context.Context, m Milestone) {
+					milestones = append(milestones, m)
+				}
+			})
+
+			outcome, err := manager.Recover(context.Background(), id)
+			if err != nil {
+				t.Fatalf("Recover() error = %v", err)
+			}
+
+			// A session waiting on a human is never handed a continuation: it
+			// would queue behind a prompt nobody is there to answer.
+			if got := provider.resumeCount(); got != 0 {
+				t.Errorf("resumes = %d, want 0: a blocked session is never resumed", got)
+			}
+			if outcome.Resumed {
+				t.Error("Resumed = true, want false: `blocked` is never a recovery")
+			}
+			if outcome.State != storage.StateWaitingForInput {
+				t.Errorf("State = %q, want %q", outcome.State, storage.StateWaitingForInput)
+			}
+			stored, err := store.GetSession(context.Background(), id)
+			if err != nil {
+				t.Fatalf("GetSession() error = %v", err)
+			}
+			if stored.State != storage.StateWaitingForInput {
+				t.Errorf("persisted State = %q, want %q", stored.State, storage.StateWaitingForInput)
+			}
+
+			// Exactly one needs-input milestone, and no success standing beside
+			// it: the two would contradict each other in the operator's inbox.
+			var needsInput []Milestone
+			for _, m := range milestones {
+				switch m.Kind {
+				case MilestoneNeedsInput:
+					needsInput = append(needsInput, m)
+				case MilestoneSucceeded:
+					t.Error("MilestoneSucceeded raised for a blocked session, want only needs_input")
+				}
+			}
+			if len(needsInput) != 1 {
+				t.Fatalf("needs_input milestones = %d, want exactly 1", len(needsInput))
+			}
+
+			// The payload quotes the CLI verbatim, and says so when the CLI said
+			// nothing rather than suppressing the milestone.
+			reason, reported := needsInput[0].NeedsInputReason()
+			if want := tc.waitingFor != ""; reported != want {
+				t.Errorf("NeedsInputReason() reported = %v, want %v", reported, want)
+			}
+			if reason != tc.waitingFor {
+				t.Errorf("NeedsInputReason() reason = %q, want %q carried verbatim", reason, tc.waitingFor)
+			}
+			if got := needsInput[0].Observation.State; got != "blocked" {
+				t.Errorf("milestone Observation.State = %q, want the published value carried through", got)
+			}
+			if got := needsInput[0].Outcome.State; got != storage.StateWaitingForInput {
+				t.Errorf("milestone Outcome.State = %q, want %q", got, storage.StateWaitingForInput)
+			}
+		})
+	}
+}
+
+func TestAParkDoesNotDependOnANotifier(t *testing.T) {
+	// The nil-observer guard in announceObservation is a design property, not a
+	// defensive afterthought: a deployment with no notifier must recover
+	// identically to one with a notifier, because delivery sits beside the
+	// recovery rather than in its path. So a blocked pass with no observer
+	// installed still has to park the session and return without error.
+	const id = sessionA
+	entry := claude.AgentEntry{
+		StateID:    "ab12cd34",
+		SessionID:  id,
+		Kind:       "background",
+		State:      "blocked",
+		Status:     "waiting",
+		WaitingFor: "sandbox request",
+	}
+	store := newTestStore(t)
+	seedSession(t, store, recoverableSession(id))
+	provider := &providerStub{
+		statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
+			return statusFor(sessionID, 10, 200), nil
+		},
+		listingFn: func(int) (claude.PublishedListing, error) {
+			return claude.PublishedListing{
+				Entries:     []claude.AgentEntry{entry},
+				BySessionID: map[string]claude.AgentEntry{id: entry},
+				ReadAt:      observedAt,
+			}, nil
+		},
+	}
+	// testManager installs no observer unless a mutate function does.
+	manager := testManager(t, store, provider, nil)
+
+	outcome, err := manager.Recover(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Recover() error = %v", err)
+	}
+	if outcome.State != storage.StateWaitingForInput {
+		t.Errorf("State = %q, want %q with no notifier installed", outcome.State, storage.StateWaitingForInput)
+	}
+	if got := provider.resumeCount(); got != 0 {
+		t.Errorf("resumes = %d, want 0: no notifier must not turn a park into a resume", got)
+	}
+}

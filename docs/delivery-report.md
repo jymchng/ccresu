@@ -35,12 +35,19 @@ Only documented interfaces are used, all verified against Claude Code 2.1.223:
 | Discover sessions | `claude agents --json` (`--all`, `--cwd <path>`) |
 | Transcripts | `~/.claude/projects/<slugified-cwd>/<session-id>.jsonl` |
 | Per-session environment | `~/.claude/session-env/<session-id>/` |
-| Resume the original session | `claude -p --resume <session-id> --output-format json "<message>"` |
+| Resume the original session | `claude --bg --resume <session-id> --name ccresu-<first-8-hex> "<message>"` |
+| Prove the resume | the CLI's `backgrounded · <short-id> · <name>` block, then the published `state` from `claude agents --json --all` |
 
-The resume argv is built in exactly one place (`claude.ResumeArgs`), is passed as
-separate argv elements with no shell, and forks nothing. A session type the CLI
-reports but ccresu does not understand becomes `UNRECOVERABLE` with the reported
-type in the reason — never an invented command.
+The resume argv is built in exactly one place (`claude.HandoffArgs`,
+`internal/claude/handoff.go`), is passed as separate argv elements with no shell,
+and forks nothing — the continuation goes to Claude Code's background supervisor,
+not to a process ccresu owns. The CLI answers a handoff with a
+`backgrounded · <short-id> · <name>` block; a handoff that prints no block is
+`ErrHandoffNotAcknowledged`, because ccresu could not then name what it created.
+`--bg` and `-p` cannot be combined, so the retired print-mode vector is absent by
+construction rather than by convention. A session type the CLI reports but ccresu
+does not understand becomes `UNRECOVERABLE` with the reported type in the reason —
+never an invented command.
 
 ## Quality gates, measured
 
@@ -52,13 +59,13 @@ Run at `HEAD` on a clean tree:
 | Vet | `go vet ./...` | clean |
 | Tests | `go test ./...` | all 15 Go packages with tests pass |
 | Race | `go test -race ./...` | pass |
-| Coverage | `make cover-check` | **88.8%** (gate 80%) |
+| Coverage | `make cover-check` | **86.7%** (gate 80%) |
 | Website lint | `npm run lint` | clean |
 | Website types | `npx tsc --noEmit` | clean |
 | Website tests | `npm run test` | 18 files, 143 tests pass |
 | Website build | `npm run build` | static export, 15 routes |
 
-Suite size: 83 Go test files, 779 test functions, plus 18 web test files.
+Suite size: 88 Go test files, 811 test functions, plus 18 web test files.
 
 Per-package statement coverage, from `go test ./... -cover`:
 
@@ -71,10 +78,10 @@ Per-package statement coverage, from `go test ./... -cover`:
 | `internal/scheduler` | 96.0% | ≥95% |
 | `internal/telegram` | 96.0% | ≥90% |
 | `internal/clock` | 93.3% | — |
-| `internal/recovery` | 97.7% | ≥90% |
-| `internal/claude` | 90.6% | ≥80% |
+| `internal/recovery` | 94.7% | ≥90% |
+| `internal/claude` | 90.1% | ≥80% |
 | `internal/server` | 88.0% | ≥80% |
-| `internal/storage` | 85.8% | ≥85% |
+| `internal/storage` | 85.6% | ≥85% |
 | `internal/app` | 84.1% | ≥80% |
 | `cmd/ccresu` | 100.0% | — |
 | `tests/e2e` | no statements (behavioural) | — |
@@ -92,20 +99,20 @@ row held to the tenth across repeated runs, with one near-miss: `internal/server
 measured 88.0% in isolation and in eight of nine aggregate runs, and 87.8% once
 when the whole suite was competing for the machine.
 
-The 88.8% total is statement-weighted over everything `go test ./...` reports in
+The 86.7% total is statement-weighted over everything `go test ./...` reports in
 a clean checkout: the twelve `internal/` packages, `cmd/ccresu` (100.0%, two
 statements), `tests/support` (a fixture package the end-to-end tests import,
 which earns no credit for another package's test run and so reports 0.0%) and
 the two behavioural suites, which have no statements of their own. Over the
-`internal/` packages only it is 90.1%.
+`internal/` packages only it is 89.8%.
 
 One caveat about that number, because it depends on whether the website's
 dependencies are installed. After `cd web && npm ci`, `go test ./...` also walks
 a vendored Go package inside `web/node_modules` (160 statements, no tests of its
-own), and the very same run then reports **86.9%**. Both figures are correct for
+own), and the very same run then reports **86.7%**. Both figures are correct for
 their tree: CI's Go job runs `make cover-check` before the website job installs
-anything, so the gate sees 88.8%, and a developer who has already run `npm ci`
-sees 86.9% and the gate still passes.
+anything, so the gate sees 88.5%, and a developer who has already run `npm ci`
+sees 86.7% and the gate still passes.
 
 ## The end-to-end scenario
 
@@ -117,10 +124,19 @@ layer with only the process execution stubbed:
 3. Record the paused-goal companion message.
 4. Resolve 12:00 **Europe/Berlin** — not the host zone.
 5. Persist the schedule and wait.
-6. Reach the reset, recheck, resume with the same session id.
-7. Prove the resume: id preserved *and* transcript grew.
-8. Reach `RESUMED` with the attempt recorded.
+6. Reach the reset, recheck, and hand the continuation to the supervisor with the
+   same session id: `claude --bg --resume <session-id> --name
+   ccresu-<first-8-hex> "<message>"`.
+7. Prove the handoff from the CLI's `backgrounded · <short-id> · <name>` block,
+   which names what it created. Transcript growth is recorded as a diagnostic and
+   proves nothing on its own.
+8. Read the published state — one `claude agents --json --all` per pass, keyed by
+   `sessionId` — and reach `RESUMED` with the observation recorded on the attempt.
 9. Queue and deliver exactly one Telegram success message.
+
+A `blocked` publication takes the other branch of the same map: it parks the
+session in `WAITING_FOR_INPUT` with the published `waitingFor` verbatim, sends no
+continuation, and raises exactly one needs-input milestone — never a success.
 
 Plus two tighter scenarios: a restart in the middle of the wait
 (`TestScenarioSurvivesRestartMidWait`) and `ErrLimitNotCleared` — the limit is
@@ -132,7 +148,7 @@ Rediscovery after a spent budget is covered by the `internal/recovery` unit test
 
 Tracked as open goals, not hidden:
 
-- `internal/recovery` edge paths (`verify.go`, `manager.go`) are now at 97.7%;
+- `internal/recovery` edge paths (`verify.go`, `manager.go`) are now at 94.7%;
   the statements left are unreachable defensive branches tracked as an open goal.
 - `tests/integration` holds three test files and no non-test Go files, so it
   contributes no statements of its own; `cmd/ccresu` is a single test file over a

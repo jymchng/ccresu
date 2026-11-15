@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Scope** | Six proposed enhancements to `ccresu`, derived from two Claude Code documentation pages |
-| **Status** | All six are **`Proposed`**. Nothing in this directory is implemented, accepted, or released |
+| **Scope** | Six enhancements to `ccresu`, derived from two Claude Code documentation pages |
+| **Status** | PRDs 1–2 are **`Implemented`** on `main`, unreleased. PRDs 3–6 are **`Proposed`**. The §2 column below is the only place that is recorded — the PRD documents themselves are specifications and are not rewritten to describe what shipped |
 | **Baseline** | `v0.6.0` (`55bf09e`) — the published version every PRD measures against |
 | **Sources** | <https://code.claude.com/docs/en/agent-view> and <https://code.claude.com/docs/en/cli-reference>, both read in full |
 | **Precedent** | [`usage-limit-refusal-misreported.md`](usage-limit-refusal-misreported.md), the accepted PRD that produced `v0.6.0` |
@@ -33,7 +33,7 @@ while `--max-budget-usd`, `--max-turns` and `--json-schema` are documented
 print-mode-only, which is why PRD 5 replaces the first two with a bound `ccresu`
 enforces itself rather than pretending the flag survives. The six PRDs below adopt
 that surface in dependency order, each one shippable on its own. None of them
-preserves today's print-mode path: the supervisor path replaces it outright, and
+preserves the print-mode path: the supervisor path replaces it outright, and
 no PRD in this set carries a compatibility shim for the old one.
 
 ## 2. The six PRDs
@@ -42,8 +42,8 @@ Read in this order. Each depends only on the ones above it.
 
 | # | PRD | Problem it settles, in one line | Depends on | Status |
 |---|---|---|---|---|
-| 1 | [`background-supervisor-recovery.md`](background-supervisor-recovery.md) | Recovery runs a process `ccresu` owns, so a resume dies with `ccresu` and is invisible to every Claude Code tool | — | `Proposed` |
-| 2 | [`authoritative-session-state.md`](authoritative-session-state.md) | Progress is inferred from transcript growth when the CLI publishes `state`, `status` and `waitingFor` | PRD 1 | `Proposed` |
+| 1 | [`background-supervisor-recovery.md`](background-supervisor-recovery.md) | Recovery runs a process `ccresu` owns, so a resume dies with `ccresu` and is invisible to every Claude Code tool | — | `Implemented` |
+| 2 | [`authoritative-session-state.md`](authoritative-session-state.md) | Progress is inferred from transcript growth when the CLI publishes `state`, `status` and `waitingFor` | PRD 1 | `Implemented` |
 | 3 | [`delegate-lifecycle-to-supervisor.md`](delegate-lifecycle-to-supervisor.md) | `ccresu` spawns, kills and re-spawns `claude` itself, racing a supervisor that already does all three | PRDs 1, 2 | `Proposed` |
 | 4 | [`hook-driven-eventing.md`](hook-driven-eventing.md) | "This session needs you" is discovered by polling transcripts, minutes after the CLI announced it | PRD 2 | `Proposed` |
 | 5 | [`resume-spend-guardrails.md`](resume-spend-guardrails.md) | "One resume per limit window" bounds how often a resume happens, never what it costs | PRDs 1, 2 | `Proposed` |
@@ -53,6 +53,14 @@ PRD 6 is last because it is the only one about *where* a recovery happens rather
 than *whether* it did, and that question only becomes answerable once PRD 1 has
 settled that recoveries run under the supervisor and therefore inherit the
 supervisor's worktree behaviour.
+
+`Implemented` means the requirement set is on `main` and unreleased: PRD 1's
+handoff (`claude.HandoffArgs`) and PRD 2's published-state read
+(`claude.PublishedListing`, `recovery.Observe`, the `WAITING_FOR_INPUT` state and
+migration 0008) are in the tree, each with a test per requirement, while `v0.6.0`
+remains the published version (§4). It is not a claim that a release has happened,
+and it does not soften the guarantee the later PRDs make about the code they build
+on — it only records that the code now exists where they expect it.
 
 There were seven drafts. A seventh PRD, `capability-gating.md`, was **withdrawn**
 rather than deferred: it would have maintained a version→capability table so an
