@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -492,5 +493,50 @@ func TestResumeSessionInResumesASessionTheListingOmits(t *testing.T) {
 	}
 	if calls[0].Options.Dir != dir {
 		t.Errorf("handoff Dir = %q, want the caller's directory %q", calls[0].Options.Dir, dir)
+	}
+}
+
+// TestThereIsNoSwitchToDisableTheResolution pins PRD 6 R11, the one requirement
+// that is a prohibition rather than a behaviour: there is no configuration
+// switch that turns any of this off.
+//
+// A prohibition has no observable output to assert, so the assertion is made
+// where a switch would have to appear. To disable the resolution a caller would
+// have to reach `ResolveWorkspace` — as a bool parameter, or as an options value
+// carrying one — and the returned `Workspace` would have to have somewhere to
+// report "the caller asked for the old behaviour". Both shapes are checked here,
+// so a `respect_worktree: false` knob cannot be added without this test failing.
+func TestThereIsNoSwitchToDisableTheResolution(t *testing.T) {
+	typ := reflect.TypeOf(ResolveWorkspace)
+	if got := typ.NumIn(); got != 2 {
+		t.Fatalf("ResolveWorkspace takes %d parameters, want exactly 2 (runsInPath, projectPath)", got)
+	}
+	for i := 0; i < typ.NumIn(); i++ {
+		if kind := typ.In(i).Kind(); kind != reflect.String {
+			t.Errorf("ResolveWorkspace parameter %d is %s, want a string: a flag or an options value is exactly the knob R11 forbids", i, kind)
+		}
+	}
+	if got := typ.NumOut(); got != 2 {
+		t.Fatalf("ResolveWorkspace returns %d values, want exactly 2 (Workspace, error)", got)
+	}
+	if got, want := typ.Out(0), reflect.TypeOf(Workspace{}); got != want {
+		t.Errorf("ResolveWorkspace returns %s first, want %s", got, want)
+	}
+	if got, want := typ.Out(1), reflect.TypeOf((*error)(nil)).Elem(); got != want {
+		t.Errorf("ResolveWorkspace returns %s second, want %s", got, want)
+	}
+
+	// The result reports what happened; it is not a place to ask for the old
+	// behaviour. Only `FellBack` and `Missing` describe a fallback, and neither is
+	// a switch the caller sets before the call.
+	workspace := reflect.TypeOf(Workspace{})
+	if workspace.NumField() != 3 {
+		t.Errorf("Workspace has %d fields, want 3 (Dir, FellBack, Missing): a fourth would be a new decision surface", workspace.NumField())
+	}
+	for i := 0; i < workspace.NumField(); i++ {
+		field := workspace.Field(i)
+		if field.Type.Kind() == reflect.Bool && !strings.HasSuffix(field.Name, "FellBack") {
+			t.Errorf("Workspace.%s is a bool named like a setting, want resolution to report rather than obey", field.Name)
+		}
 	}
 }

@@ -192,7 +192,16 @@ it. There is no configuration switch to disable any of this: a
 | `TestResumeSessionInRunsTheHandoffInTheGivenDirectory` | the child's `RunOptions.Dir` is the resolved directory, asserted on the invocation a fake execer received |
 | `TestResumeVectorHasNoWorktreeFlag` | the handoff vector contains no `--worktree`, `-w`, `git` or `rm` |
 | `TestRecoveryIsWorktreeNeutral` | three attempts leave `git worktree list` byte-identical |
-| `TestSessionsShowsTheRunDirectoryDistinctly`, `TestSessionsMarksTheRunDirectoryWhenItMatchesTheProject` | both directories are shown under distinct labels |
+| `TestSessionsShowsTheRunDirectoryDistinctly`, `TestSessionsMarksTheRunDirectoryWhenItMatchesTheProject` | both directories are shown under distinct labels in `sessions` and `inspect` |
+| `TestSessionsBrowserShowsTheRunDirectoryColumn` | the browser shows the same column with the same dash-when-identical rule |
+| `TestHookCarriesTheRunDirectory`, `TestRenderShowsTheTwoDirectoriesDistinctly` | the notification payload and the message it renders both name the run directory, and omit it when it is unknown or equal to the project |
+| `TestToSessionDTOKeepsTheRunDirectoryApart` | the API carries `runs_in_path`, and omits the key when nobody has observed one |
+| `TestThereIsNoConfigurationSwitchForWorktrees`, `TestThereIsNoSwitchToDisableTheResolution` | R11: no YAML key or configuration field names a worktree, and `ResolveWorkspace` takes no flag — a knob would fail both |
+
+Every test above is a real one; each was also checked by mutation, so a
+`Runs in:` line removed from the template, a `RunsInPath` dropped from the
+payload or the wire form, or a `respect_worktree` key added to the configuration
+fails a named test rather than passing quietly.
 
 ## Discovery and detection
 

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -153,5 +154,54 @@ func TestRateLimiterSweepBoundsTheTable(t *testing.T) {
 	// The limiter stays usable after eviction.
 	if ok, _ := limiter.allow("late", start); !ok {
 		t.Fatal("the limiter refused a fresh client after a sweep")
+	}
+}
+
+// TestToSessionDTOKeepsTheRunDirectoryApart pins PRD 6 R12 on the wire: the API
+// carries where a session runs as its own field, and omits it when nobody has
+// observed one.
+//
+// The omission matters as much as the value. `""` means "not observed", which is
+// a different claim from "it runs where it started", so an empty run directory
+// must not be sent as if it were a fact — a client cannot tell the two apart once
+// the field is always present.
+func TestToSessionDTOKeepsTheRunDirectoryApart(t *testing.T) {
+	const (
+		project  = "/srv/checkout"
+		worktree = "/srv/checkout/.claude/worktrees/fix-auth"
+	)
+
+	encoded, err := json.Marshal(toSessionDTO(storage.Session{
+		ID:          sessionID,
+		ProjectPath: project,
+		RunsInPath:  worktree,
+	}))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := decoded["runs_in_path"]; got != worktree {
+		t.Errorf("runs_in_path = %v, want %q (payload %s)", got, worktree, encoded)
+	}
+	if got := decoded["project_path"]; got != project {
+		t.Errorf("project_path = %v, want %q: the two directories are separate facts", got, project)
+	}
+
+	encoded, err = json.Marshal(toSessionDTO(storage.Session{ID: sessionID, ProjectPath: project}))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	decoded = nil
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, present := decoded["runs_in_path"]; present {
+		t.Errorf("payload %s carries runs_in_path for a session nobody observed: %v", encoded, decoded["runs_in_path"])
+	}
+	if got := decoded["project_path"]; got != project {
+		t.Errorf("project_path = %v, want %q", got, project)
 	}
 }

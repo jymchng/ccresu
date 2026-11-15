@@ -14,8 +14,11 @@ import (
 // visible in the rendering tests.
 func fullEventData() EventData {
 	return EventData{
-		SessionID:     "11111111-1111-4111-8111-111111111111",
-		ProjectPath:   "/home/u/project",
+		SessionID:   "11111111-1111-4111-8111-111111111111",
+		ProjectPath: "/home/u/project",
+		// PRD 6 R12: a session that has moved into a worktree carries two
+		// directories, so the maximal payload carries both.
+		RunsInPath:    "/home/u/project/.claude/worktrees/fix-auth",
 		LimitID:       7,
 		LimitType:     storage.LimitTypeFiveHour,
 		ResetAt:       time.Date(2026, 1, 5, 11, 0, 0, 0, time.UTC),
@@ -86,9 +89,13 @@ func TestRenderEscapesEveryDynamicValue(t *testing.T) {
 	data := EventData{
 		SessionID:   hostile,
 		ProjectPath: hostile,
-		ResetRaw:    hostile,
-		Reason:      hostile,
-		State:       hostile,
+		// Distinct from ProjectPath on purpose: writeProject only renders the
+		// second directory when the two differ, so an equal value would leave
+		// the new field untested for escaping (PRD 6 R12).
+		RunsInPath: hostile + "/worktree",
+		ResetRaw:   hostile,
+		Reason:     hostile,
+		State:      hostile,
 	}
 	for _, event := range Events() {
 		body, err := Render(event, data)
@@ -267,5 +274,57 @@ func TestDedupeKeyIdentifiesOneLogicalEvent(t *testing.T) {
 func TestSubjectOfUnknownEvent(t *testing.T) {
 	if got := Subject(storage.NotificationEvent("nope")); got != "" {
 		t.Errorf("Subject = %q, want an empty string", got)
+	}
+}
+
+// TestRenderShowsTheTwoDirectoriesDistinctly pins PRD 6 R12 at the notification
+// surface: a message names where the session started and, when that is not where
+// it runs, where it runs as well.
+//
+// The three cases are the three facts the template has to keep apart — a session
+// that moved, a session that never moved, and a session nobody has observed yet.
+// The last two must not print a second line, because repeating one path under two
+// labels is noise and an unobserved directory is not the project directory.
+func TestRenderShowsTheTwoDirectoriesDistinctly(t *testing.T) {
+	// EventNeedsInput is one of the three messages that carries the directories
+	// (the others are limit_detected and session_completed).
+	const event = storage.EventNeedsInput
+
+	moved := fullEventData()
+	body, err := Render(event, moved)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if want := "Project: " + Code(moved.ProjectPath); !strings.Contains(body, want) {
+		t.Errorf("body %q does not carry %q", body, want)
+	}
+	if want := "Runs in: " + Code(moved.RunsInPath); !strings.Contains(body, want) {
+		t.Errorf("body %q does not carry the run directory as %q", body, want)
+	}
+
+	stayed := fullEventData()
+	stayed.RunsInPath = stayed.ProjectPath
+	body, err = Render(event, stayed)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if strings.Contains(body, "Runs in:") {
+		t.Errorf("body %q repeats the project directory under a second label", body)
+	}
+	if got := strings.Count(body, Code(stayed.ProjectPath)); got != 1 {
+		t.Errorf("the project path appears %d times, want once: %q", got, body)
+	}
+
+	unobserved := fullEventData()
+	unobserved.RunsInPath = ""
+	body, err = Render(event, unobserved)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if strings.Contains(body, "Runs in:") {
+		t.Errorf("body %q invents a run directory nobody observed", body)
+	}
+	if want := "Project: " + Code(unobserved.ProjectPath); !strings.Contains(body, want) {
+		t.Errorf("body %q lost the project directory", body)
 	}
 }
