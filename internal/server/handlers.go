@@ -258,7 +258,7 @@ func toTransitionDTOs(transitions []storage.Transition) []transitionDTO {
 //
 // Note what is absent: there is no field naming a command, a binary or an
 // argument vector. The continuation message is data handed to the provider, which
-// runs the fixed `claude -p --resume` invocation.
+// issues the fixed `claude --bg --resume` handoff.
 type recoverRequest struct {
 	Message string `json:"message"`
 }

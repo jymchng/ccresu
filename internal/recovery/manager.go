@@ -1063,16 +1063,24 @@ func (m *Manager) absorbAttemptWrites(ctx context.Context, sessionID string) {
 	}
 }
 
-// commandPreview renders the resume command recorded with an attempt.
+// commandPreview renders the handoff recorded with an attempt.
 //
-// The continuation message is summarised rather than stored in full: the
-// command column is an audit aid, not a copy of the conversation.
+// The shape matches what is actually executed — `claude --bg --resume <id>
+// --name <label> <message>` — because the command column is the audit trail an
+// operator reads to answer "what did ccresu run?". Recording the retirement-era
+// print-mode invocation here would describe a command that no longer happens,
+// and would be the only place left in the binary that claims recovery uses
+// print mode.
+//
+// The message itself is summarised rather than stored in full: the column is an
+// audit aid, not a copy of the conversation.
 func commandPreview(sessionID, message string) string {
 	summary := "no message"
 	if trimmed := strings.TrimSpace(message); trimmed != "" {
 		summary = fmt.Sprintf("%d-byte continuation message", len(trimmed))
 	}
-	return fmt.Sprintf("claude -p --resume %s --output-format json <%s>", sessionID, summary)
+	return fmt.Sprintf("claude --bg --resume %s --name %s <%s>",
+		sessionID, claude.HandoffLabel(sessionID), summary)
 }
 
 // truncate caps a stored string so a huge CLI dump cannot bloat the database.

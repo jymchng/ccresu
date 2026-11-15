@@ -68,14 +68,6 @@ const testSessionDir = "/root/project"
 // the label the handoff asked for, separated by middle dots.
 const testHandoffBlock = "backgrounded \u00b7 3f1e2c7a \u00b7 ccresu-3f1e2c7a\n"
 
-// testResumeJSON is the retired `-p --output-format json` shape. It is kept only
-// so the tests that assert print mode is gone have something recognisable to
-// point at.
-const testResumeJSON = `{"type":"result","subtype":"success","is_error":false,` +
-	`"duration_ms":1234,"num_turns":2,"result":"continued the goal",` +
-	`"session_id":"` + testSessionID + `","total_cost_usd":0.0123,` +
-	`"modelUsage":{"claude-sonnet-4-5":{"inputTokens":10}}}`
-
 // newTestCLI builds a CLI backed by a scripted execer.
 func newTestCLI(t *testing.T, outputs ...Output) (*CLI, *FakeExecer) {
 	t.Helper()

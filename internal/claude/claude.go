@@ -339,14 +339,16 @@ type ResumeResult struct {
 	Command []string
 }
 
-// SessionProvider discovers and resumes Claude Code sessions.
+// SessionProvider discovers Claude Code sessions and hands a paused one to the
+// background supervisor.
 //
 // Implementations must never invent a command: resuming uses
-// `claude -p --resume <session-id> --output-format json "<message>"` and, only
-// when the CLI refuses that because the session is still attached to a
-// background agent, the single `claude stop <job-id>` that clears the way
-// before the same resume is repeated. The job id is the eight-hex name the
-// refusal prints, never the session UUID.
+// `claude --bg --resume <session-id> --name <label> "<message>"`, which returns
+// once the supervisor accepts the session. Print mode is not an option here and
+// not a fallback: `--bg` and `-p`/`--print` cannot be combined, so there is no
+// second vector to fall back to and no stop-then-resume dance to clear the way.
+// `claude stop <job-id>` still acts on a running agent, and its argument is the
+// eight-hex job name, never the session UUID.
 type SessionProvider interface {
 	// Discover lists known sessions, newest activity first.
 	Discover(ctx context.Context, filter DiscoverFilter) ([]Session, error)

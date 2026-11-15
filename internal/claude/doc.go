@@ -1,30 +1,40 @@
-// Package claude implements discovery and resumption of Claude Code sessions.
+// Package claude implements discovery of Claude Code sessions and hands a
+// paused session to the background supervisor.
 //
 // Discovery relies only on interfaces verified against the installed CLI
-// (Claude Code 2.1.223):
+// (Claude Code 2.1.257 or newer -- see [MinimumVersion]):
 //
 //	claude --version
 //	claude agents --json [--all] [--cwd <path>]
 //	~/.claude/projects/<slugified-cwd>/<session-id>.jsonl
 //	~/.claude/session-env/<session-id>/
 //
-// Resumption uses exactly two commands:
+// Resumption is a handoff, not a run:
 //
-//	claude -p --resume <session-id> --output-format json "<continuation message>"
-//	claude stop <job-id>
+//	claude --bg --resume <session-id> --name <label> "<continuation message>"
 //
-// The second is issued only when the first is refused because the session is
-// still attached to a background agent ("That session is running in the
-// background"). Its argument is the eight lower-case hex job name that refusal
-// prints -- not the session UUID, which `claude stop` answers with "No job
-// matching" and exit 1. Stopping keeps the conversation and the session id, so
-// the same resume follows immediately; `claude attach` would need a terminal
-// ccresu does not have, and `--fork-session` would branch a new conversation.
+// That command returns as soon as the supervisor accepts the session, and the
+// CLI reports the acceptance by printing a `backgrounded · <short-id> · <name>`
+// block. [ParseHandoff] reads that block, including the `note:` line the CLI adds
+// when the continuation landed in a copy rather than in place, and `--name`
+// makes the recovered session identifiable in agent view without consulting
+// ccresu's database.
 //
-// No TTY is attached, no keystroke is injected, no shell is involved and no new
-// session is ever started in place of the original one: the returned session id
-// must equal the requested one, otherwise the attempt fails with
-// ErrSessionNotPreserved.
+// Acceptance is not completion. The supervisor owns the turn, so nothing here
+// waits for it, counts transcript growth or claims the work happened; what the
+// session is actually doing is read later from its published state.
+//
+// Print mode is retired rather than optional. `--bg` and `-p`/`--print` cannot
+// be combined, so [HandoffArgs] has no flag that could switch into it and there
+// is no second resume vector. `claude stop <job-id>` is the one remaining
+// verified command that acts on a running agent; its argument is the eight
+// lower-case hex job name the CLI prints, never the session UUID, which
+// `claude stop` answers with "No job matching" and exit 1.
+//
+// A refusal that is not a crash is named: an untrusted workspace is
+// [ErrWorkspaceNotTrusted] and output without a `backgrounded` block is
+// [ErrHandoffNotAcknowledged]. Neither is retried, because repeating the same
+// handoff cannot change either answer.
 //
 // Sessions that cannot be resumed are reported as UNRECOVERABLE together with a
 // reason; the package never invents a command for them.
@@ -48,7 +58,9 @@
 //		if err != nil {
 //			return err
 //		}
-//		log.Printf("resumed %s (%d turns)", result.SessionID, result.NumTurns)
+//		// The supervisor accepted the work; the session is identifiable by
+//		// StateID and Name from now on, and nothing waits for it to finish.
+//		log.Printf("handed off %s as %s (%s)", result.SessionID, result.StateID, result.Name)
 //	}
 //
 // Tests use [FakeProvider] and [FakeExecer] so no real CLI is required.

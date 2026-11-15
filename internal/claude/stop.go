@@ -1,19 +1,23 @@
 package claude
 
-// This file adds the fifth verified interface, `claude stop <job-id>`.
+// This file adds `claude stop <job-id>`.
 //
-// It exists for exactly one situation. `claude -p --resume <id>` refuses to run
-// while the same session is still attached to a background agent:
+// It exists for the one case where a session is already running somewhere ccresu
+// cannot attach to. The CLI refuses to act on such a session and answers with
+// three remedies:
 //
 //	Error: That session is running in the background (837eaaea). Run
 //	`claude attach 837eaaea` to open it, or `claude stop 837eaaea` first to
 //	resume it here. Add --fork-session to branch off a copy instead.
 //
-// Of the three remedies the CLI offers, only `stop` keeps ccresu's promise: the
-// conversation is kept, the session id is unchanged, and the resume that follows
-// is the same headless `-p --resume` invocation as always. `attach` needs a
+// Of the three, only `stop` can be honoured by a daemon: `attach` needs a
 // terminal ccresu deliberately does not have, and `--fork-session` would branch
-// a new conversation, which is the one thing a recovery must never do.
+// a new conversation, which is the one thing a recovery must never do. The
+// resume that follows a stop is the same `--bg --resume` handoff every recovery
+// uses; there is no print-mode vector and no stop-then-resume retry loop, because
+// a handoff never collides with the attached session that used to trigger this
+// refusal. Stop is therefore an operator-facing command here, kept because
+// `claude stop <job-name>` is one of the verified invocations.
 //
 // The argument is NOT the session UUID. `claude stop` resolves a background job
 // name -- exactly eight lower-case hex characters -- by prefix against the job
@@ -82,8 +86,8 @@ func BackgroundJobID(err error) string {
 
 // StopArgs returns the verified argument vector for `claude stop <job-id>`.
 //
-// Exported for the same reason as ResumeArgs: tests and log lines can assert the
-// exact command without reimplementing it.
+// Exported for the same reason as HandoffArgs: tests and log lines can assert
+// the exact command without reimplementing it.
 func StopArgs(jobID string) []string {
 	return []string{"stop", jobID}
 }

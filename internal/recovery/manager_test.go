@@ -1370,8 +1370,14 @@ func TestGrew(t *testing.T) {
 
 func TestCommandPreviewAndFormattingHelpers(t *testing.T) {
 	preview := commandPreview(sessionA, "continue please")
-	if !strings.Contains(preview, "claude -p --resume "+sessionA) {
-		t.Errorf("commandPreview = %q, want the resume command", preview)
+	want := "claude --bg --resume " + sessionA + " --name " + claude.HandoffLabel(sessionA)
+	if !strings.Contains(preview, want) {
+		t.Errorf("commandPreview = %q, want the handoff command %q", preview, want)
+	}
+	for _, retired := range []string{"-p ", "--print", "--output-format"} {
+		if strings.Contains(preview, retired) {
+			t.Errorf("commandPreview = %q still records the retired print-mode flag %q", preview, retired)
+		}
 	}
 	if !strings.Contains(preview, "15-byte continuation message") {
 		t.Errorf("commandPreview = %q, want the message summarised", preview)

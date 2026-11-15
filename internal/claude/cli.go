@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -367,7 +366,7 @@ func describeRunError(what string, out Output, err error) error {
 // with errors.Is while the message stays readable; the captured streams stay
 // available as fields for anything that needs the raw output.
 type CLIError struct {
-	// What is the invocation being described, e.g. "claude -p --resume".
+	// What is the invocation being described, e.g. "claude --bg --resume".
 	What string
 	// ExitCode is the process exit status.
 	ExitCode int
@@ -501,45 +500,6 @@ func tail(s string, n int) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-// ResumeOutput is the verified `-p --output-format json` result object.
-//
-// Verified shape (Claude Code 2.1.223):
-//
-//	{"type":"result","subtype":"success","is_error":false,"duration_ms":1234,
-//	 "num_turns":2,"result":"…","session_id":"<uuid>","total_cost_usd":0.01,
-//	 "usage":{…},"modelUsage":{"claude-sonnet-4":{"…":true}}}
-//
-// Every field is optional in the mapping: a missing session_id is reported as a
-// failure rather than assumed to match.
-type ResumeOutput struct {
-	Type         string
-	Subtype      string
-	IsError      bool
-	Result       string
-	SessionID    string
-	NumTurns     int
-	DurationMS   int
-	TotalCostUSD float64
-	Model        string
-	Raw          json.RawMessage
-}
-
-// resumeWire is the permissive wire form of the resume result.
-type resumeWire struct {
-	Type         flexString `json:"type"`
-	Subtype      flexString `json:"subtype"`
-	IsError      flexBool   `json:"is_error"`
-	Result       flexString `json:"result"`
-	SessionID    flexString `json:"session_id"`
-	SessionIDAlt flexString `json:"sessionId"`
-	NumTurns     flexInt    `json:"num_turns"`
-	DurationMS   flexInt    `json:"duration_ms"`
-	Cost         flexFloat  `json:"total_cost_usd"`
-	Model        flexString `json:"model"`
-	ModelUsage   flexModel  `json:"modelUsage"`
-	Error        flexString `json:"error"`
-}
-
 // flexBool accepts true/false, "true"/"false" and 0/1.
 type flexBool struct {
 	value bool
@@ -581,150 +541,3 @@ func (f *flexBool) UnmarshalJSON(data []byte) error {
 
 // Bool returns the mapped value.
 func (f flexBool) Bool() bool { return f.value }
-
-// flexFloat accepts a JSON number or a numeric string.
-type flexFloat struct {
-	value float64
-	set   bool
-}
-
-// UnmarshalJSON implements json.Unmarshaler.
-func (f *flexFloat) UnmarshalJSON(data []byte) error {
-	trimmed := bytes.TrimSpace(data)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return nil
-	}
-	var num json.Number
-	if err := json.Unmarshal(trimmed, &num); err == nil {
-		if v, convErr := num.Float64(); convErr == nil {
-			f.value, f.set = v, true
-		}
-		return nil
-	}
-	var s string
-	if err := json.Unmarshal(trimmed, &s); err != nil {
-		return nil
-	}
-	if v, convErr := strconv.ParseFloat(strings.TrimSpace(s), 64); convErr == nil {
-		f.value, f.set = v, true
-	}
-	return nil
-}
-
-// Float returns the mapped value.
-func (f flexFloat) Float() float64 { return f.value }
-
-// flexModel extracts the first model name from the modelUsage map, whose values
-// have changed shape between releases.
-type flexModel struct {
-	value string
-}
-
-// UnmarshalJSON implements json.Unmarshaler.
-func (f *flexModel) UnmarshalJSON(data []byte) error {
-	var usage map[string]json.RawMessage
-	if err := json.Unmarshal(data, &usage); err != nil {
-		return nil
-	}
-	names := make([]string, 0, len(usage))
-	for name := range usage {
-		names = append(names, name)
-	}
-	if len(names) == 0 {
-		return nil
-	}
-	// Deterministic choice: shortest name, then lexical, avoids map ordering.
-	best := names[0]
-	for _, name := range names[1:] {
-		if len(name) < len(best) || (len(name) == len(best) && name < best) {
-			best = name
-		}
-	}
-	f.value = best
-	return nil
-}
-
-// String returns the mapped model name.
-func (f flexModel) String() string { return f.value }
-
-// ParseResumeJSON maps `-p --output-format json` output.
-//
-// The verified output is a single JSON object; a newline-delimited stream or a
-// JSON array (as produced by --output-format stream-json) is also accepted by
-// taking the last result-shaped object, because the trailing object is the one
-// that summarises the turn.
-func ParseResumeJSON(data []byte) (*ResumeOutput, error) {
-	trimmed := bytes.TrimSpace(data)
-	if len(trimmed) == 0 {
-		return nil, fmt.Errorf("%w: empty resume output", ErrMalformedOutput)
-	}
-
-	candidates := [][]byte{}
-	if trimmed[0] == '[' {
-		var raws []json.RawMessage
-		if err := json.Unmarshal(trimmed, &raws); err != nil {
-			return nil, fmt.Errorf("%w: resume array: %v", ErrMalformedOutput, err)
-		}
-		for _, raw := range raws {
-			candidates = append(candidates, raw)
-		}
-	} else if trimmed[0] == '{' {
-		if json.Valid(trimmed) {
-			candidates = append(candidates, trimmed)
-		} else {
-			// Fall back to newline-delimited objects.
-			for _, line := range bytes.Split(trimmed, []byte("\n")) {
-				line = bytes.TrimSpace(line)
-				if len(line) > 0 && line[0] == '{' && json.Valid(line) {
-					candidates = append(candidates, line)
-				}
-			}
-		}
-	} else {
-		return nil, fmt.Errorf("%w: resume output is not JSON", ErrMalformedOutput)
-	}
-	if len(candidates) == 0 {
-		return nil, fmt.Errorf("%w: no JSON object in resume output", ErrMalformedOutput)
-	}
-
-	// The result object is the last one in a stream, so later candidates win.
-	var chosen *resumeWire
-	var chosenRaw json.RawMessage
-	for _, raw := range candidates {
-		var wire resumeWire
-		if err := json.Unmarshal(raw, &wire); err != nil {
-			continue
-		}
-		kind := strings.ToLower(wire.Type.String())
-		if kind != "" && kind != "result" && wire.Result.String() == "" {
-			// stream-json also emits assistant/user/system objects.
-			continue
-		}
-		if kind == "" && wire.SessionID.String() == "" && wire.Result.String() == "" && !wire.IsError.set {
-			continue
-		}
-		copied := wire
-		chosen = &copied
-		chosenRaw = append(json.RawMessage(nil), raw...)
-	}
-	if chosen == nil {
-		return nil, fmt.Errorf("%w: resume output had no result object", ErrMalformedOutput)
-	}
-
-	out := &ResumeOutput{
-		Type:         chosen.Type.String(),
-		Subtype:      chosen.Subtype.String(),
-		IsError:      chosen.IsError.Bool(),
-		Result:       firstNonEmpty(chosen.Result.String(), chosen.Error.String()),
-		SessionID:    firstNonEmpty(chosen.SessionID.String(), chosen.SessionIDAlt.String()),
-		NumTurns:     chosen.NumTurns.Int(),
-		DurationMS:   chosen.DurationMS.Int(),
-		TotalCostUSD: chosen.Cost.Float(),
-		Model:        firstNonEmpty(chosen.Model.String(), chosen.ModelUsage.String()),
-		Raw:          chosenRaw,
-	}
-	if out.Subtype == "" && out.IsError {
-		out.Subtype = "error"
-	}
-	return out, nil
-}
