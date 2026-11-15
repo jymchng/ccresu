@@ -547,7 +547,7 @@ schedules:     0
 
 ### Step 10 — Act manually
 
-Four commands let you bypass the wait, with different rules:
+Three commands bypass the wait, with different rules:
 
 ```bash
 # resume now, ignoring the schedule (still respects the attempt budget)
@@ -556,10 +556,7 @@ ccresu recover 3f9d1c07-1111-4222-8333-444455556666
 # same, with your own continuation message and even with the budget spent
 ccresu recover <id> --message "Pick up where the limit interrupted you." --force
 
-# put a spent/terminal session back to work with a fresh budget
-ccresu retry <id>
-
-# ask for one more attempt right now
+# one more attempt now, even with the budget spent (it buys one attempt, not a refill)
 ccresu retry <id>
 ```
 
