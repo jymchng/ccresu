@@ -59,7 +59,7 @@ Run at `HEAD` on a clean tree:
 | Vet | `go vet ./...` | clean |
 | Tests | `go test ./...` | all 15 Go packages with tests pass |
 | Race | `go test -race ./...` | pass |
-| Coverage | `make cover-check` | **86.7%** (gate 80%) |
+| Coverage | `make cover-check` | **86.8%** (gate 80%) |
 | Website lint | `npm run lint` | clean |
 | Website types | `npx tsc --noEmit` | clean |
 | Website tests | `npm run test` | 18 files, 143 tests pass |
@@ -78,7 +78,7 @@ Per-package statement coverage, from `go test ./... -cover`:
 | `internal/scheduler` | 96.0% | ≥95% |
 | `internal/telegram` | 96.0% | ≥90% |
 | `internal/clock` | 93.3% | — |
-| `internal/recovery` | 94.7% | ≥90% |
+| `internal/recovery` | 95.8% | ≥90% |
 | `internal/claude` | 90.1% | ≥80% |
 | `internal/server` | 88.0% | ≥80% |
 | `internal/storage` | 85.6% | ≥85% |
@@ -103,17 +103,17 @@ The total is statement-weighted over everything `go test ./...` reports: the
 twelve `internal/` packages, `cmd/ccresu` (100.0%, two statements), `tests/support`
 (a fixture package the end-to-end tests import, which earns no credit for another
 package's test run and so reports 0.0%) and the two behavioural suites, which have
-no statements of their own. Over the `internal/` packages only it is 89.8%. That
-tree measures **88.5%**.
+no statements of their own. Over the `internal/` packages only it is 90.0%. That
+tree measures **88.6%**.
 
 One caveat about that number, because it depends on whether the website's
 dependencies are installed. After `cd web && npm ci`, `go test ./...` also walks
 a vendored Go package inside `web/node_modules` (one file, 160 statements, no
-tests of its own), and the very same run then reports **86.7%** — the figure in
+tests of its own), and the very same run then reports **86.8%** — the figure in
 the table above, and what `make cover-check` prints in this working tree. Both
 figures are correct for their tree: CI's Go job runs `make cover-check` before the
-website job installs anything, so the gate sees 88.5%, and a developer who has
-already run `npm ci` sees 86.7% and the gate still passes.
+website job installs anything, so the gate sees 88.6%, and a developer who has
+already run `npm ci` sees 86.8% and the gate still passes.
 
 ## The end-to-end scenario
 
@@ -157,8 +157,12 @@ Rediscovery after a spent budget is covered by the `internal/recovery` unit test
 
 Tracked as open goals, not hidden:
 
-- `internal/recovery` edge paths (`verify.go`, `manager.go`) are now at 94.7%;
-  the statements left are unreachable defensive branches tracked as an open goal.
+- `internal/recovery` is at 95.8%. The statements still uncovered are **not** all
+  unreachable, and calling them defensive was wrong: the `LimitInForceError`
+  message variants, the verification notes for a copied or unstamped handoff
+  (`verify.go`), the `state.move` and store-error returns in `manager.go`, and
+  `Reset` on a nil source are each reachable by a test that scripts them. They are
+  an open goal — coverage debt, not written off as unreachable.
 - `tests/integration` holds three test files and no non-test Go files, so it
   contributes no statements of its own; `cmd/ccresu` is a single test file over a
   two-statement `main`.

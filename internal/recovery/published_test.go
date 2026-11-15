@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/jymchng/ccresu/internal/claude"
+	"github.com/jymchng/ccresu/internal/clock"
 	"github.com/jymchng/ccresu/internal/storage"
 )
 
@@ -622,5 +623,253 @@ func TestAParkDoesNotDependOnANotifier(t *testing.T) {
 	}
 	if got := provider.resumeCount(); got != 0 {
 		t.Errorf("resumes = %d, want 0: no notifier must not turn a park into a resume", got)
+	}
+}
+
+// R8 is a distinction before it is a behaviour: "the supervisor could not be
+// asked" and "the supervisor has no opinion about this session" are the same
+// bytes if the error is swallowed. An empty listing is a fact the mapping is
+// allowed to act on — it means "not observed", and therefore no decision — while
+// an unreadable one is an outage that must reach the caller instead of being
+// folded into that fact.
+func TestAFailedListingIsReportedAndNotReadAsEmpty(t *testing.T) {
+	t.Parallel()
+
+	outage := errors.New("agents --json --all: connection refused")
+	entry := claude.AgentEntry{SessionID: sessionA, State: "working", Status: "running"}
+	var (
+		reads int
+		down  = true
+	)
+	provider := &providerStub{listingFn: func(int) (claude.PublishedListing, error) {
+		reads++
+		if down {
+			return claude.PublishedListing{}, outage
+		}
+		return claude.PublishedListing{
+			Entries:     []claude.AgentEntry{entry},
+			BySessionID: map[string]claude.AgentEntry{sessionA: entry},
+			ReadAt:      observedAt,
+		}, nil
+	}}
+	source := NewObservationSource(provider, clock.NewFake(observedAt))
+
+	observation, err := source.Observe(context.Background(), sessionA)
+	if err == nil {
+		t.Fatal("Observe() error = nil, want an unreadable listing reported as an error")
+	}
+	if !errors.Is(err, ErrObservationUnavailable) {
+		t.Errorf("error = %v, want it to wrap ErrObservationUnavailable", err)
+	}
+	if !errors.Is(err, outage) {
+		t.Errorf("error = %v, want it to carry the provider's own failure", err)
+	}
+	if observation.Recorded() {
+		t.Error("observation.Recorded() = true, want no observation recorded from a read that failed")
+	}
+	if observation.InListing {
+		t.Error("observation.InListing = true, want false: this session was not observed, it was unobserved")
+	}
+
+	// A second session in the same pass is answered from the same read, and must
+	// fail the same way. If the cached failure fell through to the zero listing,
+	// that session would look like one the supervisor had no opinion about —
+	// exactly the empty-listing reading R8 forbids.
+	second, err := source.Observe(context.Background(), sessionB)
+	if err == nil {
+		t.Fatal("Observe() for a second session error = nil, want the same outage reported")
+	}
+	if !errors.Is(err, ErrObservationUnavailable) {
+		t.Errorf("second error = %v, want it to wrap ErrObservationUnavailable", err)
+	}
+	if second.Recorded() {
+		t.Error("second observation.Recorded() = true, want no observation from an unreadable pass")
+	}
+	if reads != 1 {
+		t.Errorf("listing reads = %d, want 1: one read serves every session in a pass", reads)
+	}
+
+	// The failure belongs to the pass, not to the source: Reset ends it and the
+	// next pass reads again. Otherwise one bad read would silence a session until
+	// the daemon restarted.
+	down = false
+	source.Reset()
+	recovered, err := source.Observe(context.Background(), sessionA)
+	if err != nil {
+		t.Fatalf("Observe() after Reset() error = %v", err)
+	}
+	if reads != 2 {
+		t.Errorf("listing reads = %d, want 2 after a Reset", reads)
+	}
+	if !recovered.Recorded() || !recovered.InListing {
+		t.Errorf("observation after Reset() = %+v, want a recorded listing entry", recovered)
+	}
+	if recovered.State != "working" {
+		t.Errorf("State = %q, want the published %q", recovered.State, "working")
+	}
+}
+
+// A listing that carries no ReadAt still produces a recorded observation: the
+// source's clock stamps it, so "not recorded" keeps meaning "not read" rather
+// than "read from a CLI that omits the field".
+func TestAnUnstampedListingIsStampedFromTheClock(t *testing.T) {
+	t.Parallel()
+
+	entry := claude.AgentEntry{SessionID: sessionA, State: "done", Status: "finished"}
+	provider := &providerStub{listingFn: func(int) (claude.PublishedListing, error) {
+		return claude.PublishedListing{
+			Entries:     []claude.AgentEntry{entry},
+			BySessionID: map[string]claude.AgentEntry{sessionA: entry},
+		}, nil
+	}}
+	source := NewObservationSource(provider, clock.NewFake(observedAt))
+
+	observation, err := source.Observe(context.Background(), sessionA)
+	if err != nil {
+		t.Fatalf("Observe() error = %v", err)
+	}
+	if !observation.ObservedAt.Equal(observedAt) {
+		t.Errorf("ObservedAt = %v, want the clock's instant %v", observation.ObservedAt, observedAt)
+	}
+	if !observation.Recorded() {
+		t.Error("Recorded() = false, want an observation stamped from the clock to count as recorded")
+	}
+}
+
+// R8 at the engine. Once the published state is what decides a session, a pass
+// that could not read it has no verdict to give: no continuation, nothing
+// persisted that reads as recovery, and no attempt spent, because an outage is
+// ccresu's problem and not the session's. The pass is rescheduled, which is the
+// difference between "ask again" and "the session failed".
+func TestAnUnreadableListingDecidesNothing(t *testing.T) {
+	const id = sessionA
+	outage := errors.New("agents --json --all: connection refused")
+	store := newTestStore(t)
+	seedSession(t, store, recoverableSession(id))
+	provider := &providerStub{
+		statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
+			return statusFor(sessionID, 10, 200), nil
+		},
+		listingFn: func(int) (claude.PublishedListing, error) {
+			return claude.PublishedListing{}, outage
+		},
+	}
+	var milestones []Milestone
+	manager := testManager(t, store, provider, func(cfg *Config) {
+		cfg.Observer = func(_ context.Context, m Milestone) {
+			milestones = append(milestones, m)
+		}
+	})
+
+	outcome, err := manager.Recover(context.Background(), id)
+	if err == nil {
+		t.Fatal("Recover() error = nil, want the unreadable listing reported")
+	}
+	if !errors.Is(err, ErrObservationUnavailable) {
+		t.Errorf("Recover() error = %v, want it to wrap ErrObservationUnavailable", err)
+	}
+	if !errors.Is(err, outage) {
+		t.Errorf("Recover() error = %v, want the provider's failure carried out", err)
+	}
+
+	// Nothing was continued, and nothing claims the session recovered.
+	if got := provider.resumeCount(); got != 0 {
+		t.Errorf("resumes = %d, want 0: an unreadable listing is not a reason to hand off", got)
+	}
+	if outcome.Resumed {
+		t.Error("Resumed = true, want false: an outage is not a verdict about a session")
+	}
+	if outcome.State == storage.StateResumed {
+		t.Errorf("State = %q, want anything but %q", outcome.State, storage.StateResumed)
+	}
+
+	// The attempt stays open: no attempt row was written or finished, and the
+	// pass is scheduled to ask again rather than treated as a failure of the
+	// session.
+	attempts, err := store.ListAttempts(context.Background(), id, 0)
+	if err != nil {
+		t.Fatalf("ListAttempts() error = %v", err)
+	}
+	if len(attempts) != 0 {
+		t.Errorf("attempts = %d, want 0: an outage spends no budget", len(attempts))
+	}
+	stored, err := store.GetSession(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetSession() error = %v", err)
+	}
+	if stored.State != storage.StateRetryWait {
+		t.Errorf("persisted State = %q, want %q", stored.State, storage.StateRetryWait)
+	}
+	if stored.RetryAt == nil {
+		t.Error("RetryAt = nil, want the next pass written down so the retry is not lost")
+	}
+	if !strings.Contains(stored.LastError, outage.Error()) {
+		t.Errorf("LastError = %q, want the provider's failure recorded verbatim", stored.LastError)
+	}
+
+	// The operator hears "still working on it", never "recovered".
+	for _, m := range milestones {
+		if m.Kind == MilestoneSucceeded {
+			t.Error("MilestoneSucceeded raised for a pass that never read the published state")
+		}
+	}
+}
+
+// R6 at the engine. The mapping test proves `done` + no handoff means COMPLETED,
+// but the decision only binds if a real pass acts on it: a conversation that
+// finished its last turn must not be handed a "continue" message, and must not
+// be reported RESUMED — resuming finished work would duplicate it.
+func TestADoneSessionIsSettledWithoutAContinuation(t *testing.T) {
+	const id = sessionA
+	entry := claude.AgentEntry{
+		StateID:   "ab12cd34",
+		SessionID: id,
+		Kind:      "background",
+		State:     "done",
+		Status:    "finished",
+	}
+	store := newTestStore(t)
+	seedSession(t, store, recoverableSession(id))
+	provider := &providerStub{
+		statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
+			return statusFor(sessionID, 10, 200), nil
+		},
+		listingFn: func(int) (claude.PublishedListing, error) {
+			return claude.PublishedListing{
+				Entries:     []claude.AgentEntry{entry},
+				BySessionID: map[string]claude.AgentEntry{id: entry},
+				ReadAt:      observedAt,
+			}, nil
+		},
+	}
+	manager := testManager(t, store, provider, nil)
+
+	outcome, err := manager.Recover(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Recover() error = %v", err)
+	}
+	if got := provider.resumeCount(); got != 0 {
+		t.Errorf("resumes = %d, want 0: a finished conversation is not sent a continuation", got)
+	}
+	if outcome.Resumed {
+		t.Error("Resumed = true, want false: `done` without an outstanding handoff is COMPLETED")
+	}
+	if outcome.State != storage.StateCompleted {
+		t.Errorf("State = %q, want %q", outcome.State, storage.StateCompleted)
+	}
+	stored, err := store.GetSession(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetSession() error = %v", err)
+	}
+	if stored.State != storage.StateCompleted {
+		t.Errorf("persisted State = %q, want %q", stored.State, storage.StateCompleted)
+	}
+	// The published state is the proof, so it is what the attempt records rather
+	// than a transcript measurement standing in for it.
+	if !outcome.Verification.Observation.Recorded() {
+		t.Error("Verification.Observation not recorded, want the published state carried on the outcome")
+	}
+	if got := outcome.Verification.Observation.State; got != "done" {
+		t.Errorf("Observation.State = %q, want %q", got, "done")
 	}
 }
