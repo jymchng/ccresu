@@ -373,8 +373,9 @@ edge is rejected with `ErrInvalidTransition`. The map is the authoritative table
 | `WAITING_FOR_RESET` | itself (unknown-reset re-poll or a restart), `RESET_TIME_REACHED`, `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED`, `DISCOVERED` |
 | `RESET_TIME_REACHED` | `CHECKING_SESSION`, `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED`, `DISCOVERED` |
 | `CHECKING_SESSION` | `CHECKING_LIMIT`, `RESUMED` (the supervisor published `working` without a handoff), `WAITING_FOR_INPUT` (it published `blocked`), `RETRY_WAIT` (the status check itself failed, or an unrecognised state was published), `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED`, `DISCOVERED` |
-| `CHECKING_LIMIT` | `RESUMING`, `RETRY_WAIT`, `WAITING_FOR_RESET` (the limit is still in force), `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED`, `DISCOVERED` |
-| `RESUMING` | `RESUMED`, `RETRY_WAIT`, `WAITING_FOR_INPUT` (the session is blocked, so the continuation is withheld), `WAITING_FOR_RESET` (the resume was refused because the limit is still in force), `DISCOVERED`, `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED` |
+| `CHECKING_LIMIT` | `RESUMING`, `SPEND_CAP_REACHED` (the pre-attempt spend check refused the resume), `RETRY_WAIT`, `WAITING_FOR_RESET` (the limit is still in force), `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED`, `DISCOVERED` |
+| `RESUMING` | `RESUMED`, `SPEND_CAP_REACHED` (one attempt cost more than the per-attempt cap allows), `RETRY_WAIT`, `WAITING_FOR_INPUT` (the session is blocked, so the continuation is withheld), `WAITING_FOR_RESET` (the resume was refused because the limit is still in force), `DISCOVERED`, `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED` |
+| `SPEND_CAP_REACHED` | `CHECKING_SESSION` (an explicit `ccresu recover`), `DISCOVERED` (the cap was raised, or a reset), `USER_TERMINATED` — never straight to `RESUMING`, because nothing in this state may spend by itself |
 | `WAITING_FOR_INPUT` | `RUNNING`, `RESUMED`, `RETRY_WAIT`, `USER_TERMINATED`, `DISABLED`, `UNRECOVERABLE`, `DISCOVERED`, itself |
 | `RETRY_WAIT` | `CHECKING_SESSION`, `WAITING_FOR_RESET`, `DISCOVERED`, `USER_TERMINATED`, `DISABLED` |
 | `RESUMED` | `RUNNING`, `COMPLETED`, `USER_TERMINATED`, `DISABLED` — never straight back to `RESUMING` |
@@ -411,6 +412,12 @@ to answer. It is pending because the conversation is not finished — the pass t
 re-observes it is what notices the operator unblocked it, and dropping it here
 would strand a parked session across a restart. Being pending is not the same as
 being resumable: a session in this state is **observed, never handed off**.
+
+`SPEND_CAP_REACHED` is deliberately **not** pending: it is the one state a
+reconcile pass must not act on, because rediscovery is how a spend cap would be
+defeated. It leaves only by an explicit operator action — raising the cap (the
+next pass returns the session to `DISCOVERED`), `ccresu recover <id>`, or
+`ccresu reset` — and the state offers no edge to `RESUMING`.
 
 There is no terminal *failure* state: the only state ccresu declares failed is
 `UNRECOVERABLE`, and only because it has positively established it has no

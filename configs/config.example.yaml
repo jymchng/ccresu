@@ -67,6 +67,30 @@ recovery:
   verification_timeout: 120s
   health_check_interval: 10s
   max_concurrent_recoveries: 3
+  # PRD 5 guardrails. Every knob is optional, and an unset knob means the
+  # behaviour ccresu had before it existed: no flag added, no check performed.
+  guardrails:
+    # The two spend caps are ccresu's own checks, not CLI flags: the flags that
+    # would express them (--max-budget-usd, --max-turns) are print mode only and
+    # cannot ride a `--bg` handoff. Both default to 0 (off), because a non-zero
+    # default would change behaviour on an upgrade nobody asked to change.
+    #
+    # They sum the costs the CLI reported across this session's attempts, which
+    # is the same client-side estimate the CLI itself uses — it can differ from
+    # the bill, and spend can pass the cap, so leave headroom.
+    max_cost_usd_per_session: 0    # e.g. 5.00: refuse a new attempt at $5
+    max_cost_usd_per_attempt: 0    # e.g. 2.00: stop recovery after one attempt over $2
+    # The four flags a background handoff accepts. Unset means the CLI's own
+    # configured value.
+    model: ""                      # --model
+    effort: ""                     # --effort
+    fallback_model: ""             # --fallback-model, comma-separated chain
+    # --permission-mode. `dontAsk` is the recommended unattended value: it denies
+    # anything that would prompt, so a resume never queues behind a human who is
+    # not there. `bypassPermissions` is accepted but is ignored by a background
+    # session unless the operator has accepted the bypass warning, so ccresu warns
+    # at load time rather than at resume time.
+    permission_mode: ""            # e.g. dontAsk
 
 telegram:
   enabled: false

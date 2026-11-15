@@ -777,6 +777,53 @@ data: {"type":"ready","at":"2026-11-04T19:24:46.122116919Z","data":{"api":"/api/
 The full route table, error codes, rate limiting and CORS rules are in
 [docs/api.md](docs/api.md).
 
+### Step 14 — Bound what recovery may cost
+
+A resume is a `claude --bg` handoff, and the flags that bound what a run costs —
+`--max-budget-usd` and `--max-turns` — are documented as print mode only, so they
+cannot ride it. What ccresu can bound is the series of attempts. Two optional caps
+under `recovery.guardrails` do that, and both default to off so an upgrade changes
+nothing:
+
+```yaml
+recovery:
+  guardrails:
+    max_cost_usd_per_session: 5.00   # refuse a new attempt at $5 recorded spend
+    max_cost_usd_per_attempt: 2.00   # stop after one attempt over $2
+```
+
+The session cap sums the costs the CLI reported across this session's attempts
+before an attempt starts, so a refusal spends nothing. The per-attempt cap is the
+guard the session cap cannot see: one very expensive turn. Either way the outcome
+is named rather than generic — the session is parked in `SPEND_CAP_REACHED`, and
+the `permanent_failure` message says which knob, which cap and what was spent:
+
+```console
+$ ccresu sessions --all
+SESSION   STATE              NEXT ATTEMPT  ENABLED  RECOVERABLE  PROJECT  LAST SEEN                NOTE
+4a7e0c11  SPEND_CAP_REACHED  none          yes      yes                   2026-11-05 04:02:11 +08  recovery: spend cap reached: recovery.guardrails.max_cost_usd_per_session is $5 and the session has recorded $5.4 across 2 attempt(s)
+```
+
+No reconcile pass resumes a session in `SPEND_CAP_REACHED`, so the cap cannot be
+defeated by rediscovery. It leaves that state when you raise the cap (the next
+pass returns it to `DISCOVERED` without a restart), run `ccresu recover <id>`, or
+reset it. The caps bind automatic recovery only: `ccresu recover` and
+`ccresu retry` are human acts and are allowed past them, though the cost is still
+recorded and the override is logged.
+
+A cost the CLI did not report is recorded as *unknown*, not as zero — it neither
+counts toward a cap nor blocks a resume. The figure is the CLI's own client-side
+estimate, so it can differ from the bill and spend can pass the cap; leave
+headroom. The honest limitation is stated rather than papered over: a single
+background turn that spends heavily cannot be stopped by ccresu, because the flag
+that would bound it cannot ride the handoff.
+
+The same section carries the four flags a handoff *does* accept — `model`,
+`effort`, `fallback_model` and `permission_mode` — which are appended only when
+configured. `permission_mode: dontAsk` is the recommended unattended value: it
+denies anything that would prompt instead of queueing behind a human who is not
+there. See [docs/configuration.md](docs/configuration.md#recoveryguardrails).
+
 ### Where to go next
 
 | You want to | Read |

@@ -46,7 +46,7 @@ Read in this order. Each depends only on the ones above it.
 | 2 | [`authoritative-session-state.md`](authoritative-session-state.md) | Progress is inferred from transcript growth when the CLI publishes `state`, `status` and `waitingFor` | PRD 1 | `Implemented` |
 | 3 | [`delegate-lifecycle-to-supervisor.md`](delegate-lifecycle-to-supervisor.md) | `ccresu` spawns, kills and re-spawns `claude` itself, racing a supervisor that already does all three | PRDs 1, 2 | `Implemented` |
 | 4 | [`hook-driven-eventing.md`](hook-driven-eventing.md) | "This session needs you" is discovered by polling transcripts, minutes after the CLI announced it | PRD 2 | `Implemented` |
-| 5 | [`resume-spend-guardrails.md`](resume-spend-guardrails.md) | "One resume per limit window" bounds how often a resume happens, never what it costs | PRDs 1, 2 | `Proposed` |
+| 5 | [`resume-spend-guardrails.md`](resume-spend-guardrails.md) | "One resume per limit window" bounds how often a resume happens, never what it costs | PRDs 1, 2 | `Implemented` |
 | 6 | [`worktree-aware-recovery.md`](worktree-aware-recovery.md) | A session is one flat directory to `ccresu`, so a recovery that must run in a git worktree runs in the wrong tree | PRD 1 | `Proposed` |
 
 PRD 6 is last because it is the only one about *where* a recovery happens rather
@@ -62,6 +62,9 @@ migration 0008), PRD 3's supervisor surface (`claude.DaemonStatus`,
 `claude.SupervisorVersionMismatch`, the interrupted attempt and the retimed unit)
 and PRD 4's hook path (`ccresu hook`, `storage.EventNeedsInput`,
 `recovery.MilestoneNeedsInput`, the `attention_episodes` table and migration 0010)
+and PRD 5's spend guardrails (`recovery.guardrails`, `recovery.SpendLimits`,
+`recovery.ClassSpendCapReached`, `SPEND_CAP_REACHED`, `storage.SessionSpend`,
+the `cost_usd` column and migration 0011)
 are in the tree, each with a test per requirement, while `v0.6.0`
 remains the published version (§4). It is not a claim that a release has happened,
 and it does not soften the guarantee the later PRDs make about the code they build

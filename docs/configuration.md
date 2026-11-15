@@ -172,6 +172,37 @@ daemon refuse to start. The same rules apply to the policy struct the recovery
 manager is constructed with, so a caller that builds a `Backoff` in code gets the
 error rather than a quietly repaired schedule.
 
+#### `recovery.guardrails`
+
+PRD 5's guardrails. Every key is optional, and an unset key means the behaviour
+ccresu had before the section existed: no flag is added and no check runs.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `max_cost_usd_per_session` | `0` (off) | Before an attempt starts, ccresu sums the costs the CLI reported for this session's attempts and refuses to start when the sum has reached this figure. The refusal spends nothing: the check runs before an attempt row exists. |
+| `max_cost_usd_per_attempt` | `0` (off) | After an attempt resolves, a recorded cost above this figure stops automatic recovery for the session. It guards the case the session cap cannot see: one very expensive turn. |
+| `model` | empty | `--model <value>` on the handoff. |
+| `effort` | empty | `--effort <value>` on the handoff. |
+| `fallback_model` | empty | `--fallback-model <value>` on the handoff; the CLI accepts a comma-separated chain. |
+| `permission_mode` | empty | `--permission-mode <value>` on the handoff. `dontAsk` is the recommended unattended value; `bypassPermissions` is passed but may be ignored by a background session, so it is warned about at load time. |
+
+The four flags are the ones a `--bg` handoff accepts. The flags that bound cost
+per run — `--max-budget-usd`, `--max-turns`, `--json-schema`,
+`--permission-prompts` — are documented as print mode only and are never passed;
+the two spend caps above are ccresu's replacement for them.
+
+A session stopped by either cap is parked in `SPEND_CAP_REACHED`, which no
+reconcile pass resumes. It leaves that state when the operator raises the cap (the
+next pass returns it to `DISCOVERED`), runs `ccresu recover <id>`, or resets it.
+The caps apply to automatic recovery only: an explicit `ccresu recover` or
+`ccresu retry` is a human act and is allowed past the cap, though its cost is
+still recorded and the override is logged.
+
+A cost the CLI did not report is recorded as *unknown*, not as zero: it neither
+counts toward a cap nor blocks a resume. The figure is the CLI's own client-side
+estimate, the same one its `--max-budget-usd` would use, so it can differ from the
+bill and spend can pass the cap — leave headroom.
+
 ### `telegram`
 
 See [telegram.md](telegram.md). Keys: `enabled` (`false`), `bot_token`, `chat_id`,
