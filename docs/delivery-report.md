@@ -57,15 +57,15 @@ Run at `HEAD` on a clean tree:
 | --- | --- | --- |
 | Formatting | `gofmt -l .` | no output |
 | Vet | `go vet ./...` | clean |
-| Tests | `go test ./...` | all 15 Go packages with tests pass |
+| Tests | `go test ./...` | all 16 Go packages with tests pass |
 | Race | `go test -race ./...` | pass |
-| Coverage | `make cover-check` | **86.8%** (gate 80%) |
+| Coverage | `make cover-check` | **86.9%** (gate 80%) |
 | Website lint | `npm run lint` | clean |
 | Website types | `npx tsc --noEmit` | clean |
 | Website tests | `npm run test` | 18 files, 143 tests pass |
 | Website build | `npm run build` | static export, 15 routes |
 
-Suite size: 88 Go test files, 815 test functions, plus 18 web test files.
+Suite size: 93 Go test files, 835 test functions, plus 18 web test files.
 
 Per-package statement coverage, from `go test ./... -cover`:
 
@@ -78,18 +78,19 @@ Per-package statement coverage, from `go test ./... -cover`:
 | `internal/scheduler` | 96.0% | ≥95% |
 | `internal/telegram` | 96.0% | ≥90% |
 | `internal/clock` | 93.3% | — |
-| `internal/recovery` | 95.8% | ≥90% |
-| `internal/claude` | 90.1% | ≥80% |
+| `internal/recovery` | 94.5% | ≥90% |
+| `internal/claude` | 89.7% | ≥80% |
 | `internal/server` | 88.0% | ≥80% |
 | `internal/storage` | 85.6% | ≥85% |
-| `internal/app` | 84.1% | ≥80% |
+| `internal/app` | 84.7% | ≥80% |
 | `cmd/ccresu` | 100.0% | — |
+| `tests/deployment` | no statements (artefact test) | — |
 | `tests/e2e` | no statements (behavioural) | — |
 | `tests/integration` | no statements (behavioural) | — |
 | `tests/support` | 0.0% (fixture package) | — |
 
 Two rows move between runs, and the table quotes the aggregate `go test ./... -cover`
-run rather than a lucky one. `internal/app` reports 84.0%, 84.1% or 84.2%: the
+run rather than a lucky one. `internal/app` reports 84.5%, 84.6% or 84.7%: the
 lines that differ sit inside the daemon's stage functions — `Step`,
 `actOnSchedules` and `recoverPending` in `daemon.go` — where a branch is reached
 only when a test's timing goes one way. `internal/scheduler` reports 96.0% or
@@ -102,8 +103,8 @@ when the whole suite was competing for the machine.
 The total is statement-weighted over everything `go test ./...` reports: the
 twelve `internal/` packages, `cmd/ccresu` (100.0%, two statements), `tests/support`
 (a fixture package the end-to-end tests import, which earns no credit for another
-package's test run and so reports 0.0%) and the two behavioural suites, which have
-no statements of their own. Over the `internal/` packages only it is 90.0%. That
+package's test run and so reports 0.0%) and the behavioural and artefact suites,
+which have no statements of their own. Over the `internal/` packages only it is 90.0%. That
 tree measures **88.6%**.
 
 One caveat about that number, because it depends on whether the website's
