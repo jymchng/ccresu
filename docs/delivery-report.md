@@ -65,7 +65,7 @@ Run at `HEAD` on a clean tree:
 | Website tests | `npm run test` | 18 files, 143 tests pass |
 | Website build | `npm run build` | static export, 15 routes |
 
-Suite size: 88 Go test files, 811 test functions, plus 18 web test files.
+Suite size: 88 Go test files, 815 test functions, plus 18 web test files.
 
 Per-package statement coverage, from `go test ./... -cover`:
 
