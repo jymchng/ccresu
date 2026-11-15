@@ -58,6 +58,15 @@ func TestClassify(t *testing.T) {
 		{"empty message", claude.ErrEmptyMessage, ClassPermanent},
 		{"message too long", claude.ErrMessageTooLong, ClassPermanent},
 		{"session not preserved", claude.ErrSessionNotPreserved, ClassPermanent},
+		// A handoff the supervisor refused, never acknowledged, or could not be
+		// pointed at is not a transient failure: the same arguments produce the
+		// same answer, so the attempt is not spent again on a backoff.
+		{"workspace not trusted", claude.ErrWorkspaceNotTrusted, ClassPermanent},
+		{"handoff not acknowledged", claude.ErrHandoffNotAcknowledged, ClassPermanent},
+		{"handoff directory missing", claude.ErrHandoffDirectoryMissing, ClassPermanent},
+		{"wrapped handoff refusal", fmt.Errorf("resume: %w", claude.ErrWorkspaceNotTrusted), ClassPermanent},
+		{"handoff refusal beside a retryable marker",
+			fmt.Errorf("timeout: %w", claude.ErrHandoffNotAcknowledged), ClassPermanent},
 		{"session not found", claude.ErrSessionNotFound, ClassPermanent},
 		{"store not found", storage.ErrNotFound, ClassPermanent},
 		{"wrapped sentinel", fmt.Errorf("resume: %w", claude.ErrCLIUnavailable), ClassPermanent},
@@ -110,6 +119,41 @@ func TestClassify(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := Classify(tc.err); got != tc.want {
 				t.Fatalf("Classify(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHandoffSentinelsAreNeverRetried(t *testing.T) {
+	// The handoff's refusals are the ones `claude.Resume` documents as "not
+	// retried, because neither gets better by trying again with the same
+	// arguments". That sentence is only true if the classifier agrees, and the
+	// recovery pages say the session lands in DISCOVERED rather than on a
+	// backoff — so this table is the contract between the copy and the code.
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"workspace not trusted", claude.ErrWorkspaceNotTrusted},
+		{"handoff not acknowledged", claude.ErrHandoffNotAcknowledged},
+		{"handoff directory missing", claude.ErrHandoffDirectoryMissing},
+		{"wrapped workspace refusal", fmt.Errorf("resume session x: %w", claude.ErrWorkspaceNotTrusted)},
+		{"wrapped missing block", fmt.Errorf("resume session x: %w", claude.ErrHandoffNotAcknowledged)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			class := Classify(tc.err)
+			if class != ClassPermanent {
+				t.Errorf("Classify(%v) = %v, want %v", tc.err, class, ClassPermanent)
+			}
+			if class.Retryable() {
+				t.Errorf("Classify(%v).Retryable() = true, want false", tc.err)
+			}
+			if state := class.State(); state != StateDiscovered {
+				t.Errorf("Classify(%v).State() = %v, want %v", tc.err, state, StateDiscovered)
+			}
+			if Retryable(tc.err) {
+				t.Errorf("Retryable(%v) = true, want false", tc.err)
 			}
 		})
 	}
