@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | `Proposed` — design only. Nothing here is implemented |
+| **Status** | `Implemented` in `v0.7.0` (`c603ee8`) — `ccresu hook`, `storage.EventNeedsInput`, `recovery.MilestoneNeedsInput` and the `attention_episodes` table (migration `0010_attention_episodes.sql`) are on `main`, and every requirement in §6 has a test. This document stays the specification it was; §2 of [the index](README.md) is the record of what shipped |
 | **Affected version** | `v0.6.0` (`55bf09e`) |
 | **Component** | `cmd/ccresu` → `internal/app` → `internal/recovery`, `internal/telegram`, `internal/storage`, `internal/config` |
 | **Sources** | <https://code.claude.com/docs/en/agent-view>, <https://code.claude.com/docs/en/hooks>, <https://code.claude.com/docs/en/cli-reference> |

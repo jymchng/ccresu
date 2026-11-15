@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | `Proposed` — design only. Nothing here is implemented |
+| **Status** | `Implemented` in `v0.7.0` (`c603ee8`) — `recovery.guardrails`, `recovery.SpendLimits`, `recovery.ClassSpendCapReached`/`SPEND_CAP_REACHED`, the `cost_usd` column (migration `0011_attempt_cost.sql`) and `storage.SessionSpend` are on `main`, and every requirement in §6 has a test. This document stays the specification it was; §2 of [the index](README.md) is the record of what shipped |
 | **Affected version** | `v0.6.0` (`55bf09e`) |
 | **Component** | `internal/claude` → `internal/recovery` → `internal/config`, `internal/storage`, `internal/app` |
 | **Sources** | <https://code.claude.com/docs/en/cli-reference>, <https://code.claude.com/docs/en/permission-modes>, <https://code.claude.com/docs/en/agent-view> |

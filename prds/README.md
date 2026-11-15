@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | **Scope** | Six enhancements to `ccresu`, derived from two Claude Code documentation pages |
-| **Status** | PRDs 1–4 are **`Implemented`** on `main`, unreleased. PRDs 5–6 are **`Proposed`**. The §2 column below is the only place that is recorded — the PRD documents themselves are specifications and are not rewritten to describe what shipped |
-| **Baseline** | `v0.6.0` (`55bf09e`) — the published version every PRD measures against |
+| **Status** | PRDs 1–6 are **`Implemented`**, shipped in `v0.7.0` (`c603ee8`). The §2 column below and each document's own Status row record that; the PRD bodies stay specifications and are not rewritten to describe what shipped |
+| **Baseline** | `v0.6.0` (`55bf09e`) — the version every PRD measures its problem against; `v0.7.0` (`c603ee8`) is the release that removed it |
 | **Sources** | <https://code.claude.com/docs/en/agent-view> and <https://code.claude.com/docs/en/cli-reference>, both read in full |
 | **Precedent** | [`usage-limit-refusal-misreported.md`](usage-limit-refusal-misreported.md), the accepted PRD that produced `v0.6.0` |
 | **Owner** | ccresu maintainers |
@@ -54,21 +54,23 @@ than *whether* it did, and that question only becomes answerable once PRD 1 has
 settled that recoveries run under the supervisor and therefore inherit the
 supervisor's worktree behaviour.
 
-`Implemented` means the requirement set is on `main` and unreleased: PRD 1's
-handoff (`claude.HandoffArgs`), PRD 2's published-state read
-(`claude.PublishedListing`, `recovery.Observe`, the `WAITING_FOR_INPUT` state and
-migration 0008), PRD 3's supervisor surface (`claude.DaemonStatus`,
+`Implemented` means the requirement set is on `main` **and released**: all six
+shipped in `v0.7.0` (`c603ee8`) — PRD 1's handoff (`claude.HandoffArgs`,
+`claude.ParseHandoff`, the `backgrounded` acceptance), PRD 2's published-state
+read (`claude.PublishedListing`, `recovery.Observe`, the `WAITING_FOR_INPUT`
+state and migration 0008), PRD 3's supervisor surface (`claude.DaemonStatus`,
 `claude.DaemonLogs`, `recovery.SupervisorSource`,
-`claude.SupervisorVersionMismatch`, the interrupted attempt and the retimed unit)
-and PRD 4's hook path (`ccresu hook`, `storage.EventNeedsInput`,
-`recovery.MilestoneNeedsInput`, the `attention_episodes` table and migration 0010)
-and PRD 5's spend guardrails (`recovery.guardrails`, `recovery.SpendLimits`,
+`claude.SupervisorVersionMismatch`, the interrupted attempt and the retimed unit),
+PRD 4's hook path (`ccresu hook`, `storage.EventNeedsInput`,
+`recovery.MilestoneNeedsInput`, the `attention_episodes` table and migration
+0010), PRD 5's spend guardrails (`recovery.guardrails`, `recovery.SpendLimits`,
 `recovery.ClassSpendCapReached`, `SPEND_CAP_REACHED`, `storage.SessionSpend`,
-the `cost_usd` column and migration 0011)
-are in the tree, each with a test per requirement, while `v0.6.0`
-remains the published version (§4). It is not a claim that a release has happened,
-and it does not soften the guarantee the later PRDs make about the code they build
-on — it only records that the code now exists where they expect it.
+the `cost_usd` column and migration 0011) and PRD 6's worktree resolution
+(`claude.ResolveWorkspace`, the persisted `sessions.runs_in_path` column and
+migration 0012) — each with a test per requirement. `v0.6.0` stays the baseline
+every PRD measures its problem against (§5); `v0.7.0` is the release in which the
+problem is gone, and the documents themselves still describe the problem and the
+design, not the diff.
 
 There were seven drafts. A seventh PRD, `capability-gating.md`, was **withdrawn**
 rather than deferred: it would have maintained a version→capability table so an
@@ -101,12 +103,13 @@ relate.
 These hold for the whole set and for any implementation that follows it:
 
 - **PRDs only.** This directory changes; `internal/`, `cmd/` and `web/` do not.
-  The §2 status column is the one place implementation state is recorded; the PRD
-  documents themselves stay specifications and are never rewritten to describe
-  what shipped.
+  Implementation state is recorded in exactly two places — the §2 status column
+  and each document's own Status row — and the PRD bodies stay specifications:
+  they are never rewritten to describe what shipped.
 - **No new module dependencies.** `go.mod` is unchanged by this set.
-- **No tag, no release, no publish.** `v0.6.0` remains the published version.
-  An accepted PRD that ships later would bump the version then, not now.
+- **No tag, no release, no publish from a PRD.** That constraint held while the
+  set was a proposal, and the release that carries it is `v0.7.0` (`c603ee8`),
+  cut after all six were on `main`. No PRD bumped a published version by itself.
 - **Linear history.** `main` stays ff-mergeable, as every commit on it has been.
 - **No backward compatibility.** The `-p --resume` path is superseded, not
   preserved. No PRD here owes a compatibility rule for it, and none may add a

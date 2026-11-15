@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | `Proposed` — design only. Nothing here is implemented |
+| **Status** | `Implemented` in `v0.7.0` (`c603ee8`) — `claude.ResolveWorkspace`, the persisted `sessions.runs_in_path` column (migration `0012_session_runs_in_path.sql`) and the worktree fixtures are on `main`, and every requirement in §6 has a test. This document stays the specification it was; §2 of [the index](README.md) is the record of what shipped |
 | **Affected version** | `v0.6.0` (`55bf09e`) |
 | **Component** | `internal/claude` → `internal/recovery` → `internal/storage`, `internal/app` |
 | **Sources** | <https://code.claude.com/docs/en/agent-view>, <https://code.claude.com/docs/en/cli-reference>, <https://code.claude.com/docs/en/worktrees> |

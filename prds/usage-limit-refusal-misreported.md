@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Accepted — fix in progress on `fix/usage-limit-after-failed-resume` |
+| **Status** | `Implemented` in `v0.6.0` (`55bf09e`) — the fix landed from `fix/usage-limit-after-failed-resume` and shipped in the release this PRD produced |
 | **Affected version** | v0.5.0 (`355bc44`) and everything before it |
 | **Component** | `internal/claude` → `internal/recovery` → `internal/app` (daemon) |
 | **Reporter's session** | `1347e5db-a9fb-42eb-b92a-82256bd5aa68` (project `/root/python_projects/agenthicc`) |
