@@ -63,7 +63,13 @@ recovery:
   max_delay: 15m
   multiplier: 2.0
   jitter: 0.15
+  # Accepted and validated, but nothing reads it: it dates from the print-mode
+  # resume, when ccresu watched a child process start producing output. A handoff
+  # has no child to watch, so the wait that applies is claude's fixed 2m
+  # DefaultHandoffTimeout on the handoff call itself.
   startup_timeout: 60s
+  # Bounds the transcript-growth poll on a resume that did not hand off. A handoff
+  # returns as soon as the `backgrounded` block is parsed, so this never bounds it.
   verification_timeout: 120s
   health_check_interval: 10s
   max_concurrent_recoveries: 3

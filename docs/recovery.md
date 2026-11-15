@@ -931,12 +931,17 @@ as success records a failed attempt's own write as its achievement. A live proce
 is likewise reported but never used as proof: a launched process is not a resumed
 conversation.
 
-The wait for evidence is bounded by `DefaultVerificationTimeout = 120s` and polled
-every `DefaultHealthCheckInterval = 10s`; a zero means the default, and a
-negative value means "check once, never wait". The bound is a *watch* bound rather
-than a proof deadline: a session still `working` when it expires is left running —
-the handoff owns it — and the attempt stays open instead of being failed for not
-having finished in time.
+The transcript-growth poll is bounded by `recovery.verification_timeout`
+(`DefaultVerificationTimeout = 120s`) and repeats every
+`recovery.health_check_interval` (`DefaultHealthCheckInterval = 10s`); a zero
+means the default, and a negative value means "check once, never wait". A handoff
+never reaches that poll — it is the only resume ccresu issues, and `Verify` returns
+through `acceptHandoff` as soon as the `backgrounded` block is parsed — and the
+published-state observation has no timeout of its own, so no configured value
+bounds how long a handed-off session takes to finish. The bound is a *watch* bound
+rather than a proof deadline: a session still `working` when it expires is left
+running — the supervisor owns it — and the attempt stays open instead of being
+failed for not having finished in time.
 
 "We could not check" and "the check failed" are kept apart: an unreadable listing
 returns `ErrObservationUnavailable` and the attempt stays open, while an
