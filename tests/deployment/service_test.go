@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -21,15 +20,37 @@ import (
 	"github.com/jymchng/ccresu/internal/claude"
 )
 
-// repoFile reads a file relative to this package's directory, so the test does
-// not depend on the working directory the runner picks.
+// repoRoot finds the module root by walking up from the working directory,
+// which `go test` sets to the package's own directory.
+//
+// It deliberately does not use runtime.Caller: CI builds with -trimpath, so a
+// caller's file name is the module-relative
+// "github.com/jymchng/ccresu/tests/deployment/service_test.go". Joining "..",
+// ".." onto that names a directory that does not exist, and the read fails with
+// the module path where a file path belongs — green locally, red on the runner.
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("no go.mod in %s or any parent", dir)
+		}
+		dir = parent
+	}
+}
+
+// repoFile reads a file relative to the module root, so the test does not
+// depend on the working directory the runner picks.
 func repoFile(t *testing.T, rel string) string {
 	t.Helper()
-	_, here, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	path := filepath.Join(filepath.Dir(here), "..", "..", rel)
+	path := filepath.Join(repoRoot(t), rel)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
