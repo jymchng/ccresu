@@ -665,7 +665,8 @@ ok      telegram        chat -1001234567890, token ********abcd
 Each event is a separate switch (`notify_limit_detected`,
 `notify_recovery_started`, `notify_recovery_success`,
 `notify_recovery_failure`, `notify_permanent_failure`,
-`notify_session_completed`, and `notify_waiting` which defaults to `false`).
+`notify_session_completed`, plus `notify_waiting` and `notify_needs_input`, both
+of which default to `false`).
 Delivery is queued in SQLite by a sender goroutine, so a slow Telegram cannot
 delay a resume. Full details: [docs/telegram.md](docs/telegram.md).
 

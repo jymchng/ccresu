@@ -94,6 +94,7 @@ func envSetters() []envSetter {
 		{EnvPrefix + "TELEGRAM__NOTIFY_RECOVERY_FAILURE", setBool(func(c *Config) *bool { return &c.Telegram.NotifyRecoveryFailure })},
 		{EnvPrefix + "TELEGRAM__NOTIFY_PERMANENT_FAILURE", setBool(func(c *Config) *bool { return &c.Telegram.NotifyPermanentFailure })},
 		{EnvPrefix + "TELEGRAM__NOTIFY_SESSION_COMPLETED", setBool(func(c *Config) *bool { return &c.Telegram.NotifySessionCompleted })},
+		{EnvPrefix + "TELEGRAM__NOTIFY_NEEDS_INPUT", setBool(func(c *Config) *bool { return &c.Telegram.NotifyNeedsInput })},
 
 		{EnvPrefix + "SERVER__ENABLED", setBool(func(c *Config) *bool { return &c.Server.Enabled })},
 		{EnvPrefix + "SERVER__HOST", setString(func(c *Config) *string { return &c.Server.Host })},

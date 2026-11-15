@@ -668,6 +668,7 @@ func TestEnabledFromConfig(t *testing.T) {
 		NotifyRecoveryFailure:  true,
 		NotifyPermanentFailure: true,
 		NotifySessionCompleted: true,
+		NotifyNeedsInput:       true,
 	}
 	enabled := EnabledFromConfig(cfg)
 	if len(enabled) != len(Events()) {
@@ -680,6 +681,63 @@ func TestEnabledFromConfig(t *testing.T) {
 	}
 	if got := EnabledFromConfig(config.Telegram{}); len(got) != len(Events()) {
 		t.Errorf("EnabledFromConfig returned %d switches, want one per event", len(got))
+	}
+}
+
+// TestNotifyRefusesANeedsInputWithoutAnEpisode covers the one message the
+// notifier will not key by fallback: without the attention episode instant the
+// dedupe key would collapse every block of a session into the first one, so the
+// caller is told the message cannot be keyed instead of being given a key that
+// silently suppresses the second question (PRD 4 6.3).
+func TestNotifyRefusesANeedsInputWithoutAnEpisode(t *testing.T) {
+	const session = "11111111-1111-4111-8111-111111111111"
+	cfg := &config.Config{}
+	cfg.Telegram = config.Telegram{
+		Enabled:          true,
+		BotToken:         testToken,
+		ChatID:           "42",
+		ParseMode:        "HTML",
+		NotifyNeedsInput: true,
+	}
+	store := newFakeStore()
+	notifier, err := NewFromConfig(cfg, store, nil, discardLogger())
+	if err != nil {
+		t.Fatalf("NewFromConfig: %v", err)
+	}
+
+	_, created, err := notifier.Notify(context.Background(), Request{
+		Event:     storage.EventNeedsInput,
+		SessionID: session,
+		Data:      EventData{SessionID: session, State: "blocked"},
+	})
+	if !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("Notify error = %v, want ErrInvalidConfig", err)
+	}
+	if created {
+		t.Error("a message that cannot be keyed must not be queued")
+	}
+	if _, ok := store.row(string(storage.EventNeedsInput) + ":" + session); ok {
+		t.Error("the fallback key was written, so the next block would be swallowed")
+	}
+
+	start := time.Date(2026, 1, 5, 12, 0, 0, 0, time.UTC)
+	_, created, err = notifier.Notify(context.Background(), Request{
+		Event:     storage.EventNeedsInput,
+		SessionID: session,
+		Data:      EventData{SessionID: session, State: "blocked", AttentionStart: start},
+	})
+	if err != nil {
+		t.Fatalf("Notify with an episode = %v, want nil", err)
+	}
+	if !created {
+		t.Fatal("the first block of an episode must be queued")
+	}
+	if _, created, err := notifier.Notify(context.Background(), Request{
+		Event:     storage.EventNeedsInput,
+		SessionID: session,
+		Data:      EventData{SessionID: session, State: "blocked", AttentionStart: start},
+	}); err != nil || created {
+		t.Errorf("Notify again = created %v, err %v, want one row per episode", created, err)
 	}
 }
 

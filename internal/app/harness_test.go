@@ -180,6 +180,10 @@ type harness struct {
 	// keystroke stream the browser reads instead of os.Stdin.
 	terminal bool
 	keys     string
+	// stdin is the payload `ccresu hook` reads. It is a string rather than a
+	// reader because deps() is called once per invocation and a consumed reader
+	// would make the second call read nothing.
+	stdin string
 
 	buildErr  error
 	loadErr   error
@@ -238,7 +242,7 @@ func newHarness(t *testing.T) *harness {
 		// The observer logs its own failures instead of returning them, so it gets
 		// the same discarded logger the runtime carries: a test that deliberately
 		// breaks the notifier should not print to the suite's output.
-		Observer: notificationObserver(notifier, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		Observer: notificationObserver(notifier, store, slog.New(slog.NewTextHandler(io.Discard, nil))),
 	})
 	if err != nil {
 		t.Fatalf("recovery manager: %v", err)
@@ -314,6 +318,7 @@ func (h *harness) deps() Deps {
 		// are reachable without a terminal.
 		IsTerminal: func(io.Writer) bool { return h.terminal },
 		TUIInput:   stringReader(h.keys),
+		Stdin:      stringReader(h.stdin),
 	}
 }
 

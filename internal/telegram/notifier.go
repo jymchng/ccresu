@@ -178,6 +178,7 @@ func EnabledFromConfig(cfg config.Telegram) map[storage.NotificationEvent]bool {
 		storage.EventRecoveryFailure:  cfg.NotifyRecoveryFailure,
 		storage.EventPermanentFailure: cfg.NotifyPermanentFailure,
 		storage.EventSessionCompleted: cfg.NotifySessionCompleted,
+		storage.EventNeedsInput:       cfg.NotifyNeedsInput,
 	}
 }
 
@@ -233,6 +234,15 @@ func (n *Notifier) Notify(ctx context.Context, req Request) (storage.Notificatio
 
 	key := strings.TrimSpace(req.DedupeKey)
 	if key == "" {
+		// A needs_input message without its episode instant has no identity to
+		// deduplicate on, and the fallback would collapse every block of the
+		// session into the first one. Refusing is the honest answer: the caller
+		// asked for a message it cannot key, and a silent once-per-session
+		// announcement would look like delivery.
+		if req.Event == storage.EventNeedsInput && data.AttentionStart.IsZero() {
+			return storage.Notification{}, false, fmt.Errorf(
+				"%w: %s needs the attention episode instant", ErrInvalidConfig, req.Event)
+		}
 		key = DedupeKey(req.Event, data)
 	}
 

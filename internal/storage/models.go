@@ -128,8 +128,12 @@ func (s NotificationStatus) Valid() bool {
 	}
 }
 
-// NotificationEvent names the six documented notification events plus session
-// completion.
+// NotificationEvent names every message class ccresu can deliver.
+//
+// The set is the six documented events plus session completion and — since PRD 4
+// — needs_input, which is the only class two producers reach: the recovery pass
+// and `ccresu hook`. Adding a value here is never a local change: PRD 4's RC3
+// lists the twelve sites that enumerate the set.
 type NotificationEvent string
 
 // The notification events ccresu can deliver.
@@ -141,6 +145,12 @@ const (
 	EventRecoveryFailure  NotificationEvent = "recovery_failure"
 	EventPermanentFailure NotificationEvent = "permanent_failure"
 	EventSessionCompleted NotificationEvent = "session_completed"
+	// EventNeedsInput means a session is waiting for a human: a permission
+	// prompt, a sandbox decision, an answer, or an expired login only the
+	// operator can clear (PRD 4). It is its own event rather than a reuse of one
+	// of the seven because none of them means this, and because its dedupe key
+	// is episode-scoped: a session that asks five questions is five messages.
+	EventNeedsInput NotificationEvent = "needs_input"
 )
 
 // Valid reports whether e is a known notification event.
@@ -148,7 +158,7 @@ func (e NotificationEvent) Valid() bool {
 	switch e {
 	case EventLimitDetected, EventWaiting, EventRecoveryStarted,
 		EventRecoverySuccess, EventRecoveryFailure, EventPermanentFailure,
-		EventSessionCompleted:
+		EventSessionCompleted, EventNeedsInput:
 		return true
 	default:
 		return false

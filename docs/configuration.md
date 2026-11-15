@@ -181,7 +181,8 @@ rejected at config validation because the templates emit HTML), and the
 `waiting`
 (default `false`), `recovery_started`, `recovery_success`,
 `recovery_failure`, `permanent_failure`, `session_completed` — all `true` by
-default).
+default — plus `needs_input` (default `false`: it is a new message class, and an
+upgrade should not start sending one).
 
 ### `server`
 

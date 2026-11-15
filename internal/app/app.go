@@ -110,6 +110,12 @@ type Deps struct {
 	// TUIInput supplies the keystrokes of the interactive browser. Nil means
 	// os.Stdin.
 	TUIInput io.Reader
+	// Stdin supplies the payload of the `hook` subcommand. Nil means os.Stdin.
+	//
+	// It is separate from TUIInput because the two are read by different
+	// commands for different reasons, and a test that feeds a recorded hook
+	// payload must not have to pretend to be a terminal.
+	Stdin io.Reader
 }
 
 // App is one CLI invocation: parsed global flags plus the injected environment.
@@ -124,6 +130,8 @@ type App struct {
 	// injected so the browser is testable without a pty.
 	isTerminal func(io.Writer) bool
 	tuiInput   io.Reader
+	// stdin is the hook's payload stream, defaulting to the process's.
+	stdin io.Reader
 
 	configPath string
 	// serveAddr is the --addr override for `serve`; empty means the configured
@@ -186,6 +194,9 @@ func newApp(deps Deps, build BuildInfo, stdout, stderr io.Writer) *App {
 	if deps.TUIInput == nil {
 		deps.TUIInput = os.Stdin
 	}
+	if deps.Stdin == nil {
+		deps.Stdin = os.Stdin
+	}
 	if build.Version == "" {
 		build.Version = "dev"
 	}
@@ -203,6 +214,7 @@ func newApp(deps Deps, build BuildInfo, stdout, stderr io.Writer) *App {
 		clock:      deps.Clock,
 		isTerminal: deps.IsTerminal,
 		tuiInput:   deps.TUIInput,
+		stdin:      deps.Stdin,
 	}
 }
 
@@ -490,6 +502,12 @@ func (a *App) commands() []commandSpec {
 			summary: "run the local REST/SSE API",
 			usage:   "serve [--addr HOST:PORT]",
 			run:     (*App).cmdServe,
+		},
+		{
+			name:    "hook",
+			summary: "consume a Claude Code Notification hook payload (always exits 0)",
+			usage:   "hook < payload.json",
+			run:     (*App).cmdHook,
 		},
 		{
 			name:    "version",

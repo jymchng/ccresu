@@ -379,7 +379,7 @@ ok      telegram        chat -1001234567890, token ********abcd`,
     },
     {
       kind: "p",
-      text: "Each event is a separate switch (`notify_limit_detected`, `notify_recovery_started`, `notify_recovery_success`, `notify_recovery_failure`, `notify_permanent_failure`, `notify_session_completed`, and `notify_waiting` which defaults to false). Delivery is queued in SQLite by a sender goroutine, so a slow Telegram cannot delay a resume.",
+      text: "Each event is a separate switch (`notify_limit_detected`, `notify_recovery_started`, `notify_recovery_success`, `notify_recovery_failure`, `notify_permanent_failure`, `notify_session_completed`, plus `notify_waiting` and `notify_needs_input`, which both default to false). Delivery is queued in SQLite by a sender goroutine, so a slow Telegram cannot delay a resume.",
     },
     { kind: "h2", text: "Step 13 — Script it: the REST and SSE API" },
     {

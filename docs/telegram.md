@@ -50,14 +50,23 @@ To get the two values:
 
 ## What you get
 
-Every event is a separate switch, all `true` by default except `notify_waiting`.
-All seven are produced today. The daemon queues `limit_detected` and
+Every event is a separate switch, all `true` by default except `notify_waiting`
+and `notify_needs_input`, the two classes that can arrive repeatedly for one
+session. All eight are produced today. The daemon queues `limit_detected` and
 `waiting_for_reset` from one place (`internal/app/daemon.go:345-347`); the four
 recovery events come from the recovery engine, which reports each milestone to an
 observer that renders and queues it (`internal/app/notifications.go`); and
 `session_completed` comes from the daemon's own `complete` stage
 (`internal/app/daemon.go:505-533`), because a completed session never enters the
 recovery engine at all.
+
+`needs_input` is the only class **two** producers reach: the daemon's observation
+of a session that has gone `blocked`, and `ccresu hook` — a Claude Code
+`Notification` hook that asks for one observation the moment the CLI says a human
+is wanted. Both raise the same milestone from the same observation, so an
+installed hook makes the message arrive in seconds instead of at the next poll,
+and never produces a second copy of it. Installing the hook is yours to do; see
+[Hearing about a session that needs you](#hearing-about-a-session-that-needs-you).
 
 | Event | YAML key | Subject | Queued today |
 | --- | --- | --- | --- |
@@ -68,6 +77,7 @@ recovery engine at all.
 | Attempt failed | `notify_recovery_failure` | Recovery attempt failed | yes, once per attempt that goes to `RETRY_WAIT` |
 | Permanent failure | `notify_permanent_failure` | Automatic recovery stopped | yes, once per failure classified `recovery.ClassPermanent` |
 | Session completed | `notify_session_completed` | Session completed | yes, once per session that settles as `COMPLETED` |
+| Needs your input | `notify_needs_input` (default `false`) | Session needs your input | yes, once per attention episode: from the daemon's observation of a `blocked` session, or seconds after it from an installed Claude Code hook |
 
 `notify_waiting` is off by default, and it is not a second copy of the detection
 message: the daemon skips it whenever the reset time is known
@@ -95,6 +105,56 @@ wrong reading: it belongs to a failure classified permanent
 the session to `DISCOVERED`, where the daemon re-reads the transcript and plans
 the next reset (`internal/recovery/manager.go:353-359`), so it is a pause in a
 cycle rather than a verdict about the conversation.
+
+## Hearing about a session that needs you
+
+A session that goes `blocked` is waiting on a human, and until it is answered it
+does nothing. The daemon notices at its next pass. A Claude Code `Notification`
+hook notices immediately, and that is the whole point of `ccresu hook`: one
+observation, no state change, at most one `needs_input` message.
+
+Installing it is **documented, never performed**. `ccresu` does not read or write
+`~/.claude/settings.json`, so you add the hook yourself and you can remove it
+again. Put this in the `hooks` object of that file:
+
+```json
+{
+  "hooks": {
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ccresu hook",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The explicit `timeout` matters. A command hook's default is 600 seconds, and a
+hook that can hold a session for ten minutes is worse than no hook: `ccresu hook`
+bounds itself to a few seconds of stdin, one `claude agents --json --all` read
+and one database write, so 15 seconds is generous and the default is not.
+
+No `matcher` is given on purpose. The hook is invoked for every notification type
+and ignores all but `agent_needs_input` and `agent_completed`, because the others
+describe an interactive terminal session, which ccresu does not model.
+
+Three more properties are worth knowing before you install it:
+
+- **It always exits 0 and prints nothing.** A hook runs inside a session's
+  transcript, so a message there or a non-zero exit would be a visible defect.
+  A missing payload, a broken configuration, a locked database and an unknown
+  session id are all silent no-ops.
+- **It never creates, discovers, enables or recovers anything.** It observes a
+  session ccresu already knows; discovery remains discovery's job.
+- **It cannot double up with the daemon.** Both producers compute the same
+  dedupe key for one episode, so installing the hook makes the message arrive
+  sooner, not twice.
 
 ## Escaping and length
 
@@ -164,7 +224,7 @@ Both routes are documented in [api.md](api.md).
 | `403 bot was blocked by the user` | The chat blocked the bot; unblock it and send `/start`. |
 | `429` repeatedly | Telegram is rate limiting the bot; the queue keeps the message and backs off. |
 | Nothing arrives, `enabled: false` | The switch is off: `ccresu config validate` prints `telegram: no`. |
-| Nothing arrives, one event missing | Check that event's switch first: `notify_waiting` is off by default, and it stays silent even when on if the banner named a reset time. `notify_recovery_failure` is deliberately not sent for a usage-limit refusal (that is a wait, reported by `notify_limit_detected`), and `notify_permanent_failure` only fires for a failure classified `recovery.ClassPermanent` — a spent attempt budget returns the session to `DISCOVERED` and announces nothing. `notify_session_completed` needs a session that has actually settled as `COMPLETED`. |
+| Nothing arrives, one event missing | Check that event's switch first: `notify_waiting` is off by default, and it stays silent even when on if the banner named a reset time. `notify_recovery_failure` is deliberately not sent for a usage-limit refusal (that is a wait, reported by `notify_limit_detected`), and `notify_permanent_failure` only fires for a failure classified `recovery.ClassPermanent` — a spent attempt budget returns the session to `DISCOVERED` and announces nothing. `notify_session_completed` needs a session that has actually settled as `COMPLETED`. `notify_needs_input` is off by default too, and even switched on it needs a session the supervisor publishes as `blocked`: answer the prompt and the message is no longer true, so none is sent. |
 
 The token is a credential: it is registered with the log redactor at startup, so
 it is scrubbed from every log line and error string, and it is masked in

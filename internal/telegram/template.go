@@ -18,6 +18,7 @@ func Events() []storage.NotificationEvent {
 		storage.EventRecoveryFailure,
 		storage.EventPermanentFailure,
 		storage.EventSessionCompleted,
+		storage.EventNeedsInput,
 	}
 }
 
@@ -53,6 +54,11 @@ type EventData struct {
 	State string
 	// Duration is how long the resumed turn took, when known.
 	Duration time.Duration
+	// AttentionStart is when the attention episode a needs_input message is
+	// about began, as the first observer recorded it. It is the only part of
+	// that message's identity the hook and the recovery pass cannot disagree
+	// about, because both read it from the same persisted row (PRD 4 §6.3).
+	AttentionStart time.Time
 }
 
 // Subject returns a short title for the event, for the API and the CLI.
@@ -72,6 +78,8 @@ func Subject(event storage.NotificationEvent) string {
 		return "Automatic recovery stopped"
 	case storage.EventSessionCompleted:
 		return "Session completed"
+	case storage.EventNeedsInput:
+		return "Session needs your input"
 	default:
 		return ""
 	}
@@ -160,6 +168,23 @@ func Render(event storage.NotificationEvent, data EventData) (string, error) {
 		}
 		body.WriteString("ccresu will not resume this session again unless you ask it to.")
 
+	case storage.EventNeedsInput:
+		// The two cases of a blocked session are kept apart rather than merged:
+		// a published reason is quoted verbatim, and its absence is stated. A
+		// message that invented a reason would be worse than no message.
+		fmt.Fprintf(&body, "%s\n", Bold("Session needs your input"))
+		fmt.Fprintf(&body, "Session: %s\n", session)
+		if data.ProjectPath != "" {
+			fmt.Fprintf(&body, "Project: %s\n", Code(data.ProjectPath))
+		}
+		fmt.Fprintf(&body, "State: %s\n", Escape(nonEmpty(data.State, "blocked")))
+		if strings.TrimSpace(data.Reason) != "" {
+			fmt.Fprintf(&body, "Waiting for: %s\n", Escape(firstLine(data.Reason)))
+		} else {
+			body.WriteString("Waiting for: no reason reported by the supervisor\n")
+		}
+		body.WriteString("ccresu is not resuming this session: answer the prompt in Claude Code and it continues where it stopped.")
+
 	default:
 		return "", fmt.Errorf("%w: %q", ErrInvalidEvent, event)
 	}
@@ -193,6 +218,12 @@ func DedupeKey(event storage.NotificationEvent, data EventData) string {
 		case data.Attempt != 0:
 			fmt.Fprintf(&key, ":%d", data.Attempt)
 		}
+	case storage.EventNeedsInput:
+		// The episode instant, not the message: the same block observed by the
+		// hook and by the next pass must collapse into one row, and the block
+		// after it — a new episode — must not. Seconds are enough because the
+		// instant is stored truncated to the second by the storage layer.
+		fmt.Fprintf(&key, ":%d", data.AttentionStart.UTC().Unix())
 	}
 	return key.String()
 }
@@ -251,4 +282,16 @@ func firstLine(reason string) string {
 		}
 	}
 	return ""
+}
+
+// nonEmpty returns value when it carries something, and fallback otherwise.
+//
+// It exists so a message can state the fact it is sure of without pretending the
+// caller supplied it: a needs_input observation is always about a blocked
+// session, so an empty State prints "blocked" rather than an empty field.
+func nonEmpty(value, fallback string) string {
+	if trimmed := strings.TrimSpace(value); trimmed != "" {
+		return trimmed
+	}
+	return fallback
 }

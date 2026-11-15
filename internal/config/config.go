@@ -117,6 +117,10 @@ type Telegram struct {
 	NotifyRecoveryFailure  bool   `yaml:"notify_recovery_failure"`
 	NotifyPermanentFailure bool   `yaml:"notify_permanent_failure"`
 	NotifySessionCompleted bool   `yaml:"notify_session_completed"`
+	// NotifyNeedsInput announces that a session is waiting on a human. It is a
+	// new message class, so it defaults to false: an upgrade must not start
+	// sending one (PRD 4 R13), exactly like notify_waiting.
+	NotifyNeedsInput bool `yaml:"notify_needs_input"`
 }
 
 // Server holds local API settings.

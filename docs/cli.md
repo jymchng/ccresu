@@ -43,6 +43,7 @@ resets), `130` interrupted.
 | `config` | `config init [PATH] [--force]` / `config validate [PATH]` / `config show` | Creates the configuration from the shipped example, validates a file, or prints the effective one. |
 | `doctor` | `doctor` | Checks the environment ccresu runs in. |
 | `serve` | `serve [--addr HOST:PORT]` | Runs the local REST/SSE API (default `server.host:server.port`). |
+| `hook` | `hook < payload.json` | Consumes one Claude Code `Notification` payload from stdin: one bounded observation, at most one `needs_input` notification, nothing else. **Always exits 0 and prints nothing** — its exit code is not a verdict, so a bad payload, a broken configuration, a locked database and an unknown session id are silent no-ops and the poll remains the fallback. See [telegram.md](telegram.md#hearing-about-a-session-that-needs-you) for the settings snippet. |
 | `version` | `version` | Prints version and build metadata. |
 
 `ccresu --version` and `ccresu --help` work without a subcommand.

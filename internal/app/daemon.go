@@ -138,6 +138,7 @@ func (d *Daemon) Step(ctx context.Context) error {
 		{"schedule", d.actOnSchedules},
 		{"recover", d.recoverPending},
 		{"complete", d.notifyCompleted},
+		{"attention", d.pruneAttention},
 		{"deliver", d.deliver},
 	} {
 		if err := stage.run(ctx); err != nil {
@@ -528,6 +529,34 @@ func (d *Daemon) notifyCompleted(ctx context.Context) error {
 		}); err != nil && !errors.Is(err, telegram.ErrDisabled) {
 			rt.Log.Warn("queue session_completed notification", "session", session.ID, "error", err)
 		}
+	}
+	return nil
+}
+
+// pruneAttention closes the attention episodes of sessions that are no longer
+// waiting for a human (PRD 4 §6.3).
+//
+// An episode is the identity of one needs_input message. Closing it when the
+// session leaves WAITING_FOR_INPUT is what makes the session's next block a
+// *new* episode, and therefore a new dedupe key and a new message. Without this
+// stage a session that asks five questions would be announced once.
+//
+// It is one statement against the persisted state rather than a hook on the
+// transition writer: every path that changes the state — a recovery, an
+// operator's `disable`, a discovery pass — already writes it, so reading the end
+// of an episode from that same state keeps the two from disagreeing. A failure
+// is logged, never fatal: the next pass prunes again.
+func (d *Daemon) pruneAttention(ctx context.Context) error {
+	rt := d.runtime
+	if rt.Store == nil {
+		return nil
+	}
+	closed, err := rt.Store.PruneAttentionEpisodes(ctx)
+	if err != nil {
+		return fmt.Errorf("prune attention episodes: %w", err)
+	}
+	if closed > 0 {
+		rt.Log.Debug("closed attention episodes", "episodes", closed)
 	}
 	return nil
 }

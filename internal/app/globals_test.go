@@ -62,6 +62,7 @@ func TestEveryCommandAcceptsTheGlobalFlagsInEitherPosition(t *testing.T) {
 		{"config show", []string{"config", "show"}},
 		{"doctor", []string{"doctor"}},
 		{"serve", []string{"serve"}},
+		{"hook", []string{"hook"}},
 		{"version", []string{"version"}},
 	}
 	assertCommandsCovered(t, commands)

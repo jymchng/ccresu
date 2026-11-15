@@ -69,6 +69,12 @@ type Milestone struct {
 	MaxAttempts int
 	// Cause is the failure, for the two failure kinds. Nil otherwise.
 	Cause error
+	// ProjectPath is the session's working directory, when the caller knows it.
+	// The recovery engine leaves it empty; `ccresu hook` fills it from the
+	// persisted session row, so a needs-input message can name the project the
+	// prompt belongs to without the hook resolving or trusting the payload's
+	// cwd.
+	ProjectPath string
 	// Observation is the published state a needs-input milestone was raised
 	// from, verbatim. It is the payload the message is built from, so the
 	// operator sees what the CLI said — including that it said no reason —
