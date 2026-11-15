@@ -494,6 +494,62 @@ func TestAttemptRepository(t *testing.T) {
 	}
 }
 
+// TestAttemptCostIsPersistedOnlyWhenReported pins PRD 5 R4 and R10 at the
+// storage layer: a cost the CLI reported is stored and read back exactly, and a
+// cost nobody reported stays NULL rather than becoming 0.
+//
+// The distinction is the whole point of the column being nullable. If an absent
+// cost were stored as zero, the session cap would read every unmeasured attempt
+// as free, and a resumed session could spend without ever reaching its cap —
+// which is the failure R5 exists to prevent, arrived at by a default.
+func TestAttemptCostIsPersistedOnlyWhenReported(t *testing.T) {
+	store := newStore(t)
+	ctx := context.Background()
+	session := mustSeedSession(t, store, "attempt-cost")
+
+	reported, err := store.StartAttempt(ctx, session.ID, 0, "claude --bg --resume attempt-cost")
+	if err != nil {
+		t.Fatalf("start reported: %v", err)
+	}
+	if reported.CostUSD != nil {
+		t.Fatalf("a running attempt should have no cost: %+v", reported)
+	}
+	if _, err := store.FinishAttempt(ctx, reported.ID, storage.AttemptResult{
+		State:   storage.StateResumed,
+		Success: storage.BoolPtr(true),
+		CostUSD: storage.FloatPtr(0.42),
+	}); err != nil {
+		t.Fatalf("finish reported: %v", err)
+	}
+
+	unknown, err := store.StartAttempt(ctx, session.ID, 0, "claude --bg --resume attempt-cost")
+	if err != nil {
+		t.Fatalf("start unknown: %v", err)
+	}
+	if _, err := store.FinishAttempt(ctx, unknown.ID, storage.AttemptResult{
+		State:   storage.StateResumed,
+		Success: storage.BoolPtr(true),
+	}); err != nil {
+		t.Fatalf("finish unknown: %v", err)
+	}
+
+	got, err := store.GetAttempt(ctx, reported.ID)
+	if err != nil {
+		t.Fatalf("get reported: %v", err)
+	}
+	if got.CostUSD == nil || *got.CostUSD != 0.42 {
+		t.Fatalf("reported cost = %v, want 0.42", got.CostUSD)
+	}
+
+	got, err = store.GetAttempt(ctx, unknown.ID)
+	if err != nil {
+		t.Fatalf("get unknown: %v", err)
+	}
+	if got.CostUSD != nil {
+		t.Fatalf("an unreported cost must stay unknown, got %v", *got.CostUSD)
+	}
+}
+
 func TestAttemptValidation(t *testing.T) {
 	store := newStore(t)
 	ctx := context.Background()

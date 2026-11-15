@@ -13,7 +13,8 @@ import (
 const attemptColumns = `id, session_id, usage_limit_id, attempt_number, state, command,
 	started_at, finished_at, success, output, error, session_id_verified, transcript_grew,
 	handoff_state_id, handoff_name, handoff_at, handoff_copied,
-	observed_state, observed_status, observed_waiting_for, observed_at, observed_listed`
+	observed_state, observed_status, observed_waiting_for, observed_at, observed_listed,
+	cost_usd`
 
 // maxAttemptAllocationRetries bounds the retry loop used when two goroutines
 // allocate the same attempt number concurrently. The unique index on
@@ -148,6 +149,9 @@ type AttemptResult struct {
 	// That nil is *not* the same as Listed=false, which means ccresu looked and
 	// the session was not in the listing.
 	Observation ObservationRecord
+	// CostUSD is what the CLI reported the attempt cost. Nil means unknown, and
+	// an unknown cost is recorded as NULL rather than as zero (PRD 5 R10).
+	CostUSD *float64
 	// FinishedAt overrides the finish timestamp; zero means "now".
 	FinishedAt time.Time
 }
@@ -203,7 +207,7 @@ func (s *Store) FinishAttempt(ctx context.Context, attemptID int64, result Attem
 				session_id_verified = ?, transcript_grew = ?,
 				handoff_state_id = ?, handoff_name = ?, handoff_at = ?, handoff_copied = ?,
 				observed_state = ?, observed_status = ?, observed_waiting_for = ?,
-				observed_at = ?, observed_listed = ?
+				observed_at = ?, observed_listed = ?, cost_usd = ?
 			WHERE id = ?`,
 			string(result.State), timeToDB(finishedAt), nullableBool(result.Success),
 			result.Output, result.Error, nullableBool(result.SessionIDVerified),
@@ -211,7 +215,7 @@ func (s *Store) FinishAttempt(ctx context.Context, attemptID int64, result Attem
 			result.HandoffStateID, result.HandoffName, handoffAt,
 			nullableBool(result.HandoffCopied),
 			observation.State, observation.Status, observation.WaitingFor,
-			observedAt, nullableBool(observation.Listed), attemptID)
+			observedAt, nullableBool(observation.Listed), nullableFloat(result.CostUSD), attemptID)
 		if err != nil {
 			return fmt.Errorf("finish attempt %d: %w", attemptID, err)
 		}
@@ -343,13 +347,14 @@ func scanAttempt(row scanner) (RecoveryAttempt, error) {
 		handoffCopied  sql.NullInt64
 		observedAt     any
 		observedListed sql.NullInt64
+		costUSD        sql.NullFloat64
 	)
 	err := row.Scan(&attempt.ID, &attempt.SessionID, &usageLimitID, &attempt.AttemptNumber,
 		&state, &attempt.Command, &startedAt, &finishedAt, &success, &attempt.Output,
 		&attempt.Error, &verified, &transcriptGrew,
 		&attempt.HandoffStateID, &attempt.HandoffName, &handoffAt, &handoffCopied,
 		&attempt.Observation.State, &attempt.Observation.Status,
-		&attempt.Observation.WaitingFor, &observedAt, &observedListed)
+		&attempt.Observation.WaitingFor, &observedAt, &observedListed, &costUSD)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return RecoveryAttempt{}, err
@@ -378,5 +383,6 @@ func scanAttempt(row scanner) (RecoveryAttempt, error) {
 		return RecoveryAttempt{}, err
 	}
 	attempt.Observation.Listed = scanNullableBool(observedListed)
+	attempt.CostUSD = scanNullableFloat(costUSD)
 	return attempt, nil
 }

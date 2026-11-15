@@ -269,6 +269,13 @@ type RecoveryAttempt struct {
 	// value means nothing was recorded, which `ccresu inspect` renders as "not
 	// recorded" — never as "nothing was happening".
 	Observation ObservationRecord
+	// CostUSD is what the CLI reported this attempt cost, in US dollars.
+	//
+	// Nil means *unknown*, not free: a `--bg` handoff usually reports no cost at
+	// all, and PRD 5 R10 requires that an unknown attempt neither counts toward a
+	// cap nor blocks a resume. The pointer is what keeps those two apart, so a
+	// later reader cannot mistake "we were not told" for "it cost nothing".
+	CostUSD *float64
 }
 
 // Transition is one entry in the persisted state history.

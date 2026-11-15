@@ -357,6 +357,28 @@ func scanNullableBool(v sql.NullInt64) *bool {
 	return &b
 }
 
+// nullableFloat converts a *float64 to a storable value. Nil stores NULL, which
+// is how "the CLI did not report a cost" stays distinct from "it cost zero".
+func nullableFloat(v *float64) any {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
+// scanNullableFloat converts a stored value back to a *float64.
+func scanNullableFloat(v sql.NullFloat64) *float64 {
+	if !v.Valid {
+		return nil
+	}
+	f := v.Float64
+	return &f
+}
+
+// FloatPtr returns a pointer to v, so a caller can record a cost that is
+// genuinely zero without meaning "unknown".
+func FloatPtr(v float64) *float64 { return &v }
+
 // wrapNotFound maps sql.ErrNoRows onto ErrNotFound with context.
 func wrapNotFound(err error, what string) error {
 	if errors.Is(err, sql.ErrNoRows) {
