@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jymchng/ccresu/internal/claude"
+	"github.com/jymchng/ccresu/internal/recovery"
 	"github.com/jymchng/ccresu/internal/storage"
 	"github.com/jymchng/ccresu/internal/telegram"
 )
@@ -276,4 +277,46 @@ type recordingSender struct {
 func (s *recordingSender) SendMessage(_ context.Context, text string) (telegram.Message, error) {
 	s.bodies = append(s.bodies, text)
 	return telegram.Message{MessageID: int64(len(s.bodies)), ChatID: -1001234567890}, nil
+}
+
+// TestEveryMilestoneHasAnEvent is R8's table test: every kind the engine can
+// emit reaches a real event, so the dropping `default` in notificationEvent can
+// never be reached by a milestone that actually happens. The list is written by
+// hand on purpose: a new kind has to be added here, and the distinctness check
+// below is what makes that more than bookkeeping.
+func TestEveryMilestoneHasAnEvent(t *testing.T) {
+	kinds := []recovery.MilestoneKind{
+		recovery.MilestoneStarted,
+		recovery.MilestoneSucceeded,
+		recovery.MilestoneFailed,
+		recovery.MilestonePermanent,
+		recovery.MilestoneNeedsInput,
+	}
+	seen := make(map[storage.NotificationEvent]recovery.MilestoneKind, len(kinds))
+	for _, kind := range kinds {
+		event, ok := notificationEvent(kind)
+		if !ok {
+			t.Errorf("milestone %q has no event: it would be dropped by the default", kind)
+			continue
+		}
+		if !event.Valid() {
+			t.Errorf("milestone %q maps to %q, which is not a valid event", kind, event)
+		}
+		if telegram.Subject(event) == "" {
+			t.Errorf("event %q has no subject, so the message cannot be titled", event)
+		}
+		if previous, duplicate := seen[event]; duplicate {
+			t.Errorf("milestones %q and %q share the event %q", previous, kind, event)
+		}
+		seen[event] = kind
+	}
+
+	if _, ok := notificationEvent(recovery.MilestoneKind("not_a_milestone")); ok {
+		t.Error("an unknown milestone must not map onto an event")
+	}
+	// needs_input is the one event two producers reach, and both compute it from
+	// this same mapping (PRD 4 R14).
+	if event, _ := notificationEvent(recovery.MilestoneNeedsInput); event != storage.EventNeedsInput {
+		t.Errorf("MilestoneNeedsInput maps to %q, want %q", event, storage.EventNeedsInput)
+	}
 }

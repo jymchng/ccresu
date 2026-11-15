@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Scope** | Six enhancements to `ccresu`, derived from two Claude Code documentation pages |
-| **Status** | PRDs 1–3 are **`Implemented`** on `main`, unreleased. PRDs 4–6 are **`Proposed`**. The §2 column below is the only place that is recorded — the PRD documents themselves are specifications and are not rewritten to describe what shipped |
+| **Status** | PRDs 1–4 are **`Implemented`** on `main`, unreleased. PRDs 5–6 are **`Proposed`**. The §2 column below is the only place that is recorded — the PRD documents themselves are specifications and are not rewritten to describe what shipped |
 | **Baseline** | `v0.6.0` (`55bf09e`) — the published version every PRD measures against |
 | **Sources** | <https://code.claude.com/docs/en/agent-view> and <https://code.claude.com/docs/en/cli-reference>, both read in full |
 | **Precedent** | [`usage-limit-refusal-misreported.md`](usage-limit-refusal-misreported.md), the accepted PRD that produced `v0.6.0` |
@@ -45,7 +45,7 @@ Read in this order. Each depends only on the ones above it.
 | 1 | [`background-supervisor-recovery.md`](background-supervisor-recovery.md) | Recovery runs a process `ccresu` owns, so a resume dies with `ccresu` and is invisible to every Claude Code tool | — | `Implemented` |
 | 2 | [`authoritative-session-state.md`](authoritative-session-state.md) | Progress is inferred from transcript growth when the CLI publishes `state`, `status` and `waitingFor` | PRD 1 | `Implemented` |
 | 3 | [`delegate-lifecycle-to-supervisor.md`](delegate-lifecycle-to-supervisor.md) | `ccresu` spawns, kills and re-spawns `claude` itself, racing a supervisor that already does all three | PRDs 1, 2 | `Implemented` |
-| 4 | [`hook-driven-eventing.md`](hook-driven-eventing.md) | "This session needs you" is discovered by polling transcripts, minutes after the CLI announced it | PRD 2 | `Proposed` |
+| 4 | [`hook-driven-eventing.md`](hook-driven-eventing.md) | "This session needs you" is discovered by polling transcripts, minutes after the CLI announced it | PRD 2 | `Implemented` |
 | 5 | [`resume-spend-guardrails.md`](resume-spend-guardrails.md) | "One resume per limit window" bounds how often a resume happens, never what it costs | PRDs 1, 2 | `Proposed` |
 | 6 | [`worktree-aware-recovery.md`](worktree-aware-recovery.md) | A session is one flat directory to `ccresu`, so a recovery that must run in a git worktree runs in the wrong tree | PRD 1 | `Proposed` |
 
@@ -57,9 +57,11 @@ supervisor's worktree behaviour.
 `Implemented` means the requirement set is on `main` and unreleased: PRD 1's
 handoff (`claude.HandoffArgs`), PRD 2's published-state read
 (`claude.PublishedListing`, `recovery.Observe`, the `WAITING_FOR_INPUT` state and
-migration 0008) and PRD 3's supervisor surface (`claude.DaemonStatus`,
+migration 0008), PRD 3's supervisor surface (`claude.DaemonStatus`,
 `claude.DaemonLogs`, `recovery.SupervisorSource`,
 `claude.SupervisorVersionMismatch`, the interrupted attempt and the retimed unit)
+and PRD 4's hook path (`ccresu hook`, `storage.EventNeedsInput`,
+`recovery.MilestoneNeedsInput`, the `attention_episodes` table and migration 0010)
 are in the tree, each with a test per requirement, while `v0.6.0`
 remains the published version (§4). It is not a claim that a release has happened,
 and it does not soften the guarantee the later PRDs make about the code they build

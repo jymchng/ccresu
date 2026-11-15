@@ -556,6 +556,29 @@ func TestTelegramStatus(t *testing.T) {
 	if body.Events[string(storage.EventWaiting)] {
 		t.Error("waiting_for_reset is reported as enabled but was configured off")
 	}
+
+	// PRD 4 R7's last site: the route enumerates the events by hand, so an event
+	// missing from that list is invisible to the operator rather than merely off.
+	want := []storage.NotificationEvent{
+		storage.EventLimitDetected, storage.EventWaiting, storage.EventRecoveryStarted,
+		storage.EventRecoverySuccess, storage.EventRecoveryFailure,
+		storage.EventPermanentFailure, storage.EventSessionCompleted,
+		storage.EventNeedsInput,
+	}
+	if len(body.Events) != len(want) {
+		t.Errorf("events = %d entries, want %d: every event the notifier has must be reported",
+			len(body.Events), len(want))
+	}
+	for _, event := range want {
+		enabled, present := body.Events[string(event)]
+		if !present {
+			t.Errorf("event %q is missing from the status document", event)
+			continue
+		}
+		if expected := event == storage.EventLimitDetected; enabled != expected {
+			t.Errorf("event %q reported enabled=%v, want %v", event, enabled, expected)
+		}
+	}
 }
 
 // TestConfigIsRedacted proves the endpoint reports the effective configuration

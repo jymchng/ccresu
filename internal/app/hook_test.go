@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strconv"
 	"strings"
@@ -291,4 +292,76 @@ func TestReadHookPayloadIsTolerantAndBounded(t *testing.T) {
 			t.Errorf("readHookPayload blocked for %s, want the deadline to end it", elapsed)
 		}
 	})
+}
+
+// TestHookIgnoresEveryTypeItDoesNotModel is R3 in its strong form: a type ccresu
+// does not model is not merely silent, it is not even observed, because mapping
+// an interactive notification would make ccresu a second notifier for events it
+// does not own.
+func TestHookIgnoresEveryTypeItDoesNotModel(t *testing.T) {
+	types := []string{
+		"permission_prompt",
+		"idle_prompt",
+		"auth_success",
+		"auth_storage_failure",
+		"elicitation_dialog",
+		"elicitation_url_dialog",
+		"elicitation_complete",
+		"elicitation_response",
+		"quota_auto_resume_fired",
+		"quota_auto_resume_stale",
+		"quota_auto_resume_disabled",
+		"plugin_notification",
+	}
+	for _, notificationType := range types {
+		t.Run(notificationType, func(t *testing.T) {
+			h := newHarness(t)
+			h.seedSession(t, hookSession, nil)
+			publishBlocked(t, h, hookSession, "permission to edit .env")
+			h.stdin = hookJSON(notificationType, hookSession)
+
+			if code, stdout, stderr := h.exec(t, "hook"); code != ExitOK || stdout != "" || stderr != "" {
+				t.Fatalf("hook = exit %d, stdout %q, stderr %q", code, stdout, stderr)
+			}
+			if requests := h.notifier.queued(); len(requests) != 0 {
+				t.Errorf("type %q queued %d notification(s), want none: ccresu does not model it", notificationType, len(requests))
+			}
+			if calls := h.provider.Calls(); len(calls) != 0 {
+				t.Errorf("type %q made %d provider call(s), want none: the type is decided first", notificationType, len(calls))
+			}
+		})
+	}
+}
+
+// TestHookDegradesSilentlyWhenItCannotWork is R9: a hook is an optimisation over
+// the poll, so a broken configuration or a database it cannot open leaves the
+// poll as the only path and nothing else changed (R10).
+func TestHookDegradesSilentlyWhenItCannotWork(t *testing.T) {
+	cases := []struct {
+		name string
+		arm  func(*harness)
+	}{
+		{"the configuration cannot be read", func(h *harness) {
+			h.loadErr = errors.New("config: permission denied")
+		}},
+		{"the database is locked", func(h *harness) {
+			h.buildErr = errors.New("storage: database is locked")
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.seedSession(t, hookSession, nil)
+			publishBlocked(t, h, hookSession, "permission to edit .env")
+			tc.arm(h)
+			h.stdin = hookJSON(hookNeedsInputType, hookSession)
+
+			if code, stdout, stderr := h.exec(t, "hook"); code != ExitOK || stdout != "" || stderr != "" {
+				t.Fatalf("hook = exit %d, stdout %q, stderr %q: a hook that cannot work must still say nothing", code, stdout, stderr)
+			}
+			if requests := h.notifier.queued(); len(requests) != 0 {
+				t.Errorf("queued %d notification(s), want none", len(requests))
+			}
+		})
+	}
 }
