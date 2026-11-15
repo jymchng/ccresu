@@ -159,16 +159,40 @@ const (
 	EventNeedsInput NotificationEvent = "needs_input"
 )
 
+// notificationEvents is the one list of events ccresu can deliver. Valid reads
+// it, and NotificationEvents returns a copy, so the database's notion of a valid
+// event is a list rather than a switch that a new constant can be forgotten
+// from: `needs_input` was added to the switch and to telegram.Events() but not
+// to the storage test's hand-typed slice, and nothing failed.
+var notificationEvents = []NotificationEvent{
+	EventLimitDetected,
+	EventWaiting,
+	EventRecoveryStarted,
+	EventRecoverySuccess,
+	EventRecoveryFailure,
+	EventPermanentFailure,
+	EventSessionCompleted,
+	EventNeedsInput,
+}
+
+// NotificationEvents returns every event ccresu can deliver, in the documented
+// order. It is the storage-side counterpart of telegram.Events(), and
+// TestModelValidationHelpers holds the two equal in both directions, so an event
+// added to one and not the other fails a test instead of going missing.
+//
+// The result is a copy: callers may sort or filter it without disturbing Valid.
+func NotificationEvents() []NotificationEvent {
+	return append([]NotificationEvent(nil), notificationEvents...)
+}
+
 // Valid reports whether e is a known notification event.
 func (e NotificationEvent) Valid() bool {
-	switch e {
-	case EventLimitDetected, EventWaiting, EventRecoveryStarted,
-		EventRecoverySuccess, EventRecoveryFailure, EventPermanentFailure,
-		EventSessionCompleted, EventNeedsInput:
-		return true
-	default:
-		return false
+	for _, known := range notificationEvents {
+		if e == known {
+			return true
+		}
 	}
+	return false
 }
 
 // Session is one tracked Claude Code session.

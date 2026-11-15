@@ -9,6 +9,11 @@ import (
 )
 
 // Events lists every notification ccresu can deliver, in the documented order.
+//
+// storage.NotificationEvents() is the same set seen from the database's side,
+// and TestModelValidationHelpers fails if the two disagree — in either
+// direction. Adding an event means adding it to both, and to the sites PRD 4's
+// RC3 enumerates.
 func Events() []storage.NotificationEvent {
 	return []storage.NotificationEvent{
 		storage.EventLimitDetected,

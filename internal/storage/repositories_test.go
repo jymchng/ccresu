@@ -3,10 +3,12 @@ package storage_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/jymchng/ccresu/internal/storage"
+	"github.com/jymchng/ccresu/internal/telegram"
 )
 
 func TestUpsertSessionSemantics(t *testing.T) {
@@ -933,16 +935,30 @@ func TestModelValidationHelpers(t *testing.T) {
 	if storage.NotificationStatus("maybe").Valid() {
 		t.Error("unknown notification status reported valid")
 	}
-	for _, event := range []storage.NotificationEvent{
-		storage.EventLimitDetected, storage.EventWaiting, storage.EventRecoveryStarted,
-		storage.EventRecoverySuccess, storage.EventRecoveryFailure,
-		storage.EventPermanentFailure, storage.EventSessionCompleted,
-	} {
+	// The event set is compared with the notifier's own enumeration rather than
+	// retyped. `needs_input` was in telegram.Events() and in Valid() but missing
+	// from this test's hand-typed slice, so the storage-level check silently
+	// covered seven of eight events; a list that is derived cannot fall behind
+	// that way. Equality is asserted in both directions, so adding an event to
+	// one side alone — storage without a template, or a template storage rejects
+	// as invalid — fails here.
+	rendered := telegram.Events()
+	for _, event := range rendered {
 		if !event.Valid() {
-			t.Errorf("event %s should be valid", event)
+			t.Errorf("telegram renders event %s, which storage reports invalid", event)
 		}
 	}
+	known := storage.NotificationEvents()
+	for _, event := range known {
+		if !slices.Contains(rendered, event) {
+			t.Errorf("storage knows event %s, which telegram.Events() does not enumerate", event)
+		}
+	}
+	// And the list is not a blanket accept: an event in neither list is invalid.
 	if storage.NotificationEvent("party").Valid() {
 		t.Error("unknown event reported valid")
+	}
+	if storage.NotificationEvent("").Valid() {
+		t.Error("empty event reported valid")
 	}
 }
