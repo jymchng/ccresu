@@ -180,31 +180,41 @@ func TestFullScenarioReplaysTheRealInterruption(t *testing.T) {
 		t.Fatalf("recover: %v (state %s)", err, outcome.State)
 	}
 
-	// (6) The resume ran, exactly once, using the documented command.
+	// (6) The continuation was handed to the supervisor, exactly once, with the
+	// documented argv: --bg first, the message last, and no print mode anywhere.
 	calls := provider.ResumeCalls()
 	if len(calls) != 1 {
 		t.Fatalf("assertion 6: %d resumes, want exactly 1", len(calls))
 	}
-	wantArgs := claude.ResumeArgs(support.SessionID, manager.ContinuationMessage())
 	if got := calls[0].Message; got != manager.ContinuationMessage() {
 		t.Fatalf("assertion 6: continuation message = %q, want %q", got, manager.ContinuationMessage())
 	}
-	if len(wantArgs) != 6 || wantArgs[0] != "-p" || wantArgs[1] != "--resume" ||
-		wantArgs[2] != support.SessionID || wantArgs[3] != "--output-format" || wantArgs[4] != "json" ||
+	wantArgs := claude.HandoffArgs(support.SessionID, manager.ContinuationMessage())
+	if len(wantArgs) != 6 || wantArgs[0] != "--bg" || wantArgs[1] != "--resume" ||
+		wantArgs[2] != support.SessionID || wantArgs[3] != "--name" ||
+		wantArgs[4] != claude.HandoffLabel(support.SessionID) ||
 		wantArgs[5] != manager.ContinuationMessage() {
-		t.Fatalf("assertion 6: unexpected resume argv shape %v", wantArgs)
+		t.Fatalf("assertion 6: unexpected handoff argv shape %v", wantArgs)
+	}
+	for _, arg := range wantArgs {
+		if arg == "-p" || arg == "--print" || arg == "--output-format" {
+			t.Fatalf("assertion 6: handoff argv carries a print-mode flag: %v", wantArgs)
+		}
 	}
 
-	// (7) The original session id was preserved, both in what was asked for and
-	// in what the CLI reported back.
+	// (7) The session that was handed off is the original one, and the handoff
+	// asked for a ccresu-owned label derived from it.
 	if calls[0].SessionID != support.SessionID {
 		t.Fatalf("assertion 7: resumed %q, want %q", calls[0].SessionID, support.SessionID)
 	}
 	if !outcome.Verification.SessionIDPreserved {
 		t.Fatalf("assertion 7: session id was not proven preserved: %v", outcome.Verification.Notes)
 	}
+	if want := claude.HandoffLabel(support.SessionID); outcome.Verification.HandoffName != want {
+		t.Fatalf("assertion 7: handoff name = %q, want %q", outcome.Verification.HandoffName, want)
+	}
 
-	// (8) The working directory is unchanged: the resume addressed the same
+	// (8) The working directory is unchanged: the handoff addressed the same
 	// project path the session was discovered in.
 	after, err := store.GetSession(ctx, support.SessionID)
 	if err != nil {
@@ -228,14 +238,17 @@ func TestFullScenarioReplaysTheRealInterruption(t *testing.T) {
 		t.Fatalf("assertion 9: surviving session is %q, want %q", sessions[0].ID, support.SessionID)
 	}
 
-	// (10) The transcript grew, which is the cross-platform proof that the
-	// conversation actually continued.
-	if !outcome.Verification.TranscriptGrew {
-		t.Fatalf("assertion 10: transcript growth was not proven: %v", outcome.Verification.Notes)
+	// (10) The handoff was acknowledged, and that is what counts as proven now.
+	// The transcript is deliberately NOT the proof: the supervisor owns the work,
+	// so growth arrives later and would prove nothing about the continuation.
+	if !outcome.Verification.HandoffAccepted {
+		t.Fatalf("assertion 10: the handoff was not accepted: %v", outcome.Verification.Notes)
 	}
-	if outcome.Verification.LinesAfter <= outcome.Verification.LinesBefore {
-		t.Fatalf("assertion 10: lines went %d -> %d, which is not growth",
-			outcome.Verification.LinesBefore, outcome.Verification.LinesAfter)
+	if outcome.Verification.HandoffStateID == "" {
+		t.Fatalf("assertion 10: no state id was recorded: %v", outcome.Verification.Notes)
+	}
+	if outcome.Verification.TranscriptGrew {
+		t.Fatal("assertion 10: verification claimed transcript growth for a handoff")
 	}
 	if !outcome.Verification.Proven {
 		t.Fatalf("assertion 10: verification was not proven: %s", outcome.Verification.Reason())
@@ -264,11 +277,20 @@ func TestFullScenarioReplaysTheRealInterruption(t *testing.T) {
 	if attempts[0].Success == nil || !*attempts[0].Success {
 		t.Fatalf("assertion 12: attempt not recorded as successful: %+v", attempts[0])
 	}
-	if attempts[0].SessionIDVerified == nil || !*attempts[0].SessionIDVerified {
-		t.Fatalf("assertion 12: attempt does not record a verified session id: %+v", attempts[0])
+	// The handoff is what the attempt records now: the short state ID, the label,
+	// when it was accepted and whether it landed in a copy. This is the evidence
+	// that tells a restarting ccresu the work is the supervisor's.
+	if attempts[0].HandoffStateID == "" {
+		t.Fatalf("assertion 12: attempt records no handoff state id: %+v", attempts[0])
 	}
-	if attempts[0].TranscriptGrew == nil || !*attempts[0].TranscriptGrew {
-		t.Fatalf("assertion 12: attempt does not record transcript growth: %+v", attempts[0])
+	if want := claude.HandoffLabel(support.SessionID); attempts[0].HandoffName != want {
+		t.Fatalf("assertion 12: attempt handoff name = %q, want %q", attempts[0].HandoffName, want)
+	}
+	if attempts[0].HandoffAt.IsZero() {
+		t.Fatalf("assertion 12: attempt records no handoff time, so a restart would call it stale: %+v", attempts[0])
+	}
+	if attempts[0].HandoffCopied == nil || *attempts[0].HandoffCopied {
+		t.Fatalf("assertion 12: attempt does not record an in-place continuation: %+v", attempts[0])
 	}
 
 	// (13) Telegram delivered the success notification, over real HTTP, carrying

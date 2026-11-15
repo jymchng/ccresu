@@ -49,7 +49,7 @@ type refusalScript struct {
 func (s *refusalScript) handle(call claude.Call) (claude.Output, error) {
 	switch {
 	case isVersionCall(call.Args):
-		return claude.Output{Stdout: []byte("2.1.223 (Claude Code)")}, nil
+		return claude.Output{Stdout: []byte("2.1.257 (Claude Code)")}, nil
 	case isResumeCall(call.Args):
 		s.mu.Lock()
 		s.resumes++
@@ -98,10 +98,14 @@ type refusingProvider struct {
 	size   int64
 }
 
+// testHandoffDir is the directory the handoff is given. A handoff must be told
+// where it runs, so this test always provides one.
+const testHandoffDir = "/w/session"
+
 // ResumeSession routes the resume through the real CLI adapter, so a refusal
 // travels the production path instead of being simulated here.
 func (p *refusingProvider) ResumeSession(ctx context.Context, sessionID, message string) (claude.ResumeResult, error) {
-	return p.cli.Resume(ctx, sessionID, message)
+	return p.cli.Resume(ctx, sessionID, message, testHandoffDir)
 }
 
 // GetSessionStatus reports the transcript as the failed attempts left it: the

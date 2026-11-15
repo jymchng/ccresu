@@ -512,8 +512,12 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 		State:             StateResumed,
 		Success:           true,
 		Output:            truncate(result.Result),
-		SessionIDVerified: boolPtr(true),
-		TranscriptGrew:    boolPtr(true),
+		SessionIDVerified: boolPtr(verification.SessionIDPreserved),
+		TranscriptGrew:    boolPtr(verification.TranscriptGrew),
+		HandoffStateID:    verification.HandoffStateID,
+		HandoffName:       verification.HandoffName,
+		HandoffAt:         handoffTime(verification, m.now()),
+		HandoffCopied:     handoffCopied(verification),
 		FinishedAt:        m.now(),
 	})
 	if err != nil {
@@ -522,14 +526,24 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 	outcome.Attempt = finished
 	outcome.Verification = verification
 
-	if err := m.store.SetSessionTranscriptMetrics(ctx, sessionID, baseline.TranscriptPath,
-		verification.SizeAfter, verification.LinesAfter); err != nil {
-		m.log.Warn("record transcript metrics", "session", sessionID, "error", err)
+	if verification.TranscriptGrew {
+		if err := m.store.SetSessionTranscriptMetrics(ctx, sessionID, baseline.TranscriptPath,
+			verification.SizeAfter, verification.LinesAfter); err != nil {
+			m.log.Warn("record transcript metrics", "session", sessionID, "error", err)
+		}
 	}
 	if err := m.store.SetSessionError(ctx, sessionID, ""); err != nil {
 		m.log.Warn("clear session error", "session", sessionID, "error", err)
 	}
-	if err := state.move(StateResumed, "the original session resumed and the conversation grew", attempt.ID); err != nil {
+	// The reason names what actually happened, because it is what an operator
+	// reads in `ccresu history`. A handoff did not grow a transcript under
+	// ccresu's process, and saying it did would teach the wrong mental model.
+	reason := "the original session resumed and the conversation grew"
+	if verification.HandoffAccepted {
+		reason = fmt.Sprintf("the supervisor accepted the continuation as %s (%s)",
+			verification.HandoffStateID, verification.HandoffName)
+	}
+	if err := state.move(StateResumed, reason, attempt.ID); err != nil {
 		return Outcome{SessionID: sessionID, State: state.current}, err
 	}
 	outcome.State = state.current
@@ -1083,3 +1097,25 @@ func firstLine(s string) string {
 
 // boolPtr returns a pointer to b, for the nullable attempt columns.
 func boolPtr(b bool) *bool { return &b }
+
+// handoffTime is when the handoff was accepted, or zero when there was none.
+//
+// It is the attempt's "not stale" bit, so it is only set for an accepted
+// handoff: stamping it on a print-mode resume would tell a restarting ccresu
+// that a supervisor owns work that never left this process.
+func handoffTime(verification Verification, now time.Time) time.Time {
+	if !verification.HandoffAccepted {
+		return time.Time{}
+	}
+	return now.UTC()
+}
+
+// handoffCopied records the copy-or-in-place outcome, nil when there was no
+// handoff, because "we did not ask" and "it continued in place" are different
+// facts.
+func handoffCopied(verification Verification) *bool {
+	if !verification.HandoffAccepted {
+		return nil
+	}
+	return boolPtr(verification.Copied)
+}

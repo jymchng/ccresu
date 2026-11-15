@@ -78,6 +78,22 @@ func HandoffLabel(sessionID string) string {
 	return "ccresu-" + short
 }
 
+// StateIDFor derives the short state ID shape the CLI prints for a session.
+//
+// It exists so a fake or a test can build a `backgrounded` block with the same
+// shape production parses, rather than a second, drifting one. It is not used to
+// predict a real ID: only the CLI can say what it printed.
+func StateIDFor(sessionID string) string {
+	short := strings.ReplaceAll(sessionID, "-", "")
+	if len(short) > 8 {
+		short = short[:8]
+	}
+	if short == "" {
+		return "00000000"
+	}
+	return strings.ToLower(short)
+}
+
 // HandoffArgs returns the handoff argument vector:
 //
 //	--bg --resume <session-id> --name <label> <message>

@@ -11,7 +11,8 @@ import (
 
 // attemptColumns is the canonical column list for attempt queries.
 const attemptColumns = `id, session_id, usage_limit_id, attempt_number, state, command,
-	started_at, finished_at, success, output, error, session_id_verified, transcript_grew`
+	started_at, finished_at, success, output, error, session_id_verified, transcript_grew,
+	handoff_state_id, handoff_name, handoff_at, handoff_copied`
 
 // maxAttemptAllocationRetries bounds the retry loop used when two goroutines
 // allocate the same attempt number concurrently. The unique index on
@@ -119,6 +120,17 @@ type AttemptResult struct {
 	// TranscriptGrew reports whether the transcript grew, the cross-platform
 	// proof that the conversation continued.
 	TranscriptGrew *bool
+	// HandoffStateID, HandoffName, HandoffAt and HandoffCopied record the
+	// supervisor handoff the attempt produced: the short state ID the CLI
+	// printed, the label it was given, when it was accepted, and whether the
+	// continuation landed in a copy rather than in place.
+	//
+	// HandoffAt is the "this attempt is not stale" bit: an attempt with no
+	// handoff and no finish time was opened by a process that is gone.
+	HandoffStateID string
+	HandoffName    string
+	HandoffAt      time.Time
+	HandoffCopied  *bool
 	// FinishedAt overrides the finish timestamp; zero means "now".
 	FinishedAt time.Time
 }
@@ -135,17 +147,24 @@ func (s *Store) FinishAttempt(ctx context.Context, attemptID int64, result Attem
 	if finishedAt.IsZero() {
 		finishedAt = s.now().UTC()
 	}
+	var handoffAt any
+	if !result.HandoffAt.IsZero() {
+		handoffAt = timeToDB(result.HandoffAt.UTC())
+	}
 
 	var attempt RecoveryAttempt
 	err := s.InTx(ctx, func(tx *sql.Tx) error {
 		update, err := tx.ExecContext(ctx, `
 			UPDATE recovery_attempts SET
 				state = ?, finished_at = ?, success = ?, output = ?, error = ?,
-				session_id_verified = ?, transcript_grew = ?
+				session_id_verified = ?, transcript_grew = ?,
+				handoff_state_id = ?, handoff_name = ?, handoff_at = ?, handoff_copied = ?
 			WHERE id = ?`,
 			string(result.State), timeToDB(finishedAt), boolToInt(result.Success),
 			result.Output, result.Error, nullableBool(result.SessionIDVerified),
-			nullableBool(result.TranscriptGrew), attemptID)
+			nullableBool(result.TranscriptGrew),
+			result.HandoffStateID, result.HandoffName, handoffAt,
+			nullableBool(result.HandoffCopied), attemptID)
 		if err != nil {
 			return fmt.Errorf("finish attempt %d: %w", attemptID, err)
 		}
@@ -273,10 +292,13 @@ func scanAttempt(row scanner) (RecoveryAttempt, error) {
 		verified       sql.NullInt64
 		transcriptGrew sql.NullInt64
 		startedAt      any
+		handoffAt      any
+		handoffCopied  sql.NullInt64
 	)
 	err := row.Scan(&attempt.ID, &attempt.SessionID, &usageLimitID, &attempt.AttemptNumber,
 		&state, &attempt.Command, &startedAt, &finishedAt, &success, &attempt.Output,
-		&attempt.Error, &verified, &transcriptGrew)
+		&attempt.Error, &verified, &transcriptGrew,
+		&attempt.HandoffStateID, &attempt.HandoffName, &handoffAt, &handoffCopied)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return RecoveryAttempt{}, err
@@ -297,5 +319,9 @@ func scanAttempt(row scanner) (RecoveryAttempt, error) {
 	}
 	attempt.SessionIDVerified = scanNullableBool(verified)
 	attempt.TranscriptGrew = scanNullableBool(transcriptGrew)
+	attempt.HandoffCopied = scanNullableBool(handoffCopied)
+	if attempt.HandoffAt, err = timeFromDB(handoffAt); err != nil {
+		return RecoveryAttempt{}, err
+	}
 	return attempt, nil
 }

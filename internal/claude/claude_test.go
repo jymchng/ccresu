@@ -18,7 +18,7 @@ const testUnsupportedSessionID = "cccccccc-1111-4222-8333-444444444444"
 const testAnonymousStateID = "agent-state-4"
 
 // testVersionOutput is the verified `claude --version` shape.
-const testVersionOutput = "2.1.223 (Claude Code)\n"
+const testVersionOutput = "2.1.257 (Claude Code)\n"
 
 // testAgentsJSON is the verified `claude agents --json` shape.
 const testAgentsJSON = `[
@@ -59,7 +59,18 @@ const testAgentsJSON = `[
   }
 ]`
 
-// testResumeJSON is the verified `-p --output-format json` shape.
+// testSessionDir is the directory a handoff is given. It is never the test
+// process's own directory, because a recovery that ran in the daemon's cwd would
+// continue the wrong tree.
+const testSessionDir = "/root/project"
+
+// testHandoffBlock is the verified `backgrounded` block shape: a short ID and
+// the label the handoff asked for, separated by middle dots.
+const testHandoffBlock = "backgrounded \u00b7 3f1e2c7a \u00b7 ccresu-3f1e2c7a\n"
+
+// testResumeJSON is the retired `-p --output-format json` shape. It is kept only
+// so the tests that assert print mode is gone have something recognisable to
+// point at.
 const testResumeJSON = `{"type":"result","subtype":"success","is_error":false,` +
 	`"duration_ms":1234,"num_turns":2,"result":"continued the goal",` +
 	`"session_id":"` + testSessionID + `","total_cost_usd":0.0123,` +
@@ -430,8 +441,8 @@ func TestFakeProviderBehaviour(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResumeSession() error = %v", err)
 	}
-	if !result.Verified || result.SessionID != testSessionID {
-		t.Errorf("resume result not verified: %+v", result)
+	if !result.Backgrounded || result.StateID == "" || result.SessionID != testSessionID {
+		t.Errorf("fake handoff not acknowledged: %+v", result)
 	}
 
 	if got := len(fake.Calls()); got != 5 {

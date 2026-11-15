@@ -3,6 +3,7 @@ package claude
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -20,10 +21,10 @@ func TestParseVersion(t *testing.T) {
 		wantErr  bool
 		supports bool
 	}{
-		{name: "verified banner", input: testVersionOutput, want: "2.1.223", supports: true},
-		{name: "v prefix", input: "v2.0.1", want: "2.0.1", supports: true},
+		{name: "verified banner", input: testVersionOutput, want: "2.1.257", supports: true},
+		{name: "v prefix", input: "v2.1.257", want: "2.1.257", supports: true},
 		{name: "program prefix", input: "claude 2.2.0", want: "2.2.0", supports: true},
-		{name: "prerelease", input: "2.1.0-beta.2 (Claude Code)", want: "2.1.0-beta.2", pre: "beta.2", supports: true},
+		{name: "prerelease", input: "2.2.0-beta.2 (Claude Code)", want: "2.2.0-beta.2", pre: "beta.2", supports: true},
 		{name: "too old", input: "1.9.9 (Claude Code)", want: "1.9.9", supports: false},
 		{name: "empty", input: "  ", wantErr: true},
 		{name: "garbage", input: "not a version", wantErr: true},
@@ -117,8 +118,8 @@ func TestVersionProbeAndCaching(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Version() error = %v", err)
 	}
-	if first.String() != "2.1.223" {
-		t.Errorf("Version() = %s, want 2.1.223", first)
+	if first.String() != "2.1.257" {
+		t.Errorf("Version() = %s, want 2.1.257", first)
 	}
 	if _, err := cli.Version(context.Background()); err != nil {
 		t.Fatalf("cached Version() error = %v", err)
@@ -317,41 +318,70 @@ func TestCLIAgentsErrors(t *testing.T) {
 	})
 }
 
-func TestResumeArgsExact(t *testing.T) {
+func TestHandoffArgsExact(t *testing.T) {
 	t.Parallel()
 
-	got := strings.Join(ResumeArgs(testSessionID, "continue"), " ")
-	want := "-p --resume " + testSessionID + " --output-format json continue"
+	got := strings.Join(HandoffArgs(testSessionID, "continue"), " ")
+	want := "--bg --resume " + testSessionID + " --name ccresu-3f1e2c7a continue"
 	if got != want {
-		t.Fatalf("ResumeArgs() = %q, want %q", got, want)
+		t.Fatalf("HandoffArgs() = %q, want %q", got, want)
 	}
 }
 
-func TestCLIResumeSuccess(t *testing.T) {
+// TestNoRecoveryArgumentCarriesPrintMode is the guard on R1 and R12: print mode
+// is retired, not kept beside --bg. The two cannot be combined, so a vector
+// carrying both would be rejected before a session existed.
+func TestNoRecoveryArgumentCarriesPrintMode(t *testing.T) {
+	t.Parallel()
+
+	vectors := map[string][]string{
+		"handoff": HandoffArgs(testSessionID, "keep going"),
+		"stop":    StopArgs("837eaaea"),
+	}
+	for name, argv := range vectors {
+		for _, arg := range argv {
+			switch arg {
+			case "-p", "--print", "--output-format":
+				t.Errorf("%s argv = %q, want no print-mode flag", name, argv)
+			}
+		}
+		if len(argv) > 1 && argv[0] == "--" {
+			t.Errorf("%s argv = %q, want no bare -- separator first", name, argv)
+		}
+	}
+}
+
+func TestCLIHandoffSuccess(t *testing.T) {
 	t.Parallel()
 
 	cli, execer := newTestCLI(t,
 		Output{Stdout: []byte(testVersionOutput)},
-		Output{Stdout: []byte(testResumeJSON)},
+		Output{Stdout: []byte(testHandoffBlock)},
 	)
-	result, err := cli.Resume(context.Background(), testSessionID, "keep going")
+	result, err := cli.Resume(context.Background(), testSessionID, "keep going", testSessionDir)
 	if err != nil {
 		t.Fatalf("Resume() error = %v", err)
 	}
-	if !result.Verified {
-		t.Error("Verified = false, want true")
+	if !result.Backgrounded {
+		t.Error("Backgrounded = false, want true")
+	}
+	if result.Verified {
+		t.Error("Verified = true, want false: a handoff cannot prove the conversation continued")
+	}
+	if result.StateID != "3f1e2c7a" {
+		t.Errorf("StateID = %q, want 3f1e2c7a", result.StateID)
+	}
+	if result.Name != "ccresu-3f1e2c7a" {
+		t.Errorf("Name = %q, want ccresu-3f1e2c7a", result.Name)
 	}
 	if result.SessionID != testSessionID {
 		t.Errorf("SessionID = %q, want %q", result.SessionID, testSessionID)
 	}
-	if result.Result != "continued the goal" || result.Subtype != "success" || result.NumTurns != 2 {
-		t.Errorf("unexpected result: %+v", result)
+	if result.CWD != testSessionDir {
+		t.Errorf("CWD = %q, want %q", result.CWD, testSessionDir)
 	}
-	if result.DurationMS != 1234 || result.TotalCostUSD == 0 {
-		t.Errorf("metrics not mapped: %+v", result)
-	}
-	if result.Model != "claude-sonnet-4-5" {
-		t.Errorf("Model = %q, want claude-sonnet-4-5", result.Model)
+	if result.Handoff.Raw == "" {
+		t.Error("Handoff.Raw = \"\", want the output the block was parsed from")
 	}
 
 	calls := execer.Calls()
@@ -359,7 +389,7 @@ func TestCLIResumeSuccess(t *testing.T) {
 	if last.Name != "claude" {
 		t.Errorf("command name = %q, want claude", last.Name)
 	}
-	want := []string{"-p", "--resume", testSessionID, "--output-format", "json", "keep going"}
+	want := HandoffArgs(testSessionID, "keep going")
 	if strings.Join(last.Args, "\x00") != strings.Join(want, "\x00") {
 		t.Errorf("argv = %v, want %v", last.Args, want)
 	}
@@ -368,9 +398,90 @@ func TestCLIResumeSuccess(t *testing.T) {
 	}
 	// The message must be the final argv element and a single one, so no shell
 	// ever sees it and no flag parser can mistake it for a flag.
-	message := last.Args[len(last.Args)-1]
-	if message != "keep going" {
+	if message := last.Args[len(last.Args)-1]; message != "keep going" {
 		t.Errorf("message argv = %q, want %q", message, "keep going")
+	}
+}
+
+// TestTheHandoffRunsInTheSessionsDirectory is R8: the cwd is chosen, never
+// inherited. A handoff issued from the daemon's cwd resumes the wrong tree.
+func TestTheHandoffRunsInTheSessionsDirectory(t *testing.T) {
+	t.Parallel()
+
+	cli, execer := newTestCLI(t,
+		Output{Stdout: []byte(testVersionOutput)},
+		Output{Stdout: []byte(testHandoffBlock)},
+	)
+	if _, err := cli.Resume(context.Background(), testSessionID, "go", "/w/session-worktree"); err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	calls := execer.Calls()
+	last := calls[len(calls)-1]
+	if last.Options.Dir != "/w/session-worktree" {
+		t.Errorf("child dir = %q, want /w/session-worktree", last.Options.Dir)
+	}
+	if wd, err := os.Getwd(); err == nil && last.Options.Dir == wd {
+		t.Errorf("child dir = %q, which is the test process's own directory", last.Options.Dir)
+	}
+	// The query commands still inherit, so the choice is visible where it is made.
+	if calls[0].Options.Dir != "" {
+		t.Errorf("version probe dir = %q, want the inherited one", calls[0].Options.Dir)
+	}
+}
+
+// TestACopiedContinuationIsRecorded is R4: a copy is an expected outcome, not a
+// failure, and the copy becomes the conversation the recovery is reported
+// against.
+func TestACopiedContinuationIsRecorded(t *testing.T) {
+	t.Parallel()
+
+	output := "backgrounded \u00b7 3f1e2c7a \u00b7 ccresu-3f1e2c7a\n" +
+		"note: started a copy of the conversation in session " + testOtherSessionID + "\n"
+	cli, _ := newTestCLI(t,
+		Output{Stdout: []byte(testVersionOutput)},
+		Output{Stdout: []byte(output)},
+	)
+	result, err := cli.Resume(context.Background(), testSessionID, "go", testSessionDir)
+	if err != nil {
+		t.Fatalf("Resume() error = %v, want nil: a copy is not a failure", err)
+	}
+	if !result.Copied {
+		t.Error("Copied = false, want true")
+	}
+	if result.CopySessionID != testOtherSessionID {
+		t.Errorf("CopySessionID = %q, want %q", result.CopySessionID, testOtherSessionID)
+	}
+	if result.SessionID != testOtherSessionID {
+		t.Errorf("SessionID = %q, want the copy %q: the recovery is reported against it", result.SessionID, testOtherSessionID)
+	}
+	if result.Note == "" {
+		t.Error("Note = \"\", want the CLI's explanation")
+	}
+	if !result.Backgrounded {
+		t.Error("Backgrounded = false, want true")
+	}
+}
+
+// TestAStartedSupervisorIsRecognised covers the missing-supervisor case: the CLI
+// prints `Starting background service...` above the block when it had to start
+// one first, and parsing must survive that line.
+func TestAStartedSupervisorIsRecognised(t *testing.T) {
+	t.Parallel()
+
+	output := "Starting background service\u2026\n" + testHandoffBlock
+	cli, _ := newTestCLI(t,
+		Output{Stdout: []byte(testVersionOutput)},
+		Output{Stdout: []byte(output)},
+	)
+	result, err := cli.Resume(context.Background(), testSessionID, "go", testSessionDir)
+	if err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if !result.SupervisorStarted {
+		t.Error("SupervisorStarted = false, want true")
+	}
+	if !result.Backgrounded || result.StateID != "3f1e2c7a" {
+		t.Errorf("the prefix line broke parsing: %+v", result.Handoff)
 	}
 }
 
@@ -382,16 +493,18 @@ func TestCLIResumeRejectsBadInput(t *testing.T) {
 		name      string
 		sessionID string
 		message   string
+		dir       string
 		wantErr   error
 	}{
-		{"flag injection", "--resume", "go", ErrInvalidSessionID},
-		{"path traversal", "../session", "go", ErrInvalidSessionID},
-		{"empty message", testSessionID, "   ", ErrEmptyMessage},
-		{"long message", testSessionID, strings.Repeat("x", MaxMessageBytes+1), ErrMessageTooLong},
+		{"flag injection", "--resume", "go", testSessionDir, ErrInvalidSessionID},
+		{"path traversal", "../session", "go", testSessionDir, ErrInvalidSessionID},
+		{"empty message", testSessionID, "   ", testSessionDir, ErrEmptyMessage},
+		{"long message", testSessionID, strings.Repeat("x", MaxMessageBytes+1), testSessionDir, ErrMessageTooLong},
+		{"no directory", testSessionID, "go", "  ", ErrHandoffDirectoryMissing},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := cli.Resume(context.Background(), tc.sessionID, tc.message); !errors.Is(err, tc.wantErr) {
+			if _, err := cli.Resume(context.Background(), tc.sessionID, tc.message, tc.dir); !errors.Is(err, tc.wantErr) {
 				t.Fatalf("error = %v, want %v", err, tc.wantErr)
 			}
 		})
@@ -401,7 +514,7 @@ func TestCLIResumeRejectsBadInput(t *testing.T) {
 	}
 }
 
-func TestCLIResumeFailures(t *testing.T) {
+func TestCLIHandoffFailures(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -410,32 +523,22 @@ func TestCLIResumeFailures(t *testing.T) {
 		runErr  error
 		wantErr error
 		// wantNoSentinel asserts a *CLIError with no sentinel: the command ran
-		// and crashed, so it is neither a missing binary nor a refusal.
+		// and crashed, so it is neither a missing binary nor a named refusal.
 		wantNoSentinel bool
 	}{
 		{
-			name:    "is_error result",
-			output:  Output{Stdout: []byte(`{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"` + testSessionID + `","result":"limit still active"}`)},
-			wantErr: ErrResumeFailed,
+			name:    "no backgrounded block",
+			output:  Output{Stdout: []byte("resumed in place\n")},
+			wantErr: ErrHandoffNotAcknowledged,
 		},
 		{
-			name:    "different session id",
-			output:  Output{Stdout: []byte(`{"type":"result","is_error":false,"session_id":"` + testOtherSessionID + `","result":"ok"}`)},
-			wantErr: ErrSessionNotPreserved,
+			name:    "workspace not trusted",
+			output:  Output{Stdout: []byte("Workspace not trusted. Run claude in this directory first.\n"), ExitCode: 1},
+			wantErr: ErrWorkspaceNotTrusted,
 		},
 		{
-			name:    "no session id",
-			output:  Output{Stdout: []byte(`{"type":"result","is_error":false,"result":"ok"}`)},
-			wantErr: ErrNoSessionIDReported,
-		},
-		{
-			name:    "not json",
-			output:  Output{Stdout: []byte("Error: still limited")},
-			wantErr: ErrMalformedOutput,
-		},
-		{
-			name:           "non zero exit with json noise",
-			output:         Output{Stdout: []byte("{}"), Stderr: []byte("boom"), ExitCode: 3},
+			name:           "non zero exit",
+			output:         Output{Stdout: []byte("boom"), Stderr: []byte("boom"), ExitCode: 3},
 			runErr:         errors.New("exit status 3"),
 			wantNoSentinel: true,
 		},
@@ -459,7 +562,7 @@ func TestCLIResumeFailures(t *testing.T) {
 				return tc.output, tc.runErr
 			})
 			cli := NewCLI(CLIOptions{Executable: "claude", Execer: execer})
-			_, err := cli.Resume(context.Background(), testSessionID, "go")
+			_, err := cli.Resume(context.Background(), testSessionID, "go", testSessionDir)
 			if tc.wantNoSentinel {
 				var cliErr *CLIError
 				if !errors.As(err, &cliErr) {
@@ -480,6 +583,37 @@ func TestCLIResumeFailures(t *testing.T) {
 	}
 }
 
+// TestPreHandoffCLIIsANamedError is R12's blunt edge: there is no fallback, so a
+// CLI below 2.1.257 is a named, explainable refusal rather than a mystery
+// failure, and it is raised before the handoff is attempted.
+func TestPreHandoffCLIIsANamedError(t *testing.T) {
+	t.Parallel()
+
+	cli, execer := newTestCLI(t, Output{Stdout: []byte("2.1.223 (Claude Code)\n")})
+	_, err := cli.Resume(context.Background(), testSessionID, "go", testSessionDir)
+	if !errors.Is(err, ErrUnsupportedVersion) {
+		t.Fatalf("error = %v, want ErrUnsupportedVersion", err)
+	}
+	var requirement *VersionRequirementError
+	if !errors.As(err, &requirement) {
+		t.Fatalf("error = %v, want *VersionRequirementError: a generic failure is not explainable", err)
+	}
+	if requirement.Need.String() != "2.1.257" {
+		t.Errorf("Need = %s, want 2.1.257", requirement.Need)
+	}
+	if requirement.Have.String() != "2.1.223" {
+		t.Errorf("Have = %s, want 2.1.223", requirement.Have)
+	}
+	for _, want := range []string{"upgrade Claude Code", "v0.6.0"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to mention %q", err, want)
+		}
+	}
+	if calls := execer.Calls(); len(calls) != 1 {
+		t.Fatalf("execer calls = %d, want 1: only the version probe may run", len(calls))
+	}
+}
+
 func TestCLIResumeContextCancelled(t *testing.T) {
 	t.Parallel()
 
@@ -489,7 +623,7 @@ func TestCLIResumeContextCancelled(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := cli.Resume(ctx, testSessionID, "go"); !errors.Is(err, context.Canceled) {
+	if _, err := cli.Resume(ctx, testSessionID, "go", testSessionDir); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}
 }

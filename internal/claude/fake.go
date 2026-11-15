@@ -3,7 +3,6 @@ package claude
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"time"
 )
@@ -271,31 +270,18 @@ func (f *FakeProvider) ResumeSession(ctx context.Context, sessionID, message str
 		RequestedSessionID: sessionID,
 		SessionID:          sessionID,
 		Backgrounded:       true,
-		StateID:            stateIDFor(sessionID),
+		StateID:            StateIDFor(sessionID),
 		Name:               HandoffLabel(sessionID),
 		Handoff: Handoff{
 			Acknowledged: true,
-			StateID:      stateIDFor(sessionID),
+			StateID:      StateIDFor(sessionID),
 			Name:         HandoffLabel(sessionID),
-			Raw:          "backgrounded · " + stateIDFor(sessionID) + " · " + HandoffLabel(sessionID),
+			Raw:          "backgrounded · " + StateIDFor(sessionID) + " · " + HandoffLabel(sessionID),
 		},
 		Result:  "resumed",
 		Subtype: "success",
 		Command: append([]string{DefaultExecutable}, HandoffArgs(sessionID, message)...),
 	}, nil
-}
-
-// stateIDFor derives a stable short ID for a fake handoff, mirroring the shape
-// the CLI prints without pretending to be it.
-func stateIDFor(sessionID string) string {
-	short := strings.ReplaceAll(sessionID, "-", "")
-	if len(short) > 8 {
-		short = short[:8]
-	}
-	if short == "" {
-		short = "00000000"
-	}
-	return short
 }
 
 var (

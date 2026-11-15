@@ -231,6 +231,20 @@ type RecoveryAttempt struct {
 	// TranscriptGrew reports whether the transcript gained lines, which is the
 	// cross-platform proof that the conversation actually advanced.
 	TranscriptGrew *bool
+	// HandoffStateID is the short state ID the CLI printed in its
+	// `backgrounded · <short-id> · <name>` block. It is not the session UUID:
+	// `claude attach`, `claude logs` and `claude stop` all take this one.
+	HandoffStateID string
+	// HandoffName is the label the handoff was given, normally
+	// `ccresu-<first eight characters of the session id>`.
+	HandoffName string
+	// HandoffAt is when the supervisor accepted the session. A non-zero value
+	// means the work is not ccresu's any more, so a restart of ccresu must not
+	// close the attempt as stale.
+	HandoffAt time.Time
+	// HandoffCopied reports whether the continuation landed in a copy rather
+	// than in place. Nil means no handoff was recorded.
+	HandoffCopied *bool
 }
 
 // Transition is one entry in the persisted state history.

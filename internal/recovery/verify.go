@@ -65,16 +65,32 @@ func BaselineFromStatus(status claude.SessionStatus) Baseline {
 
 // Verification is the evidence collected after a resume.
 //
-// Proven is the only field a caller may treat as success. It is true only when
-// both independent checks passed: the CLI reported the original session id back,
-// and the transcript of that session actually grew.
+// Proven is the only field a caller may treat as success, and it means one of two
+// things depending on how the continuation was made. For a print-mode resume it
+// means both independent checks passed: the CLI reported the original session id
+// back, and the transcript of that session actually grew. For a handoff it means
+// the supervisor accepted the session and named it, because the work is no longer
+// ccresu's to measure — PRD 1 retired print mode, and the fields below record
+// which of the two shapes was proven.
 type Verification struct {
 	// SessionIDPreserved reports that the resumed session is the requested one.
 	SessionIDPreserved bool
 	// TranscriptGrew reports that the transcript gained content.
 	TranscriptGrew bool
-	// Proven reports SessionIDPreserved && TranscriptGrew.
+	// Proven reports SessionIDPreserved && TranscriptGrew, or HandoffAccepted
+	// when the continuation was handed to the supervisor.
 	Proven bool
+	// HandoffAccepted reports that the CLI acknowledged the continuation with a
+	// `backgrounded` block, which is what a handoff is proven by.
+	HandoffAccepted bool
+	// HandoffStateID is the short state ID from that block. It is not the
+	// session UUID: `claude attach`, `claude logs` and `claude stop` take this.
+	HandoffStateID string
+	// HandoffName is the label the supervisor shows for the session.
+	HandoffName string
+	// Copied reports that the CLI continued the conversation in a copy rather
+	// than in place, which is an expected outcome rather than a failure.
+	Copied bool
 	// LinesBefore/After and SizeBefore/After are the measurements the decision
 	// rests on, kept for logs and for `ccresu inspect`.
 	LinesBefore int64
@@ -91,6 +107,11 @@ type Verification struct {
 
 // Missing returns the failed checks, for an error message.
 func (v Verification) Missing() []string {
+	if v.HandoffAccepted {
+		// A handoff has no checks to miss: it is accepted or it never printed a
+		// block, and the latter is an error rather than an unproven resume.
+		return nil
+	}
 	var missing []string
 	if !v.SessionIDPreserved {
 		missing = append(missing, "the original session id was not confirmed")
@@ -104,6 +125,9 @@ func (v Verification) Missing() []string {
 // Reason renders why the resume was not proven.
 func (v Verification) Reason() string {
 	if v.Proven {
+		if v.HandoffAccepted {
+			return "the continuation was handed to the background supervisor"
+		}
 		return "the original session id was confirmed and its transcript grew"
 	}
 	missing := v.Missing()
@@ -153,6 +177,19 @@ func (v Verifier) Verify(ctx context.Context, baseline Baseline, result claude.R
 	}
 
 	verification.SessionIDPreserved, verification.Notes = checkSessionID(baseline.SessionID, result, verification.Notes)
+
+	// A handoff is judged on the CLI's own acknowledgement, not on the
+	// transcript. The work belongs to the supervisor from the moment the
+	// `backgrounded` block is printed, so growth now arrives on someone else's
+	// schedule: waiting for it would time out a perfectly healthy recovery, and
+	// observing it would still not say whether the continuation landed in the
+	// original conversation. PRD 2 replaces this judgement with the
+	// supervisor's published state; until then the block is the only evidence
+	// there is, so it is recorded plainly instead of being dressed up as proof
+	// the conversation advanced.
+	if result.Backgrounded {
+		return acceptHandoff(baseline, result, verification), nil
+	}
 
 	if v.Provider == nil {
 		verification.Notes = append(verification.Notes,
@@ -280,6 +317,49 @@ func checkSessionID(want string, result claude.ResumeResult, notes []string) (bo
 		return false, notes
 	}
 	return true, notes
+}
+
+// acceptHandoff records a recovery the supervisor has taken over.
+//
+// It is not a weaker Verification: it is a different one. Nothing was measured,
+// because there is nothing to measure yet — the session is not a transcript that
+// grew under ccresu's process, it is work that has been accepted elsewhere. So
+// Proven means "the continuation is under way in a known conversation", which is
+// exactly as much as the CLI's block can establish, and the fields that would
+// otherwise imply a measurement are left at their baseline values.
+func acceptHandoff(baseline Baseline, result claude.ResumeResult, verification Verification) Verification {
+	verification.HandoffAccepted = true
+	verification.HandoffStateID = result.StateID
+	verification.HandoffName = result.Name
+	verification.Copied = result.Copied
+	verification.Proven = true
+
+	switch {
+	case result.Copied && result.CopySessionID != "":
+		verification.SessionIDPreserved = false
+		verification.Notes = append(verification.Notes, fmt.Sprintf(
+			"the CLI started a copy in session %s instead of continuing %s in place; a copy is an expected outcome and the recovery is reported against it",
+			result.CopySessionID, baseline.SessionID))
+	case result.Copied:
+		verification.SessionIDPreserved = false
+		verification.Notes = append(verification.Notes,
+			"the CLI said it started a copy but named no session id, so the new conversation cannot be addressed yet")
+	default:
+		verification.SessionIDPreserved = true
+	}
+
+	if result.StateID == "" {
+		// An acknowledged block always carries a short ID; saying so here keeps
+		// an operator from hunting for `claude attach` arguments that do not
+		// exist.
+		verification.Notes = append(verification.Notes,
+			"the handoff block carried no state id, so `claude attach` and `claude logs` cannot be pointed at it")
+	}
+	if result.Handoff.StartedService {
+		verification.Notes = append(verification.Notes,
+			"a background service was started to accept the session")
+	}
+	return verification
 }
 
 // VerificationFailedError builds the error returned when a resume ran but could

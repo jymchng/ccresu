@@ -44,7 +44,7 @@ func scriptedProvider(t *testing.T, home string, script cliScript) (*Provider, *
 		script.agents = testAgentsJSON
 	}
 	if script.resume == "" {
-		script.resume = testResumeJSON
+		script.resume = testHandoffBlock
 	}
 
 	execer := NewFakeExecer(func(call Call) (Output, error) {
@@ -61,7 +61,7 @@ func scriptedProvider(t *testing.T, home string, script cliScript) (*Provider, *
 				Stdout:   []byte(script.agents),
 				ExitCode: script.agentsExit,
 			}, script.agentsErr
-		case strings.HasPrefix(argv, "-p --resume"):
+		case strings.HasPrefix(argv, "--bg --resume"):
 			return Output{
 				Stdout:   []byte(script.resume),
 				Stderr:   []byte(script.resumeStderr),
@@ -426,13 +426,16 @@ func TestProviderResume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResumeSession() error = %v", err)
 	}
-	if !result.Verified || result.SessionID != testSessionID {
-		t.Errorf("result = %+v, want a verified resume", result)
+	if !result.Backgrounded || result.StateID == "" {
+		t.Errorf("result = %+v, want an acknowledged handoff", result)
+	}
+	if result.SessionID != testSessionID {
+		t.Errorf("SessionID = %q, want %q", result.SessionID, testSessionID)
 	}
 
 	calls := execer.Calls()
 	last := calls[len(calls)-1]
-	want := strings.Join([]string{"-p", "--resume", testSessionID, "--output-format", "json", "continue the goal"}, " ")
+	want := strings.Join(HandoffArgs(testSessionID, "continue the goal"), " ")
 	if got := strings.Join(last.Args, " "); got != want {
 		t.Errorf("resume argv = %q, want %q", got, want)
 	}
@@ -487,12 +490,15 @@ func TestProviderResumeFailurePropagates(t *testing.T) {
 	}
 	writeTranscript(t, store, "/root/project", testSessionID, 2)
 
+	// A refusal now comes back as output with no `backgrounded` block, because
+	// there is no print-mode JSON to parse any more. It is still a failure, and
+	// still a named one.
 	provider, _ := scriptedProvider(t, home, cliScript{
-		resume:     `{"type":"result","is_error":true,"session_id":"` + testSessionID + `","result":"still limited"}`,
-		resumeExit: 0,
+		resume:     "Error: still limited\n",
+		resumeExit: 1,
 	})
-	if _, err := provider.ResumeSession(context.Background(), testSessionID, "go"); !errors.Is(err, ErrResumeFailed) {
-		t.Fatalf("ResumeSession() error = %v, want ErrResumeFailed", err)
+	if _, err := provider.ResumeSession(context.Background(), testSessionID, "go"); err == nil {
+		t.Fatal("ResumeSession() error = nil, want a failure")
 	}
 }
 
@@ -504,7 +510,7 @@ func TestProviderVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Version() error = %v", err)
 	}
-	if report.Version.String() != "2.1.223" {
+	if report.Version.String() != "2.1.257" {
 		t.Errorf("Version() = %s", report.Version)
 	}
 

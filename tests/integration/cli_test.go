@@ -370,7 +370,7 @@ func TestCLIDoctorProbesTheEnvironmentAndTheClaudeCLI(t *testing.T) {
 	}
 	// The stub answers `claude --version`; a passing check therefore proves the
 	// adapter parsed real process output rather than trusting a default.
-	if detail := seen["claude"]; !strings.Contains(detail, "2.1.223") {
+	if detail := seen["claude"]; !strings.Contains(detail, "2.1.257") {
 		t.Fatalf("claude check = %q, want the stub's reported version", detail)
 	}
 	if detail := seen["database"]; !strings.Contains(detail, f.DBPath) {

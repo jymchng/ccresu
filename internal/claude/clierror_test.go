@@ -182,7 +182,7 @@ func TestResumeRefusalIsARecognisableCondition(t *testing.T) {
 		Output{Stdout: []byte(testVersionOutput)},
 		Output{Stdout: []byte(limitBanner), ExitCode: 1},
 	)
-	_, err := cli.Resume(context.Background(), testSessionID, "continue")
+	_, err := cli.Resume(context.Background(), testSessionID, "continue", testSessionDir)
 	if !errors.Is(err, ErrUsageLimitInForce) {
 		t.Fatalf("error = %v, want ErrUsageLimitInForce", err)
 	}
@@ -197,8 +197,8 @@ func TestResumeRefusalIsARecognisableCondition(t *testing.T) {
 	if !errors.As(err, &cliErr) {
 		t.Fatalf("error = %v, want *CLIError", err)
 	}
-	if cliErr.What != "claude -p --resume" {
-		t.Errorf("What = %q, want %q", cliErr.What, "claude -p --resume")
+	if cliErr.What != "claude --bg --resume" {
+		t.Errorf("What = %q, want %q", cliErr.What, "claude --bg --resume")
 	}
 	if cliErr.ExitCode != 1 {
 		t.Errorf("ExitCode = %d, want 1", cliErr.ExitCode)

@@ -359,16 +359,24 @@ func (p *GrowingProvider) ResumeSession(_ context.Context, id, message string) (
 	p.mu.Lock()
 	p.resumes = append(p.resumes, ResumeCall{SessionID: id, Message: message})
 	p.mu.Unlock()
-	// The CLI reports the requested id back, which is the proof that the
-	// original conversation continued rather than a new one starting.
+	// The CLI accepted the handoff and named the state it created. That block,
+	// not a reported session id, is what a resumed recovery is proven by now.
 	return claude.ResumeResult{
 		RequestedSessionID: id,
 		SessionID:          id,
-		Verified:           true,
-		Result:             "continued the paused goal",
-		Subtype:            "success",
-		NumTurns:           1,
-		Command:            append([]string{"claude"}, claude.HandoffArgs(id, message)...),
+		Backgrounded:       true,
+		StateID:            claude.StateIDFor(id),
+		Name:               claude.HandoffLabel(id),
+		Handoff: claude.Handoff{
+			Acknowledged: true,
+			StateID:      claude.StateIDFor(id),
+			Name:         claude.HandoffLabel(id),
+			Raw:          "backgrounded \u00b7 " + claude.StateIDFor(id) + " \u00b7 " + claude.HandoffLabel(id),
+		},
+		Result:   "continued the paused goal",
+		Subtype:  "success",
+		NumTurns: 1,
+		Command:  append([]string{"claude"}, claude.HandoffArgs(id, message)...),
 	}, nil
 }
 

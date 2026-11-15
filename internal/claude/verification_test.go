@@ -44,7 +44,7 @@ func (f *fakeCLI) Run(_ context.Context, name string, args []string, _ claude.Ru
 		return claude.Output{Stdout: []byte(f.version)}, nil
 	case strings.HasPrefix(argv, "agents"):
 		return claude.Output{Stdout: []byte(f.agents), ExitCode: f.exit}, nil
-	case strings.HasPrefix(argv, "-p --resume"):
+	case strings.HasPrefix(argv, "--bg --resume"):
 		return claude.Output{Stdout: []byte(f.resume), ExitCode: f.resumeNo}, nil
 	}
 	f.t.Fatalf("unexpected invocation: %q", argv)
@@ -88,7 +88,7 @@ func TestUnsupportedSessionTypesAreUnrecoverable(t *testing.T) {
 	  {"id":"2","kind":"","sessionId":"` + sessionB + `","cwd":"/w"},
 	  {"id":"3","kind":"interactive","cwd":"/w"}
 	]`
-	exec := &fakeCLI{t: t, version: "2.1.0 (Claude Code)", agents: agents}
+	exec := &fakeCLI{t: t, version: "2.1.257 (Claude Code)", agents: agents}
 	provider := newProvider(t, exec, t.TempDir())
 
 	sessions, err := provider.Discover(context.Background(), claude.DiscoverFilter{})
@@ -125,15 +125,15 @@ func TestUnsupportedSessionTypesAreUnrecoverable(t *testing.T) {
 
 // TestResumeCommandIsExactlyTheVerifiedOne asserts the only state-changing
 // command, byte for byte, with hostile input.
-func TestResumeCommandIsExactlyTheVerifiedOne(t *testing.T) {
+func TestHandoffCommandIsExactlyTheVerifiedOne(t *testing.T) {
 	t.Parallel()
 
 	home := t.TempDir()
 	exec := &fakeCLI{
 		t:       t,
-		version: "2.1.223 (Claude Code)",
+		version: "2.1.257 (Claude Code)",
 		agents:  `[]`,
-		resume:  `{"type":"result","subtype":"success","is_error":false,"session_id":"` + sessionA + `","result":"ok","num_turns":3}`,
+		resume:  "backgrounded \u00b7 3f1e2c7a \u00b7 ccresu-3f1e2c7a\n",
 	}
 	provider := newProvider(t, exec, home)
 
@@ -147,38 +147,50 @@ func TestResumeCommandIsExactlyTheVerifiedOne(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
+	// The message is hostile on purpose: it contains a shell substitution, both
+	// quote styles, a newline, and a string that looks like a print-mode flag.
 	message := `continue; touch /tmp/pwned && $(whoami) "quoted" 'single'` + "\n--output-format text"
 	result, err := provider.ResumeSession(context.Background(), sessionA, message)
 	if err != nil {
 		t.Fatalf("ResumeSession() error = %v", err)
 	}
-	if !result.Verified {
-		t.Error("Verified = false")
+	if !result.Backgrounded {
+		t.Error("Backgrounded = false, want true")
 	}
 
-	var resumeArgv []string
+	var handoffArgv []string
 	for _, argv := range exec.seen {
-		if len(argv) > 1 && argv[1] == "-p" {
-			resumeArgv = argv
+		if len(argv) > 1 && argv[1] == "--bg" {
+			handoffArgv = argv
 		}
 	}
-	if resumeArgv == nil {
-		t.Fatal("no resume command was executed")
+	if handoffArgv == nil {
+		t.Fatal("no handoff command was executed")
 	}
-	want := []string{"claude", "-p", "--resume", sessionA, "--output-format", "json", message}
-	if len(resumeArgv) != len(want) {
-		t.Fatalf("argv = %q, want exactly %q", resumeArgv, want)
+	want := append([]string{"claude"}, claude.HandoffArgs(sessionA, message)...)
+	if len(handoffArgv) != len(want) {
+		t.Fatalf("argv = %q, want exactly %q", handoffArgv, want)
 	}
 	for i := range want {
-		if resumeArgv[i] != want[i] {
-			t.Fatalf("argv[%d] = %q, want %q (full argv %q)", i, resumeArgv[i], want[i], resumeArgv)
+		if handoffArgv[i] != want[i] {
+			t.Fatalf("argv[%d] = %q, want %q (full argv %q)", i, handoffArgv[i], want[i], handoffArgv)
+		}
+	}
+	// The message is one argv element and the last one, so no shell ever sees it
+	// and no flag parser can mistake it for a flag.
+	if got := handoffArgv[len(handoffArgv)-1]; got != message {
+		t.Fatalf("message argv = %q, want it passed verbatim", got)
+	}
+	for _, arg := range handoffArgv {
+		if arg == "-p" || arg == "--print" || arg == "--output-format" {
+			t.Fatalf("argv = %q, want no print-mode flag", handoffArgv)
 		}
 	}
 }
 
-// TestResumeRefusesToClaimSuccessWhenTheSessionChanges checks that a resume which
-// silently starts a new conversation is never reported as a recovery.
-func TestResumeRefusesToClaimSuccessWhenTheSessionChanges(t *testing.T) {
+// TestACopiedContinuationIsNotAFailure is R4: the CLI says `note:` when it
+// starts a copy, and a copy is an outcome to record rather than an error.
+func TestACopiedContinuationIsNotAFailure(t *testing.T) {
 	t.Parallel()
 
 	home := t.TempDir()
@@ -192,48 +204,60 @@ func TestResumeRefusesToClaimSuccessWhenTheSessionChanges(t *testing.T) {
 	}
 
 	cases := []struct {
-		name    string
-		resume  string
-		wantErr error
+		name       string
+		handoff    string
+		wantCopy   bool
+		wantCopyID string
+		wantErr    error
 	}{
 		{
-			name:    "different session id",
-			resume:  `{"type":"result","is_error":false,"session_id":"` + sessionB + `","result":"ok"}`,
-			wantErr: claude.ErrSessionNotPreserved,
+			name:    "continues in place",
+			handoff: "backgrounded \u00b7 3f1e2c7a \u00b7 ccresu-3f1e2c7a\n",
 		},
 		{
-			name:    "no session id",
-			resume:  `{"type":"result","is_error":false,"result":"ok"}`,
-			wantErr: claude.ErrNoSessionIDReported,
+			name:       "starts a copy and names it",
+			handoff:    "backgrounded \u00b7 3f1e2c7a \u00b7 ccresu-3f1e2c7a\nnote: started a copy in session " + sessionB + "\n",
+			wantCopy:   true,
+			wantCopyID: sessionB,
 		},
 		{
-			name:    "cli reported an error",
-			resume:  `{"type":"result","is_error":true,"session_id":"` + sessionA + `","result":"usage limit still active"}`,
-			wantErr: claude.ErrResumeFailed,
+			name:    "the CLI refused in print-mode terms",
+			handoff: `{"type":"result","is_error":true,"session_id":"` + sessionA + `","result":"usage limit still active"}`,
+			wantErr: claude.ErrHandoffNotAcknowledged,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			exec := &fakeCLI{t: t, version: "2.1.223 (Claude Code)", agents: "[]", resume: tc.resume}
+			exec := &fakeCLI{t: t, version: "2.1.257 (Claude Code)", agents: "[]", resume: tc.handoff}
 			provider := newProvider(t, exec, home)
 			result, err := provider.ResumeSession(context.Background(), sessionA, "continue")
-			if !errors.Is(err, tc.wantErr) {
-				t.Fatalf("error = %v, want %v", err, tc.wantErr)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("error = %v, want %v", err, tc.wantErr)
+				}
+				return
 			}
-			if result.Verified {
-				t.Error("Verified = true on a failed resume")
+			if err != nil {
+				t.Fatalf("ResumeSession() error = %v", err)
+			}
+			if !result.Backgrounded {
+				t.Error("Backgrounded = false, want true")
+			}
+			if result.Copied != tc.wantCopy {
+				t.Errorf("Copied = %v, want %v", result.Copied, tc.wantCopy)
+			}
+			if result.CopySessionID != tc.wantCopyID {
+				t.Errorf("CopySessionID = %q, want %q", result.CopySessionID, tc.wantCopyID)
 			}
 		})
 	}
 }
 
-// TestInvalidSessionIDsNeverReachTheCommandLine checks the anti-flag-injection
-// and anti-path-traversal guarantees.
 func TestInvalidSessionIDsNeverReachTheCommandLine(t *testing.T) {
 	t.Parallel()
 
-	exec := &fakeCLI{t: t, version: "2.1.223 (Claude Code)", agents: "[]"}
+	exec := &fakeCLI{t: t, version: "2.1.257 (Claude Code)", agents: "[]"}
 	provider := newProvider(t, exec, t.TempDir())
 
 	hostile := []string{
@@ -271,8 +295,8 @@ func TestVersionParsingOfRealBanners(t *testing.T) {
 		banner string
 		want   string
 	}{
-		{"2.1.223 (Claude Code)\n", "2.1.223"},
-		{"2.1.223 (Claude Code)", "2.1.223"},
+		{"2.1.257 (Claude Code)\n", "2.1.257"},
+		{"2.1.257 (Claude Code)", "2.1.257"},
 		{"claude 2.0.0", "2.0.0"},
 		{"v2.5.1", "2.5.1"},
 	}
@@ -316,7 +340,7 @@ func TestOldCLIIsRefusedBeforeAnyCommand(t *testing.T) {
 func TestDiscoveryUsesOnlyDocumentedFlags(t *testing.T) {
 	t.Parallel()
 
-	exec := &fakeCLI{t: t, version: "2.1.223 (Claude Code)", agents: "[]"}
+	exec := &fakeCLI{t: t, version: "2.1.257 (Claude Code)", agents: "[]"}
 	provider := newProvider(t, exec, t.TempDir())
 	if _, err := provider.Discover(context.Background(), claude.DiscoverFilter{UnderCWD: "/w"}); err != nil {
 		t.Fatalf("Discover() error = %v", err)
@@ -365,7 +389,7 @@ func TestTranscriptDiscoveryWithoutTheCLI(t *testing.T) {
 		t.Fatalf("mkdir env: %v", err)
 	}
 
-	exec := &fakeCLI{t: t, version: "2.1.223 (Claude Code)", agents: "[]"}
+	exec := &fakeCLI{t: t, version: "2.1.257 (Claude Code)", agents: "[]"}
 	provider := newProvider(t, exec, home)
 
 	sessions, err := provider.Discover(context.Background(), claude.DiscoverFilter{})

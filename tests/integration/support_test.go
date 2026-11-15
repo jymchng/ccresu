@@ -228,7 +228,7 @@ func writeClaudeStub(t *testing.T, path, script string) {
 		script = `#!/bin/sh
 case "$1" in
 --version)
-	echo "2.1.223 (Claude Code)"
+	echo "2.1.257 (Claude Code)"
 	exit 0
 	;;
 agents)
