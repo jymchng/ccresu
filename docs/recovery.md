@@ -507,7 +507,10 @@ being resumable: a session in this state is **observed, never handed off**.
 reconcile pass must not act on, because rediscovery is how a spend cap would be
 defeated. It leaves only by an explicit operator action — raising the cap (the
 next pass returns the session to `DISCOVERED`), `ccresu recover <id>`, or
-`ccresu reset` — and the state offers no edge to `RESUMING`.
+`ccresu retry <id>` — and the state offers no edge to `RESUMING`. Both commands
+are manual requests, and a manual request is the one thing the cap does not bind
+(PRD 5 R11); the state itself never spends, which is what stops a reconcile pass
+from defeating the cap by rediscovering the session.
 
 There is no terminal *failure* state: the only state ccresu declares failed is
 `UNRECOVERABLE`, and only because it has positively established it has no

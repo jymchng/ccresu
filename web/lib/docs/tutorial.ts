@@ -275,15 +275,15 @@ WHEN                     TRANSITION                                 REASON
     { kind: "h2", text: "Step 10 — Act manually" },
     {
       kind: "p",
-      text: "Four commands bypass the wait, with different rules: `recover` resumes now (still respecting the attempt budget), `recover --force` tries even when the budget is spent, `retry` gives a spent or terminal session a fresh budget, and `reset` clears a rediscovered session into `DISABLED` without refunding an attempt.",
+      text: "Three commands bypass the wait, with different rules: `recover` resumes now (still respecting the attempt budget), `recover --force` tries even when the budget is spent, and `retry` is that same forced attempt under a name that says what it is for — one more attempt on a session whose budget is spent. None of the three refunds the budget: each buys exactly one attempt. `disable` is the only way out that spends nothing at all.",
     },
     {
       kind: "code",
-      label: "recover / retry / reset",
+      label: "recover / retry / disable",
       code: `ccresu recover 3f9d1c07-1111-4222-8333-444455556666
 ccresu recover <id> --message "Pick up where the limit interrupted you." --force
 ccresu retry <id>
-ccresu retry <id>`,
+ccresu disable <id>`,
     },
     {
       kind: "p",
@@ -333,24 +333,22 @@ ccresu: retry 7c1b2a44-0000-4000-8000-abcdefabcdef: recovery: session 7c1b2a44-0
     },
     {
       kind: "p",
-      text: "`reset` is the way out that does not spend an attempt: it accepts only `DISCOVERED`, drops the stored error, and parks the session as `DISABLED`. It never resumes, and the attempt history and counter are untouched (`retry` is what refills the budget). Any other state is refused with exit code 4 and a message naming what to use instead; exit 3 means no such session, 2 means a bad argument.",
+      text: "`disable` is the way out that does not spend an attempt: it moves the session to `DISABLED` from whatever state it is in, and leaves the attempt history, the attempt counter and the last recorded error exactly as they were — it changes whether ccresu may act on the session, not what happened to it. `enable` is the edge back: it returns the session to `DISCOVERED`, so the next pass re-reads the transcript and decides afresh. Neither one resumes anything, and neither one refunds a budget. `disable` of an unknown session exits 3; a bad argument exits 2.",
     },
     {
       kind: "code",
-      label: "Clearing the failure",
-      code: `$ ccresu retry 7c1b2a44-0000-4000-8000-abcdefabcdef
-session:       7c1b2a44-0000-4000-8000-abcdefabcdef
-state:         DISABLED
-previous state: DISCOVERED
-error:         cleared
-attempts:      kept (use 'ccresu retry' to spend another)
-session 7c1b2a44-0000-4000-8000-abcdefabcdef: reset; run 'ccresu enable 7c1b2a44-0000-4000-8000-abcdefabcdef' to let ccresu recover it again`,
+      label: "Parking a session, and bringing it back",
+      code: `$ ccresu disable 7c1b2a44-0000-4000-8000-abcdefabcdef
+session 7c1b2a44-0000-4000-8000-abcdefabcdef: enabled=no
+
+$ ccresu enable 7c1b2a44-0000-4000-8000-abcdefabcdef
+session 7c1b2a44-0000-4000-8000-abcdefabcdef: enabled=yes`,
     },
     {
       kind: "note",
       tone: "info",
       title: "A handoff returns; the work does not",
-      text: "A recovery does not run the continuation itself: it hands it to Claude Code's background supervisor and returns. One failure is therefore not the session's fault at all — a workspace the CLI does not trust, or a supervisor that never answers, is reported as its own outcome rather than retried into the same silence. When the CLI does answer, it prints a `backgrounded · <short-id> · <name>` block, and that block is what the attempt records, so `claude attach <short-id>` reaches the conversation later without a lookup. If no block is printed, the handoff is an error rather than an unproven success, and the session lands in DISCOVERED, which is where `retry`, `reset` and `recover --force` come in.",
+      text: "A recovery does not run the continuation itself: it hands it to Claude Code's background supervisor and returns. One failure is therefore not the session's fault at all — a workspace the CLI does not trust, or a supervisor that never answers, is reported as its own outcome rather than retried into the same silence. When the CLI does answer, it prints a `backgrounded · <short-id> · <name>` block, and that block is what the attempt records, so `claude attach <short-id>` reaches the conversation later without a lookup. If no block is printed, the handoff is an error rather than an unproven success, and the session lands in DISCOVERED, which is where `retry` and `recover --force` come in — or `disable`, if you would rather ccresu stopped trying at all.",
     },
     { kind: "h2", text: "Step 12 — Turn on Telegram notifications (optional)" },
     {
