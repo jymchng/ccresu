@@ -75,7 +75,7 @@ export const configurationDoc: DocPage = {
         ["multiplier", "2.0", "Growth factor between attempts."],
         ["jitter", "0.15", "Random fraction added so retries do not synchronise."],
         ["startup_timeout", "60s", "How long a resume process may take to start producing output."],
-        ["verification_timeout", "120s", "How long the verifier waits for the transcript to grow after a resume it did not hand off. A handoff returns before this wait, and growth is a diagnostic: the proof is the state the supervisor publishes."],
+        ["verification_timeout", "120s", "How long the verifier polls the transcript for growth on a resume it did not hand off. A handoff never waits on it — the CLI's `backgrounded` block returns the handoff at once — and growth is only a diagnostic: the block proves a handoff, and the published state proves any other resume."],
         ["max_concurrent_recoveries", "3", "Recovery loops allowed to run at once."],
       ],
     },
