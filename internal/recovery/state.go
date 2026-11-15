@@ -43,6 +43,15 @@ const (
 	// destination for a handoff: a continuation queued behind an unanswered
 	// prompt is waste, so a session in this state is observed, never resumed.
 	StateWaitingForInput = storage.StateWaitingForInput
+	// StateSpendCapReached is the session parked because its recorded spend
+	// reached a configured cap (PRD 5 R7).
+	//
+	// It is a budget verdict rather than a fact about the conversation, which is
+	// why it is neither terminal nor settled, and why it is deliberately absent
+	// from PendingStates: no reconcile pass may resume it, or the cap would be
+	// defeated by rediscovery. It leaves only by an explicit operator action —
+	// `ccresu recover`, `ccresu reset`, or raising the cap.
+	StateSpendCapReached = storage.StateSpendCapReached
 )
 
 // ErrInvalidTransition reports an attempt to move a session along an edge that
@@ -132,6 +141,7 @@ var transitions = map[State]map[State]struct{}{
 	},
 	StateCheckingLimit: {
 		StateResuming:        {},
+		StateSpendCapReached: {}, // the pre-attempt spend check refused the resume
 		StateRetryWait:       {},
 		StateWaitingForReset: {}, // the limit is still in force
 		StateUnrecoverable:   {},
@@ -150,6 +160,8 @@ var transitions = map[State]map[State]struct{}{
 		// A resume that lands on a blocked session parks instead of pretending
 		// the continuation was delivered.
 		StateWaitingForInput: {},
+		// One attempt cost more than the per-attempt cap allows (R6).
+		StateSpendCapReached: {},
 	},
 	StateRetryWait: {
 		StateCheckingSession: {},
@@ -175,6 +187,18 @@ var transitions = map[State]map[State]struct{}{
 		StateUnrecoverable:   {},
 		StateDiscovered:      {},
 		StateWaitingForInput: {},
+	},
+	// SPEND_CAP_REACHED is a park with a budget reason. It offers CHECKING_SESSION
+	// so an explicit `ccresu recover` can walk back into the normal path — R11
+	// exempts a human act from the cap — and DISCOVERED so raising the cap
+	// returns the session to the ordinary cycle without a resume being issued
+	// from here. It offers no edge to RESUMING: nothing in this state may spend
+	// by itself.
+	StateSpendCapReached: {
+		StateCheckingSession: {},
+		StateDiscovered:      {},
+		StateUserTerminated:  {},
+		StateDisabled:        {},
 	},
 	// RESUMED is not strictly terminal — a resumed session can hit its limit
 	// again — but a second recovery is only legal after the session has been

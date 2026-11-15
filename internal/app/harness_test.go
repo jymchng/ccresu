@@ -195,6 +195,15 @@ type harness struct {
 // recording notifier.
 func newHarness(t *testing.T) *harness {
 	t.Helper()
+	return newHarnessWith(t, recovery.SpendLimits{})
+}
+
+// newHarnessWith builds the same runtime with the spend caps PRD 5 adds. The caps
+// are supplied here rather than patched afterwards because the manager reads them
+// once, in New: a harness that set them later would be testing a manager that
+// never saw a cap.
+func newHarnessWith(t *testing.T, limits recovery.SpendLimits) *harness {
+	t.Helper()
 	clk := clock.NewFake(harnessBaseTime)
 
 	store, err := storage.Open(context.Background(), storage.Options{
@@ -231,6 +240,9 @@ func newHarness(t *testing.T) *harness {
 		Clock:       clk,
 		Enabled:     true,
 		MaxAttempts: 3,
+		// PRD 5's caps, supplied by the caller so a notification test can reach
+		// the spend stop without seeding a second manager.
+		Limits: limits,
 		// A fake clock never advances on its own, so the verification poll must
 		// be "check once" instead of "wait for the transcript to grow".
 		VerificationTimeout: -1,

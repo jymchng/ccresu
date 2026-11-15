@@ -3,6 +3,7 @@ package config
 import (
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	// Embed the IANA timezone database so reset-time parsing works on hosts
@@ -106,6 +107,27 @@ type Recovery struct {
 	// handoff may carry (PRD 5). Every knob is optional, and an unset knob
 	// means today's behaviour exactly: no flag added, no check performed.
 	Guardrails Guardrails `yaml:"guardrails"`
+}
+
+// Warnings reports configuration that is valid but likely to disappoint.
+//
+// They are advisory, not errors: refusing to start over a value the CLI may
+// ignore would be worse than saying so once. The caller prints them where the
+// operator will see them — at load, not at resume time, so a mistake is learned
+// once rather than once per attempt.
+func (c *Config) Warnings() []string {
+	if c == nil {
+		return nil
+	}
+	var warnings []string
+	if strings.EqualFold(strings.TrimSpace(c.Recovery.Guardrails.PermissionMode), "bypassPermissions") {
+		warnings = append(warnings, "recovery.guardrails.permission_mode is bypassPermissions, "+
+			"which a background session may silently ignore: Claude Code reports that a background "+
+			"session ignores the bypass request made at launch unless the acceptance is in your user "+
+			"or managed settings. recovery.guardrails.permission_mode dontAsk denies the prompts "+
+			"nobody can answer instead")
+	}
+	return warnings
 }
 
 // Guardrails is PRD 5's config surface: two spend caps ccresu enforces itself,

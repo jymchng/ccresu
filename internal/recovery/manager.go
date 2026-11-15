@@ -38,6 +38,7 @@ type Store interface {
 	StartAttempt(ctx context.Context, sessionID string, usageLimitID int64, command string) (storage.RecoveryAttempt, error)
 	FinishAttempt(ctx context.Context, attemptID int64, result storage.AttemptResult) (storage.RecoveryAttempt, error)
 	CountAttempts(ctx context.Context, sessionID string) (int, error)
+	SessionSpend(ctx context.Context, sessionID string) (storage.SpendRecord, error)
 	LatestAttempt(ctx context.Context, sessionID string) (storage.RecoveryAttempt, error)
 	ListAttempts(ctx context.Context, sessionID string, limit int) ([]storage.RecoveryAttempt, error)
 	ListTransitions(ctx context.Context, sessionID string, limit int) ([]storage.Transition, error)
@@ -94,6 +95,9 @@ type Config struct {
 	// Nil means nothing is announced: the recovery runs identically either way,
 	// which is why the notifications cannot stand in its path.
 	Observer Observer
+	// Limits are PRD 5's two spend caps. The zero value disables both, which is
+	// today's behaviour exactly: no sum is taken and no check runs.
+	Limits SpendLimits
 	// Supervisor reads the background supervisor's status and version (PRD 3
 	// R1, R2). Nil means no supervisor capability is installed: every pass
 	// reports "no supervisor" and recovers exactly as before, which is the same
@@ -120,6 +124,7 @@ type Manager struct {
 	verifier    Verifier
 	limitCheck  LimitRecheck
 	limitPark   LimitPark
+	limits      SpendLimits
 	observer    Observer
 	// observations reads the supervisor's published state. It caches one read
 	// per pass, so every session in a pass is answered from the same instant.
@@ -199,6 +204,7 @@ func New(cfg Config) (*Manager, error) {
 		backoff:      backoff,
 		message:      message,
 		verifier:     verifier,
+		limits:       cfg.Limits,
 		limitCheck:   cfg.LimitRecheck,
 		limitPark:    cfg.LimitPark,
 		observer:     cfg.Observer,
@@ -295,6 +301,10 @@ func FromConfig(cfg *config.Config, store Store, provider claude.SessionProvider
 		ContinuationMessage: cfg.Claude.ContinuationMessage,
 		VerificationTimeout: rec.VerificationTimeout.Duration,
 		HealthCheckInterval: rec.HealthCheckInterval.Duration,
+		Limits: SpendLimits{
+			PerSession: rec.Guardrails.MaxCostUSDPerSession,
+			PerAttempt: rec.Guardrails.MaxCostUSDPerAttempt,
+		},
 	})
 }
 
@@ -322,6 +332,13 @@ type Request struct {
 	// more, which is what `ccresu retry` does. It never bypasses the state
 	// machine, the per-session lock or the disabled/recoverable checks.
 	Force bool
+	// Manual marks the request as a human act — `ccresu recover`, `ccresu retry`,
+	// or the TUI's recover key — rather than a reconcile pass. PRD 5 R11 exempts
+	// a human act from the spend caps: the cap exists to replace an operator who
+	// is not there, and it must not bind one who is. The override is still
+	// recorded: the attempt's cost is written and the refusal it walked past is
+	// logged.
+	Manual bool
 }
 
 // Outcome is the result of one recovery.
@@ -362,8 +379,11 @@ func (m *Manager) Recover(ctx context.Context, sessionID string) (Outcome, error
 }
 
 // Retry attempts a recovery of a session whose budget is spent.
+//
+// It is a manual request: `ccresu retry` and the TUI's retry key are a human
+// asking for one more attempt, so the spend caps do not bind them (PRD 5 R11).
 func (m *Manager) Retry(ctx context.Context, sessionID string) (Outcome, error) {
-	return m.RecoverRequest(ctx, Request{SessionID: sessionID, Force: true})
+	return m.RecoverRequest(ctx, Request{SessionID: sessionID, Force: true, Manual: true})
 }
 
 // RecoverRequest attempts one recovery of a session.
@@ -614,6 +634,16 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 		}
 	}
 
+	// R5: the session spend check runs here, before an attempt row exists, so a
+	// refusal spends nothing — the same rule the attempt budget follows, where a
+	// request that spends no attempt has started nothing. It is a pre-resume
+	// check like the limit check above, so it ends the pass through fail() with
+	// no attempt row behind it.
+	if err := m.checkSessionCap(ctx, sessionID, req.Manual); err != nil {
+		return m.fail(ctx, state, Outcome{SessionID: sessionID}, baseline,
+			storage.RecoveryAttempt{}, Verification{}, err)
+	}
+
 	message := req.Message
 	if strings.TrimSpace(message) == "" {
 		message = m.message
@@ -633,6 +663,11 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 	m.announce(ctx, MilestoneStarted, outcome, nil)
 
 	result, resumeErr := m.provider.ResumeSession(ctx, sessionID, message)
+	// R4: what this attempt cost, as soon as the CLI has said. A nil cost is
+	// *unknown*, not zero, and an unknown attempt neither counts toward a cap nor
+	// blocks a resume (R10). Carrying it on the attempt value is what lets both
+	// the success path and fail() record the same figure.
+	attempt.CostUSD = knownCost(result.TotalCostUSD)
 	if resumeErr != nil {
 		return m.fail(ctx, state, outcome, baseline, attempt, Verification{},
 			fmt.Errorf("resume session %s: %w", sessionID, resumeErr))
@@ -640,6 +675,13 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 	if result.IsError {
 		return m.fail(ctx, state, outcome, baseline, attempt, Verification{},
 			fmt.Errorf("resume session %s: %w: %s", sessionID, claude.ErrResumeFailed, firstLine(result.Result)))
+	}
+
+	// R6: one attempt over the per-attempt cap stops recovery. The check runs
+	// after the cost is known and before the outcome is decided, and fail()
+	// records the cost it judged rather than discarding it.
+	if capErr := m.checkAttemptCap(attempt, attempt.CostUSD); capErr != nil {
+		return m.fail(ctx, state, outcome, baseline, attempt, Verification{}, capErr)
 	}
 
 	verification, verifyErr := m.verifier.Verify(ctx, baseline, result)
@@ -702,6 +744,7 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 		HandoffName:       verification.HandoffName,
 		HandoffAt:         handoffTime(verification, m.now()),
 		HandoffCopied:     handoffCopied(verification),
+		CostUSD:           attempt.CostUSD,
 		// R13: the state the supervisor published is stored verbatim, so a
 		// decision can be re-examined later instead of being re-argued from a
 		// transcript measurement. A handoff has no post-resume observation, so
@@ -797,9 +840,13 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 
 	if !preResume {
 		if _, err := m.store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
-			State:             target,
-			Success:           boolPtr(false),
-			Error:             truncate(cause.Error()),
+			State:   target,
+			Success: boolPtr(false),
+			Error:   truncate(cause.Error()),
+			// The cost is carried on the attempt the caller handed over: it is known
+			// once the resume returns, whether that resume succeeded, failed or
+			// overspent, and it is recorded even when it is the reason for stopping.
+			CostUSD:           attempt.CostUSD,
 			SessionIDVerified: boolPtr(verification.SessionIDPreserved),
 			TranscriptGrew:    boolPtr(verification.TranscriptGrew),
 			// R13: a failed attempt records what was seen as well, because that
@@ -858,7 +905,10 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 	// night. An unrecoverable session is not announced here either: it is a fact
 	// about the conversation rather than a failed attempt, and the operator reads
 	// it from the state.
-	if class == ClassPermanent {
+	// R9: the spend stop uses the existing permanent-failure path, whose subject
+	// is already "Automatic recovery stopped", rather than adding a milestone or a
+	// notification event.
+	if class == ClassPermanent || class == ClassSpendCapReached {
 		m.announce(ctx, MilestonePermanent, outcome, cause)
 	}
 	return outcome, &cycleEndError{SessionID: outcome.SessionID, State: target, Cause: cause}
@@ -940,7 +990,10 @@ func (m *Manager) park(ctx context.Context, state *stateWalker, outcome Outcome,
 // always legal; if a future call site breaks that, move() says so loudly rather
 // than the failure being swallowed.
 func preResumeTarget(target State) State {
-	if target == StateUnrecoverable {
+	// A spend stop and an unrecoverable verdict are destinations: repeating them
+	// on a backoff would be the spending the cap exists to prevent. Everything
+	// else a pre-resume check can decide is worth another look, so it waits.
+	if target == StateUnrecoverable || target == StateSpendCapReached {
 		return target
 	}
 	return StateRetryWait

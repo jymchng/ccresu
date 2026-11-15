@@ -52,6 +52,10 @@ const (
 	// ReasonNoRetryInstant is reported when a session is in RETRY_WAIT without a
 	// stored instant, which also means the store lost it.
 	ReasonNoRetryInstant = "waiting to retry but the next instant is not stored"
+	// ReasonSpendCapReached is reported for a session parked because its recorded
+	// spend reached a configured cap. It names the remedy, because nothing will
+	// happen on its own: the state is deliberately not pending.
+	ReasonSpendCapReached = "paused at the spend cap; raise the cap or run `ccresu recover` to continue"
 )
 
 // NextAttemptFor resolves the next attempt for a session.
@@ -91,6 +95,8 @@ func NextAttemptFor(session storage.Session, sched *storage.Schedule, now time.T
 		return NextAttempt{Reason: ReasonRediscovered}
 	case storage.StateUnrecoverable:
 		return NextAttempt{Reason: ReasonUnrecoverable}
+	case storage.StateSpendCapReached:
+		return NextAttempt{Reason: ReasonSpendCapReached}
 	case storage.StateResumed:
 		return NextAttempt{Reason: ReasonResumed}
 	case storage.StateCompleted:

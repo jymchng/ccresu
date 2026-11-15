@@ -34,6 +34,11 @@ const (
 	// operator's. Handing a continuation to a blocked session would queue it
 	// behind a prompt nobody is there to answer.
 	StateWaitingForInput State = "WAITING_FOR_INPUT"
+	// StateSpendCapReached is a session whose recorded spend reached a
+	// configured cap (PRD 5 R5, R6). It is a budget verdict, not a fact about
+	// the conversation, so it is not terminal and not settled: an operator who
+	// raises the cap, or who asks for one more attempt, can move it on.
+	StateSpendCapReached State = "SPEND_CAP_REACHED"
 )
 
 // allStates is the closed set of states accepted by the database. Validation in
@@ -54,6 +59,7 @@ var allStates = map[State]struct{}{
 	StateDisabled:           {},
 	StateUnrecoverable:      {},
 	StateWaitingForInput:    {},
+	StateSpendCapReached:    {},
 }
 
 // Valid reports whether s is a known state.

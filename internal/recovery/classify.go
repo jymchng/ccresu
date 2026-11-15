@@ -41,12 +41,22 @@ const (
 	// down or the caller cancelled. It is neither the session's fault nor a
 	// reason to spend the remaining budget on a tighter schedule.
 	ClassCanceled Class = "canceled"
+	// ClassSpendCapReached means ccresu refused to spend, or stopped after an
+	// attempt overspent, because a configured spend cap said so (PRD 5 R5, R6).
+	//
+	// It is deliberately not ClassPermanent: a permanent failure returns the
+	// session to DISCOVERED, where the next cycle starts a fresh attempt budget
+	// and resumes again — which is the spending the cap exists to prevent. It is
+	// also not retryable: repeating the attempt cannot change a number that is
+	// already recorded.
+	ClassSpendCapReached Class = "spend-cap-reached"
 )
 
 // Valid reports whether c is a known class.
 func (c Class) Valid() bool {
 	switch c {
-	case ClassRetryable, ClassPermanent, ClassLimitInForce, ClassUnrecoverable, ClassCanceled:
+	case ClassRetryable, ClassPermanent, ClassLimitInForce, ClassUnrecoverable, ClassCanceled,
+		ClassSpendCapReached:
 		return true
 	default:
 		return false
@@ -77,6 +87,8 @@ func (c Class) State() State {
 		return StateUnrecoverable
 	case ClassLimitInForce:
 		return StateWaitingForReset
+	case ClassSpendCapReached:
+		return StateSpendCapReached
 	case ClassRetryable, ClassCanceled:
 		// Worth another attempt on the current schedule, so it waits.
 		return StateRetryWait
@@ -87,6 +99,14 @@ func (c Class) State() State {
 		return StateDiscovered
 	}
 }
+
+// ErrSpendCapReached reports that a configured spend cap stopped recovery for a
+// session (PRD 5 R7).
+//
+// The message names the knob, the configured cap and the observed spend, because
+// that text is what reaches the operator: `permanent_failure` renders
+// EventData.Reason from the failure it was raised with (R9).
+var ErrSpendCapReached = errors.New("recovery: spend cap reached")
 
 // nonRetryable collects the sentinel errors that must never be retried.
 //
@@ -173,6 +193,12 @@ func Classify(err error) Class {
 	}
 	if errors.Is(err, claude.ErrUsageLimitInForce) {
 		return ClassLimitInForce
+	}
+	// A spend stop is decided before the text markers for the same reason a
+	// limit refusal is: its own message names a knob such as
+	// `max_cost_usd_per_session`, and the markers below guess from prose.
+	if errors.Is(err, ErrSpendCapReached) {
+		return ClassSpendCapReached
 	}
 	for _, sentinel := range nonRetryable {
 		if errors.Is(err, sentinel) {

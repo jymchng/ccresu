@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -454,6 +455,14 @@ func (a *App) writeSessionDetail(ctx context.Context, rt *Runtime, id string, w 
 	if err != nil {
 		return fmt.Errorf("transitions for %s: %w", id, err)
 	}
+	// PRD 5: the same figure the spend caps are compared against, and the caps
+	// themselves, so `inspect` answers "why is this session parked" without a
+	// second opinion computed somewhere else.
+	spend, err := rt.Store.SessionSpend(ctx, id)
+	if err != nil {
+		return fmt.Errorf("spend for %s: %w", id, err)
+	}
+	limits := spendLimits(rt)
 
 	now := rt.Clock.Now()
 	var scheduleArg *storage.Schedule
@@ -470,6 +479,7 @@ func (a *App) writeSessionDetail(ctx context.Context, rt *Runtime, id string, w 
 			"schedule":     optional(scheduleErr, schedule),
 			"transitions":  transitions,
 			"next_attempt": nextAttemptReport(next, now),
+			"spend":        spendReport(spend, limits),
 			"supervisor":   a.supervisorReport(ctx, rt, attempt, attemptErr),
 		})
 	}
@@ -488,6 +498,12 @@ func (a *App) writeSessionDetail(ctx context.Context, rt *Runtime, id string, w 
 	a.field(w, "transcript", emptyDash(session.TranscriptPath))
 	a.field(w, "type", session.Type)
 	a.field(w, "last seen", formatTime(session.LastSeenAt, loc))
+	// PRD 5: what the session is recorded to have cost, next to the caps it is
+	// measured against. It is one line because this page is also the sessions
+	// browser's detail screen, and every extra line pushes a section off the
+	// first view. A cap that is off says "off" rather than "$0", because "$0"
+	// reads as "any spend is over the cap".
+	a.field(w, "spend", spendLine(spend, limits))
 
 	// The next attempt is its own block, above the raw records, because it is the
 	// question an operator actually opens `inspect` to answer.
@@ -521,6 +537,9 @@ func (a *App) writeSessionDetail(ctx context.Context, rt *Runtime, id string, w 
 		fmt.Fprintln(w, "Latest attempt")
 		a.field(w, "number", attempt.AttemptNumber)
 		a.field(w, "state", attempt.State)
+		// PRD 5 R4/R10: what this attempt cost, or "unknown" — never "$0" for a
+		// figure the CLI did not report.
+		a.field(w, "cost", formatCost(attempt.CostUSD))
 		a.field(w, "started", formatTime(attempt.StartedAt, loc))
 		a.field(w, "finished", formatTime(attempt.FinishedAt, loc))
 		if attempt.Command != "" {
@@ -792,6 +811,76 @@ func emptyDash(s string) string {
 	return s
 }
 
+// spendLimits reports the caps the running manager enforces, so a renderer can
+// show them next to the spend they are compared against.
+//
+// A runtime with no manager (a test, or a caller that built only a store) has no
+// caps, which is the same answer as a configuration that sets none.
+func spendLimits(rt *Runtime) recovery.SpendLimits {
+	if rt == nil || rt.Recovery == nil {
+		return recovery.SpendLimits{}
+	}
+	return rt.Recovery.Limits()
+}
+
+// spendReport is the JSON form of what a session is recorded to have cost and the
+// caps it is measured against. `null` for a cap means "off", which is a different
+// fact from a cap of zero that would bind everything.
+func spendReport(spend storage.SpendRecord, limits recovery.SpendLimits) map[string]any {
+	report := map[string]any{
+		"known_usd": spend.KnownUSD,
+		"known":     spend.Known,
+		"unknown":   spend.Unknown,
+	}
+	if limits.SessionCapped() {
+		report["session_cap_usd"] = limits.PerSession
+	} else {
+		report["session_cap_usd"] = nil
+	}
+	if limits.AttemptCapped() {
+		report["attempt_cap_usd"] = limits.PerAttempt
+	} else {
+		report["attempt_cap_usd"] = nil
+	}
+	return report
+}
+
+// formatUSD renders a recorded cost the way an operator reads one: with a dollar
+// sign and no rounded-away cents.
+func formatUSD(v float64) string {
+	return "$" + strconv.FormatFloat(v, 'f', -1, 64)
+}
+
+// formatCost renders an attempt's recorded cost, or "unknown" when the CLI
+// reported none (PRD 5 R10). A nil cost must never read as "$0".
+func formatCost(cost *float64) string {
+	if cost == nil {
+		return "unknown"
+	}
+	return formatUSD(*cost)
+}
+
+// capOrOff renders a configured cap, or the word that says none is configured.
+func capOrOff(limit float64) string {
+	if limit <= 0 {
+		return "off"
+	}
+	return formatUSD(limit)
+}
+
+// spendLine renders the spend summary as one line, because `inspect` is also the
+// sessions browser's detail page and every extra line pushes a section off the
+// first screen.
+func spendLine(spend storage.SpendRecord, limits recovery.SpendLimits) string {
+	attempts := fmt.Sprintf("%d attempt(s)", spend.Known+spend.Unknown)
+	if spend.Unknown > 0 {
+		attempts = fmt.Sprintf("%d attempt(s), %d with no reported cost", spend.Known+spend.Unknown, spend.Unknown)
+	}
+	return fmt.Sprintf("%s recorded across %s (session cap %s, attempt cap %s)",
+		formatUSD(spend.KnownUSD), attempts,
+		capOrOff(limits.PerSession), capOrOff(limits.PerAttempt))
+}
+
 // cmdHistory prints the attempts and state transitions of one session.
 func (a *App) cmdHistory(ctx context.Context, args []string) error {
 	fs := a.flags("history", "history <session-id> [--limit N]")
@@ -828,11 +917,16 @@ func (a *App) cmdHistory(ctx context.Context, args []string) error {
 		return fmt.Errorf("transitions for %s: %w", id, err)
 	}
 	if a.json {
+		spend, err := rt.Store.SessionSpend(ctx, id)
+		if err != nil {
+			return fmt.Errorf("spend for %s: %w", id, err)
+		}
 		return a.writeJSON(a.stdout, map[string]any{
 			"session_id":  session.ID,
 			"state":       session.State,
 			"attempts":    attempts,
 			"transitions": transitions,
+			"spend":       spendReport(spend, spendLimits(rt)),
 		})
 	}
 
@@ -858,11 +952,12 @@ func (a *App) cmdHistory(ctx context.Context, args []string) error {
 				string(attempt.State),
 				formatTime(attempt.StartedAt, loc),
 				formatTime(attempt.FinishedAt, loc),
+				formatCost(attempt.CostUSD),
 				result,
 				truncateText(attempt.Error, 40),
 			})
 		}
-		a.table(a.stdout, []string{"#", "STATE", "STARTED", "FINISHED", "RESULT", "ERROR"}, rows)
+		a.table(a.stdout, []string{"#", "STATE", "STARTED", "FINISHED", "COST", "RESULT", "ERROR"}, rows)
 		fmt.Fprintln(a.stdout, "")
 	}
 
@@ -914,6 +1009,9 @@ func (a *App) cmdRecover(ctx context.Context, args []string) error {
 		SessionID: id,
 		Message:   *message,
 		Force:     *force,
+		// PRD 5 R11: this is a human asking, so the spend caps do not bind it.
+		// The attempt's cost is still recorded, and the override is logged.
+		Manual: true,
 	})
 	if err != nil {
 		return fmt.Errorf("recover %s: %w", id, err)

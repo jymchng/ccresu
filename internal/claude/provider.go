@@ -46,6 +46,9 @@ type Options struct {
 	// MinimumVersion overrides the supported-version floor. Tests use it to
 	// keep fixtures stable.
 	MinimumVersion *Version
+	// Guardrails are the flags every handoff carries (PRD 5 R2). The zero value
+	// adds none, which is today's behaviour exactly.
+	Guardrails Guardrails
 }
 
 // Provider is the default SessionProvider: `claude agents --json` for live
@@ -93,8 +96,9 @@ func New(opts Options) (*Provider, error) {
 		// Home and an explicit one both end up as the same absolute directory, and
 		// that one value is what every command runs with (R9). Resolving it twice
 		// is how a read and a handoff end up on different supervisors.
-		ConfigDir: store.Home(),
-		Logger:    logger,
+		ConfigDir:  store.Home(),
+		Logger:     logger,
+		Guardrails: opts.Guardrails,
 	})
 	return &Provider{
 		cli:   cli,

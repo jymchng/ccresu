@@ -147,6 +147,10 @@ func BuildRuntime(ctx context.Context, cfg *config.Config, clk clock.Clock, log 
 		Clock:      clk,
 		Logger:     log,
 		All:        cfg.Claude.DiscoverAllSessions,
+		// PRD 5 R2: the four handoff-safe flags ride every resume. An unset knob
+		// adds nothing, so a config with no guardrails produces the vector it did
+		// before this PRD.
+		Guardrails: guardrailsFromConfig(cfg),
 	})
 	if err != nil {
 		_ = store.Close()
@@ -215,6 +219,25 @@ func BuildRuntime(ctx context.Context, cfg *config.Config, clk clock.Clock, log 
 	return runtime, nil
 }
 
+// guardrailsFromConfig maps the configured guardrails onto the flags a handoff
+// may carry.
+//
+// The two spend caps are deliberately absent: they are ccresu's own checks, not
+// CLI flags, and the flags that would express them are print mode only (PRD 5
+// §6.1). What is left is the four flags a `--bg` handoff accepts.
+func guardrailsFromConfig(cfg *config.Config) claude.Guardrails {
+	if cfg == nil {
+		return claude.Guardrails{}
+	}
+	g := cfg.Recovery.Guardrails
+	return claude.Guardrails{
+		Model:          g.Model,
+		Effort:         g.Effort,
+		FallbackModel:  g.FallbackModel,
+		PermissionMode: g.PermissionMode,
+	}
+}
+
 // recoveryFromConfig mirrors recovery.FromConfig and additionally installs the
 // structured logger and the milestone observer, which FromConfig cannot take
 // without changing its verified signature.
@@ -244,7 +267,11 @@ func recoveryFromConfig(cfg *config.Config, store *storage.Store, provider claud
 		ContinuationMessage: cfg.Claude.ContinuationMessage,
 		VerificationTimeout: rec.VerificationTimeout.Duration,
 		HealthCheckInterval: rec.HealthCheckInterval.Duration,
-		LimitPark:           park,
+		Limits: recovery.SpendLimits{
+			PerSession: rec.Guardrails.MaxCostUSDPerSession,
+			PerAttempt: rec.Guardrails.MaxCostUSDPerAttempt,
+		},
+		LimitPark: park,
 		// The observer is the notification producer: it is passed in rather than
 		// built here so this function stays a pure mapping of configuration onto
 		// policy, and so a caller with no notifier passes nil and announces

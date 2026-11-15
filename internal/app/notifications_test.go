@@ -320,3 +320,55 @@ func TestEveryMilestoneHasAnEvent(t *testing.T) {
 		t.Errorf("MilestoneNeedsInput maps to %q, want %q", event, storage.EventNeedsInput)
 	}
 }
+
+// TestSpendStopAnnouncesPermanentFailure is PRD 5 R9: a session stopped at a
+// spend cap is announced through the existing permanent-failure path — one
+// event, whose subject already says automatic recovery stopped — rather than a
+// new event name.
+func TestSpendStopAnnouncesPermanentFailure(t *testing.T) {
+	h := newHarnessWith(t, recovery.SpendLimits{PerAttempt: 0.1})
+	readyToResume(t, h)
+	growOnResume(h)
+	cost := 0.42
+	result := h.provider.ResumeResults[canonicalSessionID]
+	result.TotalCostUSD = &cost
+	h.provider.ResumeResults[canonicalSessionID] = result
+
+	if code, _, _ := h.exec(t, "recover", canonicalSessionID); code == ExitOK {
+		t.Fatal("recover of an attempt over the per-attempt cap reported success")
+	}
+
+	if got := countEvent(h, storage.EventPermanentFailure); got != 1 {
+		t.Fatalf("permanent_failure queued %d times, want 1 (%v)", got, queuedEvents(h))
+	}
+	// A spend stop is not a retryable failure: announcing both would tell the
+	// operator ccresu is still working on it while it has parked the session.
+	if got := countEvent(h, storage.EventRecoveryFailure); got != 0 {
+		t.Errorf("recovery_failure queued %d times for a spend stop, want 0", got)
+	}
+	for _, req := range h.notifier.queued() {
+		if req.Event != storage.EventPermanentFailure {
+			continue
+		}
+		if req.AttemptID == 0 {
+			t.Error("permanent_failure carried no attempt id, so its dedupe key cannot identify the attempt")
+		}
+		if !strings.Contains(req.Data.Reason, "max_cost_usd_per_attempt") {
+			t.Errorf("reason = %q, want it to name the knob that stopped recovery", req.Data.Reason)
+		}
+		if req.Data.State != string(storage.StateSpendCapReached) {
+			t.Errorf("state = %q, want %q", req.Data.State, storage.StateSpendCapReached)
+		}
+	}
+
+	// The event vocabulary is PRD 4's; a spend stop must not extend it.
+	for _, event := range queuedEvents(h) {
+		switch event {
+		case storage.EventRecoveryStarted, storage.EventRecoverySuccess,
+			storage.EventRecoveryFailure, storage.EventPermanentFailure,
+			storage.EventNeedsInput:
+		default:
+			t.Errorf("queued unknown event %q; PRD 5 introduces no new event", event)
+		}
+	}
+}

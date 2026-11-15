@@ -136,6 +136,7 @@ func (d *Daemon) Step(ctx context.Context) error {
 		{"discover", d.discover},
 		{"detect", d.detect},
 		{"schedule", d.actOnSchedules},
+		{"unpark", d.unparkAffordable},
 		{"recover", d.recoverPending},
 		{"complete", d.notifyCompleted},
 		{"attention", d.pruneAttention},
@@ -460,6 +461,30 @@ func (d *Daemon) markResetReached(ctx context.Context, sessionID string) {
 		"the scheduled reset time has arrived", 0); err != nil {
 		rt.Log.Warn("record the reset for a due schedule", "session", sessionID, "error", err)
 	}
+}
+
+// unparkAffordable releases sessions parked at a spend cap once the cap no
+// longer binds them (PRD 5's "cap raised while a session is parked" case).
+//
+// It is a stage of its own because it is neither a discovery nor a recovery: no
+// resume is issued here, and the session is moved no further than DISCOVERED,
+// where the ordinary cycle decides what happens next. R8 keeps SPEND_CAP_REACHED
+// out of PendingStates precisely so that no pass can resume it; releasing it is
+// the one thing a pass may do, and only because the operator changed the number
+// that parked it.
+func (d *Daemon) unparkAffordable(ctx context.Context) error {
+	rt := d.runtime
+	if rt.Recovery == nil {
+		return nil
+	}
+	released, err := rt.Recovery.UnparkAffordable(ctx)
+	if err != nil {
+		return err
+	}
+	if released > 0 {
+		rt.Log.Info("released sessions parked at a spend cap", "sessions", released)
+	}
+	return nil
 }
 
 // recoverPending recovers sessions that are waiting to be retried.

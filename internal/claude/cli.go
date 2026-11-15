@@ -76,6 +76,8 @@ type CLI struct {
 	minVersion     Version
 	configDir      string
 	log            *slog.Logger
+	// guardrails are the flags every handoff carries (PRD 5 R2).
+	guardrails Guardrails
 
 	mu          sync.Mutex
 	version     Version
@@ -93,6 +95,7 @@ func NewCLI(opts CLIOptions) *CLI {
 		maxOutputBytes: opts.MaxOutputBytes,
 		configDir:      strings.TrimSpace(opts.ConfigDir),
 		log:            opts.Logger,
+		guardrails:     opts.Guardrails,
 	}
 	if c.bin == "" {
 		c.bin = DefaultExecutable
@@ -273,7 +276,9 @@ func (c *CLI) Resume(ctx context.Context, sessionID, message, dir string) (Resum
 		return ResumeResult{}, err
 	}
 
-	args := HandoffArgs(sessionID, message)
+	// The guardrail flags ride the handoff, and an unset knob adds nothing: a
+	// config with no guardrails produces the same vector as before PRD 5.
+	args := HandoffArgs(sessionID, message, c.guardrails)
 	result := ResumeResult{
 		RequestedSessionID: sessionID,
 		Command:            append([]string{c.bin}, args...),
@@ -281,6 +286,10 @@ func (c *CLI) Resume(ctx context.Context, sessionID, message, dir string) (Resum
 	}
 	out, runErr := c.runIn(ctx, c.handoffTimeout, dir, nil, args...)
 	result.Handoff = Handoff{Raw: strings.TrimSpace(string(out.Stdout))}
+	// R4: what the turn cost, when the CLI says. It is read before the error
+	// checks because an attempt that failed still spent whatever it spent, and a
+	// nil figure stays nil — unknown, never zero (R10).
+	result.TotalCostUSD = ParseReportedCost(out.Stdout)
 	if runErr != nil || out.ExitCode != 0 {
 		if WorkspaceNotTrusted(out) {
 			// The remedy is the operator's: trust the directory, or resume

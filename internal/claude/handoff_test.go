@@ -176,3 +176,103 @@ func TestHandoffArgsNeverCarriesPrintMode(t *testing.T) {
 		}
 	}
 }
+
+// TestGuardrailFlagsRideTheHandoff is R2: the four flags with no print-mode
+// restriction are appended when configured, in a fixed order, and a value is
+// never passed as an empty argument.
+func TestGuardrailFlagsRideTheHandoff(t *testing.T) {
+	t.Parallel()
+
+	full := Guardrails{
+		Model:          "claude-sonnet-4-6",
+		Effort:         "high",
+		FallbackModel:  "claude-haiku-4-5,claude-sonnet-4-6",
+		PermissionMode: "dontAsk",
+	}
+	argv := HandoffArgs(testSessionID, "continue", full)
+	want := []string{
+		"--bg", "--resume", testSessionID, "--name", HandoffLabel(testSessionID),
+		"--model", "claude-sonnet-4-6",
+		"--effort", "high",
+		"--fallback-model", "claude-haiku-4-5,claude-sonnet-4-6",
+		"--permission-mode", "dontAsk",
+		"continue",
+	}
+	if len(argv) != len(want) {
+		t.Fatalf("HandoffArgs = %q, want %q", argv, want)
+	}
+	for i := range want {
+		if argv[i] != want[i] {
+			t.Fatalf("HandoffArgs[%d] = %q, want %q (full vector %q)", i, argv[i], want[i], argv)
+		}
+	}
+
+	// One knob at a time: the others stay absent rather than arriving empty.
+	for _, tc := range []struct {
+		name string
+		set  Guardrails
+		flag string
+	}{
+		{"model", Guardrails{Model: "m"}, "--model"},
+		{"effort", Guardrails{Effort: "low"}, "--effort"},
+		{"fallback", Guardrails{FallbackModel: "f"}, "--fallback-model"},
+		{"permission", Guardrails{PermissionMode: "dontAsk"}, "--permission-mode"},
+	} {
+		argv := HandoffArgs(testSessionID, "continue", tc.set)
+		if got := strings.Join(argv, " "); !strings.Contains(got, tc.flag+" ") {
+			t.Errorf("%s: HandoffArgs = %q, want it to carry %s", tc.name, argv, tc.flag)
+		}
+		for _, other := range []string{"--model", "--effort", "--fallback-model", "--permission-mode"} {
+			if other == tc.flag {
+				continue
+			}
+			if strings.Contains(strings.Join(argv, " "), other) {
+				t.Errorf("%s: HandoffArgs = %q, want no %s from an unset knob", tc.name, argv, other)
+			}
+		}
+	}
+
+	// Whitespace is not a value: it must be omitted, not passed as " ".
+	blank := HandoffArgs(testSessionID, "continue", Guardrails{Model: "   ", Effort: "\t"})
+	if strings.Contains(strings.Join(blank, " "), "--model") || strings.Contains(strings.Join(blank, " "), "--effort") {
+		t.Errorf("HandoffArgs = %q, want blank knobs omitted entirely", blank)
+	}
+}
+
+// TestUnsetGuardrailsProduceTheUnguardedVector pins the identity the variadic
+// signature exists for: no guardrails and an empty guardrail set are the same
+// vector, element for element.
+func TestUnsetGuardrailsProduceTheUnguardedVector(t *testing.T) {
+	t.Parallel()
+
+	bare := HandoffArgs(testSessionID, "continue")
+	empty := HandoffArgs(testSessionID, "continue", Guardrails{})
+	if len(bare) != len(empty) {
+		t.Fatalf("HandoffArgs() = %q, HandoffArgs(Guardrails{}) = %q, want identical vectors", bare, empty)
+	}
+	for i := range bare {
+		if bare[i] != empty[i] {
+			t.Fatalf("vector differs at %d: %q vs %q", i, bare[i], empty[i])
+		}
+	}
+
+	// The four print-mode-only flags, plus --print/-p, must remain unreachable
+	// from a fully populated guardrail set (R3). The comparison is per argv
+	// element: a substring search would match "-p" inside "--permission-mode".
+	full := Guardrails{
+		Model:          "m",
+		Effort:         "high",
+		FallbackModel:  "f",
+		PermissionMode: "dontAsk",
+	}
+	forbidden := map[string]bool{
+		"--max-budget-usd": true, "--max-turns": true, "--json-schema": true,
+		"--permission-prompts": true, "--permission-prompt-tool": true,
+		"--print": true, "-p": true, "--output-format": true,
+	}
+	for _, arg := range HandoffArgs(testSessionID, "continue", full) {
+		if forbidden[arg] {
+			t.Errorf("vector = %q, want no %s on a handoff", HandoffArgs(testSessionID, "continue", full), arg)
+		}
+	}
+}

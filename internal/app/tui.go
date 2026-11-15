@@ -625,7 +625,7 @@ func (b *browser) act(ctx context.Context, action string) error {
 		var manager *recovery.Manager
 		if manager, err = b.app.requireRecovery(b.rt); err == nil {
 			var outcome recovery.Outcome
-			if outcome, err = manager.RecoverRequest(ctx, recovery.Request{SessionID: session.ID}); err == nil {
+			if outcome, err = manager.RecoverRequest(ctx, recovery.Request{SessionID: session.ID, Manual: true}); err == nil {
 				message = outcomeMessage(action, session.ID, outcome)
 			}
 		}

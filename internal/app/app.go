@@ -684,6 +684,11 @@ func (a *App) loadConfig() (*config.Config, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("load configuration %s: empty document", path)
 	}
+	// Advisory configuration problems are reported here, once per load, so an
+	// operator learns them at startup rather than once per attempt (PRD 5 §6.4).
+	for _, warning := range cfg.Warnings() {
+		fmt.Fprintf(a.stderr, "warning: %s\n", warning)
+	}
 	return cfg, nil
 }
 

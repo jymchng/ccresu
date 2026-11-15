@@ -279,6 +279,48 @@ func (s *Store) ListAttempts(ctx context.Context, sessionID string, limit int) (
 	return attempts, nil
 }
 
+// SpendRecord is what a session's attempts are known to have cost.
+//
+// KnownUSD is the sum of the costs the CLI actually reported. Unknown counts the
+// attempts whose cost was never reported, and they contribute nothing: PRD 5 R10
+// requires an unmeasured attempt to neither count toward a cap nor block a
+// resume, and an attempt with unknown cost is explicitly ungoverned rather than
+// assumed free. Reporting both numbers is what lets a caller say "at least this
+// much, and N attempts we cannot price" instead of inventing a total.
+type SpendRecord struct {
+	KnownUSD float64
+	Known    int
+	Unknown  int
+}
+
+// SessionSpend sums the recorded attempt costs of one session.
+//
+// The sum is over the database, never over a figure read back from the CLI: a
+// resumed conversation's running total does not include work done before the
+// resume, so the CLI cannot answer "what has this series cost" (PRD 5 §6.3).
+func (s *Store) SessionSpend(ctx context.Context, sessionID string) (SpendRecord, error) {
+	if s == nil || s.db == nil {
+		return SpendRecord{}, ErrClosed
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return SpendRecord{}, fmt.Errorf("%w: spend session id is required", ErrInvalid)
+	}
+	var spend SpendRecord
+	var known, total int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(cost_usd), 0), COUNT(cost_usd), COUNT(*)
+		  FROM recovery_attempts WHERE session_id = ?`, sessionID).
+		Scan(&spend.KnownUSD, &known, &total)
+	if err != nil {
+		return SpendRecord{}, fmt.Errorf("sum spend for %s: %w", sessionID, err)
+	}
+	// COUNT(column) counts the non-NULL rows and COUNT(*) counts them all, so
+	// the difference is exactly the attempts whose cost is unknown.
+	spend.Known = int(known)
+	spend.Unknown = int(total - known)
+	return spend, nil
+}
+
 // CountAttempts returns how many attempts a session has used, which is what the
 // retry budget is checked against.
 func (s *Store) CountAttempts(ctx context.Context, sessionID string) (int, error) {

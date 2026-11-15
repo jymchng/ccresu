@@ -2,8 +2,10 @@ package claude
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -331,8 +333,15 @@ type ResumeResult struct {
 	NumTurns int
 	// DurationMS is the CLI-reported turn duration.
 	DurationMS int
-	// TotalCostUSD is the CLI-reported cost, when present.
-	TotalCostUSD float64
+	// TotalCostUSD is what the CLI reported the turn cost, in US dollars.
+	//
+	// Nil means *not reported*, which is the normal case for a `--bg` handoff:
+	// the handoff returns as soon as the supervisor accepts the session, so
+	// there is no finished turn to price. It is a pointer rather than a zero
+	// float because PRD 5 R10 requires an unreported cost to be recorded as
+	// unknown and to neither count toward a spend cap nor block a resume — a
+	// zero would make every unmeasured attempt look free.
+	TotalCostUSD *float64
 	// Model is the model that produced the turn, when reported.
 	Model string
 	// Command is the exact argv that was executed.
@@ -383,4 +392,53 @@ func sortSessions(sessions []Session) {
 		}
 		return a.ID < b.ID
 	})
+}
+
+// ParseReportedCost reads the cost the CLI reported for a turn, or nil when it
+// reported none.
+//
+// The handoff's human block carries no price, so the only source is a JSON result
+// object the CLI prints alongside it — `{"type":"result","total_cost_usd":0.42}`.
+// It is scanned line by line rather than decoded as one document, because the
+// block and the result can share stdout. A value that is not a finite,
+// non-negative number reads as *unknown* rather than zero (R10): a zero would make
+// an unmeasured attempt look free, and a negative or absurd figure could move a
+// session past or below a cap.
+func ParseReportedCost(stdout []byte) *float64 {
+	for _, line := range strings.Split(string(stdout), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "{") || !strings.Contains(trimmed, `"total_cost_usd"`) {
+			continue
+		}
+		var reported struct {
+			TotalCostUSD *json.Number `json:"total_cost_usd"`
+		}
+		if err := json.Unmarshal([]byte(trimmed), &reported); err != nil || reported.TotalCostUSD == nil {
+			continue
+		}
+		value, err := reported.TotalCostUSD.Float64()
+		if err != nil {
+			continue
+		}
+		return KnownCost(&value)
+	}
+	return nil
+}
+
+// KnownCost turns a provider-reported cost into the value PRD 5 may act on, or
+// nil when nothing usable was reported.
+//
+// A negative, NaN or infinite figure is treated as *unknown* rather than as a
+// number: the cap exists to stop spending, and a bad value must never be able to
+// move a session past it (by looking enormous) or below it (by looking negative
+// or zero). Silently clamping instead would record a cost the CLI never stated.
+func KnownCost(reported *float64) *float64 {
+	if reported == nil {
+		return nil
+	}
+	value := *reported
+	if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return nil
+	}
+	return &value
 }
