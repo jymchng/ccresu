@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Output is the captured result of running an external command.
@@ -40,6 +41,17 @@ type RunOptions struct {
 
 // DefaultMaxOutputBytes caps captured command output at 4 MiB per stream.
 const DefaultMaxOutputBytes = 4 << 20
+
+// DefaultWaitDelay bounds how long Run waits for a finished command's output pipes
+// to close.
+//
+// Killing the process on a missed deadline is not enough: Wait also waits for the
+// stdout and stderr pipes, and a grandchild that inherited them keeps them open,
+// so a call that missed its deadline could still block indefinitely. Measured
+// against a stand-in that slept in a child, the browser's 30-second query timeout
+// produced no frame after 45 seconds. WaitDelay is what turns "until something
+// else happens" into a bound.
+const DefaultWaitDelay = 2 * time.Second
 
 // Execer runs an external program and captures its output.
 //
@@ -75,6 +87,9 @@ func (OSExecer) Run(ctx context.Context, name string, args []string, opts RunOpt
 	// leak; the cancel is deferred below.
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = opts.Dir
+	// A descendant that inherited the output pipes must not be able to hold the
+	// call open past its deadline (see DefaultWaitDelay).
+	cmd.WaitDelay = DefaultWaitDelay
 	if len(opts.Env) > 0 {
 		cmd.Env = append(os.Environ(), opts.Env...)
 	}

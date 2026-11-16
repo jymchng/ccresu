@@ -192,7 +192,7 @@ release this set produced:
 
 | PRD | Problem it settles, in one line | Status |
 |---|---|---|
-| [`unresponsive-sessions-browser.md`](unresponsive-sessions-browser.md) | The sessions browser runs `claude` on the goroutine that reads the keyboard, so Enter paints nothing until the CLI answers and the keys pressed meanwhile act on the screen that answer produced | `Proposed` — design only |
+| [`unresponsive-sessions-browser.md`](unresponsive-sessions-browser.md) | The sessions browser runs `claude` on the goroutine that reads the keyboard, so Enter paints nothing until the CLI answers and the keys pressed meanwhile act on the screen that answer produced | `Implemented` in `v0.7.0` — its §8 records where the implementation departs from the design |
 
 It keeps the standing constraints of §4 that apply to it — no new module
 dependency, linear history, no tag or release from a PRD, and a **Migration**

@@ -119,6 +119,56 @@ Two of them deserve a word:
   `, K left forgotten` when tombstones were skipped. The same rows appear on the
   daemon's next pass, so pressing it twice is harmless.
 
+#### While a command runs
+
+Four of the keys run a command that invokes `claude` — `enter` and `i` render the
+status page, `n` runs a discovery pass, and `r` and `R` run a recovery — and any
+of them can take seconds. None of them runs on the goroutine that reads the
+keyboard, so the browser keeps drawing and keeps answering while they do:
+
+```console
+busy: discovering… (ctrl-c cancels)
+```
+
+While that line is up the keys that start work — `enter`, `i`, `n`, `e`, `d`,
+`r`, `R`, `x` — are **refused** with the same line rather than queued, because a
+queued key is applied to the screen the command produced: a second `enter` used
+to open the detail page and close it again before it could be read. Movement,
+`?`, `ctrl-c` and `q` keep working. `ctrl-c` cancels the command — its context is
+cancelled, so the `claude` call behind it is killed — and leaves the browser open
+on the list with `cancelled` on the status line; `q` cancels and quits.
+
+The commands are the ones that are slow, and their budgets are their own: a
+recovery is bounded by `recovery.startup_timeout` and
+`recovery.verification_timeout`, and a discovery pass by the CLI's query timeout.
+`ctrl-c` is the bound that always applies.
+
+#### The detail screen
+
+`enter` paints the page `ccresu sessions status <id>` prints, in two parts. The
+session's own facts come from ccresu's store and are painted from the keystroke;
+the supervisor block costs an invocation of `claude`, so it is read *behind* the
+page and filled in when it answers:
+
+```console
+reading the supervisor… (the page fills in)
+```
+
+If it does not answer within five seconds the block says so — `status: not read`
+with the call that did not answer — and the rest of the page is unaffected.
+Nothing else on that page waits for the CLI, and the block is never polled.
+
+The page scrolls, and its footer is its own key map:
+
+| Key | What it does |
+| --- | --- |
+| `j / down` | scroll down one line |
+| `k / up` | scroll up one line |
+| `g / home` | first line |
+| `G / end` | last line |
+| `enter / q / esc` | back to the list |
+| `ctrl-c` | back to the list |
+
 The listing shows 15 rows per page and says `rows 16-30 of 57` when there are
 more; `j`/`k` and `g`/`G` move within it. The filter is a case-insensitive
 substring match on everything the row is derived from — id, transcript path,
@@ -159,12 +209,26 @@ byte-for-byte what it was before the browser existed, and `--no-tui` on a
 terminal prints exactly the bytes a pipe would, so the two can never drift.
 
 The browser takes the alternate screen and hides the cursor on the way in, and it
-puts both back on **every** exit path — quit, `ctrl-c`, end of input, or an error
-— so a crash cannot leave your terminal unusable. `ctrl-c` is read as a
-keystroke rather than a signal (`ISIG` is cleared while the browser runs), which
-is why it exits cleanly and restores the screen instead of killing the process
-mid-paint. Raw mode is best-effort: a terminal that refuses it still works,
-because the decoder accepts a typed key followed by Enter.
+puts both back on **every** exit path it controls — quit, `ctrl-c`, end of input,
+an error, and `SIGTERM`, `SIGINT` or `SIGHUP` from outside, which are turned into
+a return so the restore can run. `ctrl-c` is read as a keystroke rather than a
+signal (`ISIG` is cleared while the browser runs), which is why it cancels a
+running command and exits cleanly instead of killing the process mid-paint. Raw
+mode is best-effort: a terminal that refuses it still works, because the decoder
+accepts a typed key followed by Enter.
+
+A lone `esc` is a key like any other. Decoding an escape sequence means looking
+at the byte after it, and a terminal sends ESC and then waits for you, so the
+decoder keeps the escape pending and decides it after 50 ms rather than when the
+next keystroke arrives. (`os.Stdin` on a Linux terminal cannot carry a read
+deadline — "file type does not support deadline" — which is why the bound is a
+timer.)
+
+`SIGKILL` cannot be caught, so a browser killed that way cannot restore anything:
+the terminal keeps the alternate screen and no echo until you run `reset` (or
+`stty sane`) in it. That is the only exit path that needs you, and it is why a
+running command is cancellable — killing the browser is never the right way to
+stop one.
 
 The keys come from stdin, so `printf 'q' | ccresu sessions --tui` is a legal way
 to script it: the browser draws and then quits at end of input.

@@ -177,9 +177,12 @@ type harness struct {
 
 	// terminal is what IsTerminal reports, so a test can put `sessions` in front
 	// of an interactive stdout without owning a real terminal; keys is the
-	// keystroke stream the browser reads instead of os.Stdin.
-	terminal bool
-	keys     string
+	// keystroke stream the browser reads instead of os.Stdin. keysReader, when
+	// set, is that stream instead: a test that has to observe a browser *while* it
+	// runs writes to a pipe rather than handing over a finished string.
+	terminal   bool
+	keys       string
+	keysReader io.Reader
 	// stdin is the payload `ccresu hook` reads. It is a string rather than a
 	// reader because deps() is called once per invocation and a consumed reader
 	// would make the second call read nothing.
@@ -329,9 +332,17 @@ func (h *harness) deps() Deps {
 		// not; the harness answers for it so both the table and the browser paths
 		// are reachable without a terminal.
 		IsTerminal: func(io.Writer) bool { return h.terminal },
-		TUIInput:   stringReader(h.keys),
+		TUIInput:   h.tuiInput(),
 		Stdin:      stringReader(h.stdin),
 	}
+}
+
+// tuiInput is the keystroke stream this invocation reads.
+func (h *harness) tuiInput() io.Reader {
+	if h.keysReader != nil {
+		return h.keysReader
+	}
+	return stringReader(h.keys)
 }
 
 // stringReader returns a reader over s, re-reading the harness keystrokes for
@@ -343,8 +354,128 @@ func stringReader(s string) io.Reader { return strings.NewReader(s) }
 func (h *harness) runWithKeys(keys string, args ...string) int {
 	h.terminal = true
 	h.keys = keys
+	h.keysReader = nil
 	return h.run(args...)
 }
+
+// pacedInput drives a browser that is already running.
+//
+// runWithKeys hands over every keystroke at once, which is what a test wants when
+// it only cares about the final screen. A browser that must be observed *while* it
+// waits needs the opposite: keys written one at a time, each one only after the
+// screen has said what the previous one did.
+type pacedInput struct {
+	writer *io.PipeWriter
+	out    *syncBuffer
+	done   chan int
+	exited bool
+}
+
+// startBrowser runs one invocation in the background and returns its keystroke
+// stream.
+func (h *harness) startBrowser(t *testing.T, args ...string) *pacedInput {
+	t.Helper()
+	reader, writer := io.Pipe()
+	h.terminal = true
+	h.keys = ""
+	h.keysReader = reader
+	// The reset has to happen before the goroutine starts, so a wait that follows
+	// cannot read the previous invocation's frames.
+	h.stdout.Reset()
+	h.stderr.Reset()
+	paced := &pacedInput{writer: writer, out: &h.stdout, done: make(chan int, 1)}
+	go func() { paced.done <- h.run(args...) }()
+	t.Cleanup(func() {
+		_ = writer.Close()
+		if paced.exited {
+			return
+		}
+		select {
+		case <-paced.done:
+		case <-time.After(5 * time.Second):
+			t.Errorf("the browser did not exit after its input closed")
+		}
+	})
+	return paced
+}
+
+// send writes keys to the browser.
+func (p *pacedInput) send(t *testing.T, keys string) {
+	t.Helper()
+	if _, err := io.WriteString(p.writer, keys); err != nil {
+		t.Fatalf("send %q: %v", keys, err)
+	}
+}
+
+// waitForScreen blocks until the newest frame contains marker.
+//
+// It reads the frame the browser has most recently painted rather than everything
+// it has ever written, so "the supervisor block appeared" cannot be satisfied by
+// an earlier screen that happened to contain the same words.
+func (p *pacedInput) waitForScreen(t *testing.T, marker string) {
+	t.Helper()
+	p.waitForScreenWithin(t, marker, 5*time.Second)
+}
+
+// waitForScreenWithin is waitForScreen with an explicit bound, for the one case
+// whose subject is a timeout.
+func (p *pacedInput) waitForScreenWithin(t *testing.T, marker string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if strings.Contains(lastScreen(p.out.String()), marker) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %q; last screen:\n%s", marker, lastScreen(p.out.String()))
+}
+
+// waitForScreenWithout blocks until the newest frame no longer contains marker.
+func (p *pacedInput) waitForScreenWithout(t *testing.T, marker string) {
+	t.Helper()
+	p.waitForScreenWithoutWithin(t, marker, 5*time.Second)
+}
+
+// waitForScreenWithoutWithin is waitForScreenWithout with an explicit bound.
+func (p *pacedInput) waitForScreenWithoutWithin(t *testing.T, marker string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !strings.Contains(lastScreen(p.out.String()), marker) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("%q is still on screen; last screen:\n%s", marker, lastScreen(p.out.String()))
+}
+
+// quit sends q and returns the exit code.
+//
+// Two of them, because q means "close this screen" on the detail screen and
+// "quit" on the list: a test that finishes from the detail screen must not depend
+// on which screen the browser happened to be showing.
+func (p *pacedInput) quit(t *testing.T) int {
+	t.Helper()
+	p.send(t, "qq")
+	return p.wait(t)
+}
+
+// wait returns the exit code once the invocation has returned.
+func (p *pacedInput) wait(t *testing.T) int {
+	t.Helper()
+	select {
+	case code := <-p.done:
+		p.exited = true
+		return code
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the browser did not exit; last screen:\n%s", lastScreen(p.out.String()))
+		return -1
+	}
+}
+
+// screen returns the newest frame the browser painted.
+func (p *pacedInput) screen() string { return lastScreen(p.out.String()) }
 
 // run executes one CLI invocation and returns its exit code.
 func (h *harness) run(args ...string) int {

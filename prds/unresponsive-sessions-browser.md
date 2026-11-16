@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | `Proposed` — design only. Nothing described here is implemented; no file outside `prds/` has changed |
+| **Status** | `Implemented` in `v0.7.0` — the browser answers the keyboard first, every requirement in §6 has a test, and §8 records the three places where the implementation departed from this design |
 | **Affected version** | `v0.7.0` (`c603ee8`), the current release; reproduced on `main` at `74fafc4` |
 | **Component** | `internal/app` (the browser) → `internal/claude` (the supervisor reads, the execer) |
 | **Reported symptom** | "ccresu becomes unresponsive; pressing Enter etc. doesn't open the Details of a session" |
@@ -444,6 +444,35 @@ Step 1 is the whole fix; steps 2–5 are what make it visible to the operator, a
 step 10 is what keeps it fixed. Steps 8 and 9 are small and independent, and each
 one closes a way for the browser to become unkillable or leave a terminal broken.
 
+### As built
+
+Three departures from the design above, each because the design assumed something
+this machine does not do:
+
+- **Step 6 is a timer, not a read deadline.** `SetReadDeadline` on `os.Stdin`
+  attached to a Linux pty returns "file type does not support deadline": the
+  descriptor is in blocking mode, so Go's poller is not used and no deadline can
+  be armed. The decoder therefore keeps an escape *pending* and a 50 ms timer
+  decides it. That is portable, needs no `tui_term_*` fallback, and makes R7's
+  "today's behaviour where there is none" clause unnecessary rather than
+  unfulfilled.
+- **A queued second `enter` now acts on a page that was seen.** The acceptance
+  criterion in §6 was written against a wait-then-paint design, in which the
+  second key had to be refused to protect a page nobody had seen. The page is
+  painted from the keystroke, so the loop always draws before it decodes the next
+  key: the second `enter` closes a page that has been on screen for the whole
+  fill, which is the documented meaning of `enter` on that screen. The refusal in
+  R3 still applies to the gated actions, where nothing has been painted yet.
+- **The fill states itself twice.** The supervisor block sits below the fold of a
+  21-line page on a 15-line screen (open question 2), so the footer also says
+  `reading the supervisor…` while the fill runs. The block itself still fills in
+  where the page puts it.
+
+The source guard in the acceptance criteria skips function literals: the closures
+handed to `startAction` *are* the worker, and a guard that could not tell a
+closure from the goroutine it runs on would forbid the fix it is there to
+protect.
+
 ### Migration
 
 - **First run after the upgrade.** No configuration key, no migration and no key
@@ -455,10 +484,11 @@ one closes a way for the browser to become unkillable or leave a terminal broken
 - **Scripted use.** `printf 'q' | ccresu sessions --tui` and any redirect are
   unchanged: EOF still quits, and EOF during an action now cancels and quits
   rather than waiting for the action.
-- **A platform with no deadline-capable read** (the `tui_term_other.go` case).
-  The escape lookahead falls back to today's behaviour, so `esc` still needs a
-  second key there. That is a documented degradation of one key, not a capability
-  gate: everything else in this PRD is platform-independent Go.
+- **A platform with no deadline-capable read.** There is no such platform in the
+  shipped fix: the escape bound is a timer (see "As built"), which is plain Go and
+  behaves the same everywhere. The build-tagged signal list degrades instead — a
+  platform with no `SIGHUP` simply has no extra way to be asked to stop, and every
+  exit path the browser controls still restores the screen.
 - **A CLI below the version floor.** `daemon`/`logs` are absent, the read fails
   immediately, and the supervisor block says so — exactly today's behaviour, which
   is why this PRD needs no version test.

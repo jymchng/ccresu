@@ -432,130 +432,196 @@ func (a *App) inspectSession(ctx context.Context, command string, args []string)
 	return a.writeSessionDetail(ctx, rt, id, a.stdout)
 }
 
-// writeSessionDetail prints everything ccresu knows about one session to w.
+// sessionDetail is everything the status page says about one session.
 //
-// It is separated from inspectSession so the interactive sessions browser can
-// render the very same page: pressing Enter on a row shows this output rather
-// than a second, thinner view that could drift from `sessions status`.
-func (a *App) writeSessionDetail(ctx context.Context, rt *Runtime, id string, w io.Writer) error {
+// It is a value rather than a set of locals so the page can be rendered in two
+// halves: the browser paints the store's half from the keystroke and fills the
+// supervisor's in afterwards, while `sessions status` renders the whole thing in
+// one pass and may wait for the CLI.
+type sessionDetail struct {
+	Session     storage.Session
+	Limit       storage.UsageLimit
+	LimitErr    error
+	Attempt     storage.RecoveryAttempt
+	AttemptErr  error
+	Schedule    storage.Schedule
+	ScheduleErr error
+	Transitions []storage.Transition
+	Spend       storage.SpendRecord
+	Limits      recovery.SpendLimits
+	Next        recovery.NextAttempt
+	Now         time.Time
+	Loc         *time.Location
+}
+
+// loadSessionDetail reads one session and everything the status page shows about
+// it.
+//
+// It reads the store and nothing else: the supervisor is asked by the caller, so
+// the browser can paint the page before a slow CLI answers, and a batch command
+// can still wait for the answer. Every failure that is not "there is no such row
+// yet" is returned, because a page that silently omits a section is a page that
+// lies about the session.
+func (a *App) loadSessionDetail(ctx context.Context, rt *Runtime, id string) (sessionDetail, error) {
+	var detail sessionDetail
 	session, err := rt.Store.GetSession(ctx, id)
 	if err != nil {
-		return fmt.Errorf("session %s: %w", id, err)
+		return sessionDetail{}, fmt.Errorf("session %s: %w", id, err)
 	}
-	loc := a.displayLocation(rt)
+	detail.Session = session
+	detail.Loc = a.displayLocation(rt)
 
 	limit, limitErr := rt.Store.LatestUsageLimit(ctx, id)
 	if limitErr != nil && !errors.Is(limitErr, storage.ErrNotFound) {
-		return fmt.Errorf("latest usage limit for %s: %w", id, limitErr)
+		return sessionDetail{}, fmt.Errorf("latest usage limit for %s: %w", id, limitErr)
 	}
+	detail.Limit, detail.LimitErr = limit, limitErr
 	attempt, attemptErr := rt.Store.LatestAttempt(ctx, id)
 	if attemptErr != nil && !errors.Is(attemptErr, storage.ErrNotFound) {
-		return fmt.Errorf("latest attempt for %s: %w", id, attemptErr)
+		return sessionDetail{}, fmt.Errorf("latest attempt for %s: %w", id, attemptErr)
 	}
+	detail.Attempt, detail.AttemptErr = attempt, attemptErr
 	schedule, scheduleErr := rt.Store.GetSchedule(ctx, id)
 	if scheduleErr != nil && !errors.Is(scheduleErr, storage.ErrNotFound) {
-		return fmt.Errorf("schedule for %s: %w", id, scheduleErr)
+		return sessionDetail{}, fmt.Errorf("schedule for %s: %w", id, scheduleErr)
 	}
+	detail.Schedule, detail.ScheduleErr = schedule, scheduleErr
 	transitions, err := rt.Store.ListTransitions(ctx, id, 5)
 	if err != nil {
-		return fmt.Errorf("transitions for %s: %w", id, err)
+		return sessionDetail{}, fmt.Errorf("transitions for %s: %w", id, err)
 	}
+	detail.Transitions = transitions
 	// PRD 5: the same figure the spend caps are compared against, and the caps
 	// themselves, so `inspect` answers "why is this session parked" without a
 	// second opinion computed somewhere else.
 	spend, err := rt.Store.SessionSpend(ctx, id)
 	if err != nil {
-		return fmt.Errorf("spend for %s: %w", id, err)
+		return sessionDetail{}, fmt.Errorf("spend for %s: %w", id, err)
 	}
-	limits := spendLimits(rt)
+	detail.Spend = spend
+	detail.Limits = spendLimits(rt)
 
-	now := rt.Clock.Now()
+	detail.Now = rt.Clock.Now()
 	var scheduleArg *storage.Schedule
 	if scheduleErr == nil {
 		scheduleArg = &schedule
 	}
-	next := recovery.NextAttemptFor(session, scheduleArg, now)
+	detail.Next = recovery.NextAttemptFor(session, scheduleArg, detail.Now)
+	return detail, nil
+}
 
+// writeSessionDetail prints everything ccresu knows about one session to w.
+//
+// It is separated from inspectSession so the interactive sessions browser can
+// render the very same page: pressing Enter on a row shows this output rather
+// than a second, thinner view that could drift from `sessions status`. The browser
+// renders the same two halves through writeDetailFacts and writeDetailTail, with
+// the supervisor block filled in between them when the CLI answers.
+func (a *App) writeSessionDetail(ctx context.Context, rt *Runtime, id string, w io.Writer) error {
+	detail, err := a.loadSessionDetail(ctx, rt, id)
+	if err != nil {
+		return err
+	}
 	if a.json {
 		return a.writeJSON(w, map[string]any{
-			"session":      session,
-			"usage_limit":  optional(limitErr, limit),
-			"attempt":      optional(attemptErr, attempt),
-			"schedule":     optional(scheduleErr, schedule),
-			"transitions":  transitions,
-			"next_attempt": nextAttemptReport(next, now),
-			"spend":        spendReport(spend, limits),
-			"supervisor":   a.supervisorReport(ctx, rt, attempt, attemptErr),
+			"session":      detail.Session,
+			"usage_limit":  optional(detail.LimitErr, detail.Limit),
+			"attempt":      optional(detail.AttemptErr, detail.Attempt),
+			"schedule":     optional(detail.ScheduleErr, detail.Schedule),
+			"transitions":  detail.Transitions,
+			"next_attempt": nextAttemptReport(detail.Next, detail.Now),
+			"spend":        spendReport(detail.Spend, detail.Limits),
+			"supervisor":   a.supervisorReport(ctx, rt, detail.Attempt, detail.AttemptErr),
 		})
 	}
 
-	a.field(w, "session", session.ID)
-	a.field(w, "state", session.State)
-	a.field(w, "enabled", yesNo(session.Enabled))
-	a.field(w, "recoverable", yesNo(session.Recoverable))
-	if session.Reason != "" {
-		a.field(w, "reason", session.Reason)
+	a.writeDetailFacts(w, detail)
+	// PRD 3 R10: the supervisor is the only thing that knows what the session is
+	// doing and what it last printed, so `inspect` asks it on demand rather than
+	// ccresu tailing files behind its back. Nothing here is polled.
+	// A provider with no supervisor surface leaves the block out of the text
+	// rendering entirely: "unavailable" would describe the provider rather than the
+	// session. The JSON rendering keeps it, where a script can branch on it.
+	if reader, ok := rt.Provider.(SupervisorReader); ok {
+		a.writeSupervisorDetail(w, a.readSupervisor(ctx, reader, detail.Attempt, detail.AttemptErr))
 	}
-	if session.LastError != "" {
-		a.field(w, "last error", session.LastError)
+	a.writeDetailTail(w, detail)
+	return nil
+}
+
+// writeDetailFacts prints the store's half of the status page: what ccresu knows
+// about the session, what it will do next, and what it recorded about the last
+// attempt.
+//
+// It never asks the supervisor, so the browser can paint it from a keystroke.
+func (a *App) writeDetailFacts(w io.Writer, detail sessionDetail) {
+	a.field(w, "session", detail.Session.ID)
+	a.field(w, "state", detail.Session.State)
+	a.field(w, "enabled", yesNo(detail.Session.Enabled))
+	a.field(w, "recoverable", yesNo(detail.Session.Recoverable))
+	if detail.Session.Reason != "" {
+		a.field(w, "reason", detail.Session.Reason)
 	}
-	a.field(w, "project", emptyDash(session.ProjectPath))
+	if detail.Session.LastError != "" {
+		a.field(w, "last error", detail.Session.LastError)
+	}
+	a.field(w, "project", emptyDash(detail.Session.ProjectPath))
 	// PRD 6 R12: the second directory, labelled distinctly. "same as project"
 	// says the session never moved; a dash would leave the reader guessing
 	// between "not observed" and "identical".
-	a.field(w, "runs in", runsInDetail(session))
-	a.field(w, "transcript", emptyDash(session.TranscriptPath))
-	a.field(w, "type", session.Type)
-	a.field(w, "last seen", formatTime(session.LastSeenAt, loc))
+	a.field(w, "runs in", runsInDetail(detail.Session))
+	a.field(w, "transcript", emptyDash(detail.Session.TranscriptPath))
+	a.field(w, "type", detail.Session.Type)
+	a.field(w, "last seen", formatTime(detail.Session.LastSeenAt, detail.Loc))
 	// PRD 5: what the session is recorded to have cost, next to the caps it is
 	// measured against. It is one line because this page is also the sessions
 	// browser's detail screen, and every extra line pushes a section off the
 	// first view. A cap that is off says "off" rather than "$0", because "$0"
 	// reads as "any spend is over the cap".
-	a.field(w, "spend", spendLine(spend, limits))
+	a.field(w, "spend", spendLine(detail.Spend, detail.Limits))
 
 	// The next attempt is its own block, above the raw records, because it is the
 	// question an operator actually opens `inspect` to answer.
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Next attempt")
-	if next.Scheduled {
-		a.field(w, "at", formatTime(next.At, time.UTC)+" ("+recovery.HumanizeUntil(next.At, now)+")")
+	if detail.Next.Scheduled {
+		a.field(w, "at", formatTime(detail.Next.At, time.UTC)+" ("+recovery.HumanizeUntil(detail.Next.At, detail.Now)+")")
 	} else {
 		a.field(w, "at", "none")
 	}
-	a.field(w, "why", next.Reason)
+	a.field(w, "why", detail.Next.Reason)
 
-	if limitErr == nil {
+	if detail.LimitErr == nil {
 		fmt.Fprintln(w, "")
 		fmt.Fprintln(w, "Latest usage limit")
-		a.field(w, "type", limit.LimitType)
-		a.field(w, "detected", formatTime(limit.DetectedAt, loc))
+		a.field(w, "type", detail.Limit.LimitType)
+		a.field(w, "detected", formatTime(detail.Limit.DetectedAt, detail.Loc))
 		reset := "-"
-		if !limit.ResetAt.IsZero() {
-			reset = formatTime(limit.ResetAt, loc)
+		if !detail.Limit.ResetAt.IsZero() {
+			reset = formatTime(detail.Limit.ResetAt, detail.Loc)
 		}
 		a.field(w, "resets", reset)
-		if limit.ResetRaw != "" {
-			a.field(w, "raw", limit.ResetRaw)
+		if detail.Limit.ResetRaw != "" {
+			a.field(w, "raw", detail.Limit.ResetRaw)
 		}
-		a.field(w, "confidence", fmt.Sprintf("%.2f", limit.Confidence))
+		a.field(w, "confidence", fmt.Sprintf("%.2f", detail.Limit.Confidence))
 	}
 
-	if attemptErr == nil {
+	if detail.AttemptErr == nil {
 		fmt.Fprintln(w, "")
 		fmt.Fprintln(w, "Latest attempt")
-		a.field(w, "number", attempt.AttemptNumber)
-		a.field(w, "state", attempt.State)
+		a.field(w, "number", detail.Attempt.AttemptNumber)
+		a.field(w, "state", detail.Attempt.State)
 		// PRD 5 R4/R10: what this attempt cost, or "unknown" — never "$0" for a
 		// figure the CLI did not report.
-		a.field(w, "cost", formatCost(attempt.CostUSD))
-		a.field(w, "started", formatTime(attempt.StartedAt, loc))
-		a.field(w, "finished", formatTime(attempt.FinishedAt, loc))
-		if attempt.Command != "" {
-			a.field(w, "command", attempt.Command)
+		a.field(w, "cost", formatCost(detail.Attempt.CostUSD))
+		a.field(w, "started", formatTime(detail.Attempt.StartedAt, detail.Loc))
+		a.field(w, "finished", formatTime(detail.Attempt.FinishedAt, detail.Loc))
+		if detail.Attempt.Command != "" {
+			a.field(w, "command", detail.Attempt.Command)
 		}
-		if attempt.Error != "" {
-			a.field(w, "error", attempt.Error)
+		if detail.Attempt.Error != "" {
+			a.field(w, "error", detail.Attempt.Error)
 		}
 
 		// PRD 2 / R13: what the supervisor published about the session when the
@@ -569,7 +635,7 @@ func (a *App) writeSessionDetail(ctx context.Context, rt *Runtime, id string, w 
 		// "we did not look" as "nothing was there" (R8).
 		fmt.Fprintln(w, "")
 		fmt.Fprintln(w, "Observed")
-		observation := attempt.Observation
+		observation := detail.Attempt.Observation
 		if !observation.Recorded() {
 			a.field(w, "state", "not recorded")
 		} else {
@@ -580,7 +646,7 @@ func (a *App) writeSessionDetail(ctx context.Context, rt *Runtime, id string, w 
 			if observation.WaitingFor != "" {
 				a.field(w, "waiting for", observation.WaitingFor)
 			}
-			a.field(w, "at", formatTime(observation.ObservedAt, loc))
+			a.field(w, "at", formatTime(observation.ObservedAt, detail.Loc))
 			listed := "not recorded"
 			if observation.Listed != nil {
 				listed = yesNo(*observation.Listed)
@@ -588,42 +654,35 @@ func (a *App) writeSessionDetail(ctx context.Context, rt *Runtime, id string, w 
 			a.field(w, "in listing", listed)
 		}
 	}
+}
 
-	// PRD 3 R10: the supervisor is the only thing that knows what the session is
-	// doing and what it last printed, so `inspect` asks it on demand rather than
-	// ccresu tailing files behind its back. Nothing here is polled.
-	// A provider with no supervisor surface leaves the block out of the text
-	// rendering entirely: "unavailable" would describe the provider rather than the
-	// session. The JSON rendering keeps it, where a script can branch on it.
-	if reader, ok := rt.Provider.(SupervisorReader); ok {
-		a.writeSupervisorDetail(w, a.readSupervisor(ctx, reader, attempt, attemptErr))
-	}
-
-	if scheduleErr == nil {
+// writeDetailTail prints the rest of the status page: the stored wait and the
+// recent state transitions.
+func (a *App) writeDetailTail(w io.Writer, detail sessionDetail) {
+	if detail.ScheduleErr == nil {
 		fmt.Fprintln(w, "")
 		fmt.Fprintln(w, "Schedule")
-		a.field(w, "due", formatTime(schedule.DueAt(), loc))
-		a.field(w, "unknown reset", yesNo(schedule.Unknown))
-		a.field(w, "polls", schedule.Attempts)
-		if schedule.ResetRaw != "" {
-			a.field(w, "phrase", schedule.ResetRaw)
+		a.field(w, "due", formatTime(detail.Schedule.DueAt(), detail.Loc))
+		a.field(w, "unknown reset", yesNo(detail.Schedule.Unknown))
+		a.field(w, "polls", detail.Schedule.Attempts)
+		if detail.Schedule.ResetRaw != "" {
+			a.field(w, "phrase", detail.Schedule.ResetRaw)
 		}
 	}
 
-	if len(transitions) > 0 {
+	if len(detail.Transitions) > 0 {
 		fmt.Fprintln(w, "")
 		fmt.Fprintln(w, "Recent transitions")
-		rows := make([][]string, 0, len(transitions))
-		for _, transition := range transitions {
+		rows := make([][]string, 0, len(detail.Transitions))
+		for _, transition := range detail.Transitions {
 			rows = append(rows, []string{
-				formatTime(transition.OccurredAt, loc),
+				formatTime(transition.OccurredAt, detail.Loc),
 				string(transition.FromState) + " -> " + string(transition.ToState),
 				truncateText(transition.Reason, 48),
 			})
 		}
 		a.table(w, []string{"WHEN", "TRANSITION", "REASON"}, rows)
 	}
-	return nil
 }
 
 // The subcommands of `ccresu sessions`.
@@ -1264,6 +1323,10 @@ type supervisorReport struct {
 	DaemonError string `json:"daemon_error,omitempty"`
 	// Error explains an "unreadable" or "unavailable" status.
 	Error string `json:"error,omitempty"`
+	// Pending reports that the read is still in flight. The block then renders
+	// its status line and nothing else, so a fill in progress cannot present an
+	// unread log or a missing state id as a verdict.
+	Pending bool `json:"-"`
 }
 
 // supervisorLogLines bounds how much recent output `inspect` prints: enough to see
@@ -1350,6 +1413,12 @@ func (a *App) writeSupervisorDetail(w io.Writer, report supervisorReport) {
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Supervisor")
 	a.field(w, "status", report.Status)
+	if report.Pending {
+		// A read in flight says only that it is in flight. Rendering the rest of
+		// the block here would report "no recent output" about a log that has not
+		// been read yet.
+		return
+	}
 	if report.State != "" {
 		a.field(w, "state", report.State)
 	}

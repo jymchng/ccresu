@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -64,48 +63,80 @@ func listedIDs(screen string) []string {
 	return ids
 }
 
-func TestDecodeKeyReadsTerminalSequences(t *testing.T) {
+// decodeAll feeds a whole byte stream to the decoder and returns the keystrokes it
+// produced, deciding a trailing escape the way the reader does when the input ends.
+func decodeAll(input string) []keyEvent {
+	var decoder keyDecoder
+	var events []keyEvent
+	for i := 0; i < len(input); i++ {
+		produced, _ := decoder.feed(input[i])
+		events = append(events, produced...)
+	}
+	if key, flushed := decoder.flush(); flushed {
+		events = append(events, key)
+	}
+	return events
+}
+
+func TestTheDecoderReadsTerminalSequences(t *testing.T) {
 	cases := []struct {
 		name  string
 		input string
-		want  keyEvent
+		want  []keyEvent
 	}{
-		{"plain rune", "j", keyEvent{r: 'j'}},
-		{"arrow up", "\x1b[A", keyEvent{name: keyUp}},
-		{"arrow down", "\x1b[B", keyEvent{name: keyDown}},
-		{"home", "\x1b[H", keyEvent{name: keyHome}},
-		{"end", "\x1b[F", keyEvent{name: keyEnd}},
-		{"parameterised arrow", "\x1b[1;5B", keyEvent{name: keyDown}},
-		{"enter as carriage return", "\r", keyEvent{name: keyEnter}},
-		{"enter as newline", "\n", keyEvent{name: keyEnter}},
-		{"backspace", "\x7f", keyEvent{name: keyBackspace}},
-		{"ctrl-c", "\x03", keyEvent{name: keyInterrupt}},
-		{"bare escape", "\x1b", keyEvent{name: keyEsc}},
-		{"escape then EOF", "\x1b[", keyEvent{name: keyEsc}},
-		{"end of input", "", keyEvent{name: keyEOF}},
+		{"plain rune", "j", []keyEvent{{r: 'j'}}},
+		{"two runes", "jk", []keyEvent{{r: 'j'}, {r: 'k'}}},
+		{"arrow up", "\x1b[A", []keyEvent{{name: keyUp}}},
+		{"arrow down", "\x1b[B", []keyEvent{{name: keyDown}}},
+		{"arrow left", "\x1b[D", []keyEvent{{name: keyUp}}},
+		{"arrow right", "\x1b[C", []keyEvent{{name: keyDown}}},
+		{"home", "\x1b[H", []keyEvent{{name: keyHome}}},
+		{"end", "\x1b[F", []keyEvent{{name: keyEnd}}},
+		{"application-mode arrow", "\x1bOB", []keyEvent{{name: keyDown}}},
+		{"parameterised arrow", "\x1b[1;5B", []keyEvent{{name: keyDown}}},
+		{"enter as carriage return", "\r", []keyEvent{{name: keyEnter}}},
+		{"enter as newline", "\n", []keyEvent{{name: keyEnter}}},
+		{"backspace", "\x7f", []keyEvent{{name: keyBackspace}}},
+		{"ctrl-c", "\x03", []keyEvent{{name: keyInterrupt}}},
+		{"bare escape", "\x1b", []keyEvent{{name: keyEsc}}},
+		{"escape then nothing but a bracket", "\x1b[", []keyEvent{{name: keyEsc}}},
+		{"end of input", "", nil},
+		// ESC followed by an ordinary byte is the escape key *and* that byte, which
+		// is the reading the browser has always used: the operator pressed escape,
+		// then pressed a key.
+		{"escape then a key", "\x1bj", []keyEvent{{name: keyEsc}, {r: 'j'}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := decodeKey(bufio.NewReader(strings.NewReader(tc.input)))
-			if err != nil {
-				t.Fatalf("decodeKey(%q): %v", tc.input, err)
+			got := decodeAll(tc.input)
+			if len(got) != len(tc.want) {
+				t.Fatalf("decode(%q) = %+v, want %+v", tc.input, got, tc.want)
 			}
-			if got != tc.want {
-				t.Fatalf("decodeKey(%q) = %+v, want %+v", tc.input, got, tc.want)
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("decode(%q) = %+v, want %+v", tc.input, got, tc.want)
+				}
 			}
 		})
 	}
 }
 
-func TestDecodeKeyIgnoresUnknownControlSequence(t *testing.T) {
+func TestTheDecoderIgnoresUnknownControlSequence(t *testing.T) {
 	// ESC [ Z is shift-tab: a real sequence the browser has no binding for. It
-	// must decode to nothing rather than to a rune the list would act on.
-	got, err := decodeKey(bufio.NewReader(strings.NewReader("\x1b[Z")))
-	if err != nil {
-		t.Fatalf("decodeKey: %v", err)
+	// must decode to nothing rather than to a rune the list would act on, and it
+	// must not leave the decoder waiting for more bytes.
+	var decoder keyDecoder
+	for i := 0; i < len("\x1b[Z"); i++ {
+		events, complete := decoder.feed("\x1b[Z"[i])
+		if len(events) != 0 {
+			t.Fatalf("byte %d produced %+v, want nothing", i, events)
+		}
+		if complete != (i == 2) {
+			t.Fatalf("byte %d complete = %v, want %v", i, complete, i == 2)
+		}
 	}
-	if got.name != "" || got.r != 0 {
-		t.Fatalf("decodeKey = %+v, want the zero key", got)
+	if decoder.waiting() {
+		t.Error("the decoder is still waiting for bytes after a complete sequence")
 	}
 }
 
@@ -413,7 +444,7 @@ func TestSessionsBrowserInspectsTheSelectedSession(t *testing.T) {
 			t.Errorf("inspect screen missing %q:\n%s", want, screen)
 		}
 	}
-	if !strings.Contains(screen, "press enter, q or esc to return") {
+	if !strings.Contains(screen, "enter, q or esc") {
 		t.Errorf("inspect screen does not say how to leave it:\n%s", screen)
 	}
 
@@ -498,8 +529,14 @@ func TestSessionsBrowserRecoversAndRetries(t *testing.T) {
 				}, nil
 			}
 
-			code := h.runWithKeys(tc.key+"q", "sessions")
-			if code != ExitOK {
+			// The action runs on its own goroutine, so the test waits for the
+			// screen to report the outcome before quitting: a 'q' sent while it
+			// runs cancels it, which is the behaviour the next test pins.
+			paced := h.startBrowser(t, "sessions")
+			paced.waitForScreen(t, "enter detail")
+			paced.send(t, tc.key)
+			paced.waitForScreen(t, "resumed yes")
+			if code := paced.quit(t); code != ExitOK {
 				t.Fatalf("exit = %d (stderr %q)", code, h.stderr.String())
 			}
 			ctx := context.Background()
@@ -681,7 +718,11 @@ func TestSessionsBrowserCreatesByDiscovery(t *testing.T) {
 		t.Fatalf("precondition: session already stored: %v", err)
 	}
 
-	if code := h.runWithKeys("nq", "sessions", "--all"); code != ExitOK {
+	paced := h.startBrowser(t, "sessions", "--all")
+	paced.waitForScreen(t, "enter detail")
+	paced.send(t, "n")
+	paced.waitForScreen(t, "create: 1 new session(s) of 1 discovered")
+	if code := paced.quit(t); code != ExitOK {
 		t.Fatalf("exit = %d (stderr %q)", code, h.stderr.String())
 	}
 	session, err := h.store.GetSession(ctx, discoveredID)
@@ -701,7 +742,11 @@ func TestSessionsBrowserCreatesByDiscovery(t *testing.T) {
 
 	// A second press adds nothing: discovery is idempotent, so 'n' cannot
 	// duplicate a row.
-	if code := h.runWithKeys("nq", "sessions", "--all"); code != ExitOK {
+	paced = h.startBrowser(t, "sessions", "--all")
+	paced.waitForScreen(t, "enter detail")
+	paced.send(t, "n")
+	paced.waitForScreen(t, "create: 0 new session(s) of 1 discovered")
+	if code := paced.quit(t); code != ExitOK {
 		t.Fatalf("exit = %d (stderr %q)", code, h.stderr.String())
 	}
 	if screen := lastScreen(h.stdout.String()); !strings.Contains(screen, "create: 0 new session(s) of 1 discovered") {
@@ -725,7 +770,11 @@ func TestSessionsBrowserCreateRespectsDeletedSessions(t *testing.T) {
 		Recoverable: true,
 	})
 
-	if code := h.runWithKeys("nq", "sessions", "--all"); code != ExitOK {
+	paced := h.startBrowser(t, "sessions", "--all")
+	paced.waitForScreen(t, "enter detail")
+	paced.send(t, "n")
+	paced.waitForScreen(t, "1 left forgotten")
+	if code := paced.quit(t); code != ExitOK {
 		t.Fatalf("exit = %d (stderr %q)", code, h.stderr.String())
 	}
 	if _, err := h.store.GetSession(ctx, canonicalSessionID); !errors.Is(err, storage.ErrNotFound) {

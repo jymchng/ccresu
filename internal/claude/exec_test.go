@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -39,6 +40,18 @@ func TestHelperProcess(t *testing.T) {
 		os.Exit(3)
 	case "sleep":
 		time.Sleep(5 * time.Second)
+	case "orphan":
+		// Start a grandchild that inherits this process's stdout and outlives it,
+		// then exit at once. The pipe stays open after this process is gone, which
+		// is the case WaitDelay exists for.
+		child := exec.Command(os.Args[0], helperArgs("sleep")...)
+		child.Env = helperEnv("sleep")
+		child.Stdout = os.Stdout
+		child.Stderr = os.Stderr
+		if err := child.Start(); err != nil {
+			os.Exit(4)
+		}
+		os.Exit(0)
 	}
 
 	// The test binary would otherwise run the remaining tests as the child.
@@ -229,5 +242,32 @@ func TestOSExecerWorkingDirectory(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(out.Stdout)); got != dir {
 		t.Errorf("pwd = %q, want %q", got, dir)
+	}
+}
+
+// TestOSExecerDoesNotWaitForAPipeHoldingDescendant pins the other half of the
+// deadline: killing the child is not enough, because Wait also waits for the
+// output pipes, and a descendant that inherited them keeps them open.
+//
+// Measured before WaitDelay existed: a stand-in that slept in a child left the
+// sessions browser frozen with no frame after 45 seconds, where the same stand-in
+// sleeping in its own process produced a frame at exactly the query timeout.
+func TestOSExecerDoesNotWaitForAPipeHoldingDescendant(t *testing.T) {
+	t.Parallel()
+
+	execer := OSExecer{}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := execer.Run(ctx, os.Args[0], helperArgs("orphan"), RunOptions{Env: helperEnv("orphan")})
+	elapsed := time.Since(start)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error = %v, want context.DeadlineExceeded", err)
+	}
+	// The grandchild holds the pipe for five seconds; without WaitDelay the call
+	// would return only when it exited.
+	if elapsed > DefaultWaitDelay+time.Second {
+		t.Errorf("Run took %s: it waited for a descendant holding the output pipes", elapsed)
 	}
 }
