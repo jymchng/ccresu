@@ -107,6 +107,26 @@ CCRESU_BASE_URL=http://127.0.0.1:8000 ./scripts/install.sh --version 0.1.0
 - **The service restarts you.** `systemctl --user restart ccresu.service` after
   an upgrade; an in-flight wait is a row in the database, so nothing is lost.
 
+## Re-cutting a version
+
+A version that shipped with a defect can be re-cut instead of followed by a patch
+release. Move the tag and push it: the pipeline replaces the release.
+
+```bash
+git tag -f -a v0.7.0 -m "v0.7.0" <commit>
+git push --force origin v0.7.0
+```
+
+The publish step deletes any release already published for that tag before it
+creates the new one, so the archives and `checksums.txt` are the ones built from
+the new commit and the download URLs do not change. `0.7.0` was re-cut this way:
+it shipped without the sessions-browser fix, and the fix belongs in the release
+an operator is told to install rather than in a patch they have to know about.
+
+What a re-cut cannot do is recall anything already downloaded. That is why it is
+for a version that has not spread — otherwise the honest answer is a patch
+version, which leaves the old archives where they are.
+
 ## Building a release by hand
 
 There is no hidden step; the workflow is the recipe:

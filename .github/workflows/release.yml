@@ -163,6 +163,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
+          # A version can be re-cut: 0.7.0 was published before a defect fix, and
+          # replacing it means replacing its release. `gh release create` refuses a
+          # tag that already has one, so the old release goes first. The tag is the
+          # same tag and the archives are rebuilt from it either way, which is what
+          # makes the replacement exact.
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release delete "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --yes
+          fi
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "ccresu ${GITHUB_REF_NAME#v}" \
