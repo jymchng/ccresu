@@ -4,22 +4,17 @@ All notable changes to ccresu are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Fixed
-
-- **`recovery.startup_timeout` has a reader.** The key was accepted, validated,
-  defaulted to `60s` and environment-overridable, and consumed by nothing: every
-  handoff ran under the fixed `claude.DefaultHandoffTimeout` whatever the
-  configuration said. It now bounds the `claude --bg --resume` handoff call
-  itself (and still not the resumed work, which is the supervisor's), and its
-  default moved to `2m` — the value that call already used — so an existing
-  configuration behaves as before.
-
 ## [0.7.0] - 2026-11-15
 
 Six PRDs on one theme: a recovery is decided by what the supervisor publishes, not
 by what ccresu infers from a transcript, a PID or its own working directory.
+
+A seventh document rides with them, and it is a defect rather than an
+enhancement: the sessions browser ran `claude` on the goroutine that reads the
+keyboard, so `enter` painted nothing until the CLI answered, the keys pressed
+meanwhile were applied to the screen that answer produced, and `ctrl-c` could not
+cancel anything. The browser now answers the keyboard first and the CLI second
+(PRD 7).
 
 ### Added
 
@@ -91,6 +86,52 @@ by what ccresu infers from a transcript, a PID or its own working directory.
 
 ### Fixed
 
+- **The sessions browser answers the keyboard, not `claude`.** Four of its keys
+  run a command that invokes the CLI, and every one of them ran on the goroutine
+  that reads the keyboard: `enter` was silent for as long as
+  `claude daemon status` took (0.9–2.4 s measured, 30 s per call when the
+  supervisor was wedged, and unbounded when a descendant held the output pipes),
+  and the keys pressed meanwhile were buffered by the terminal and then applied
+  to the screen the command produced — a second `enter` opened the detail page
+  and closed it before it could be read. The work now runs on its own goroutine,
+  the browser paints `busy: discovering… (ctrl-c cancels)` while it does, the
+  keys that start work are refused rather than queued, and `ctrl-c` cancels the
+  command without waiting for it and leaves the browser open (PRD 7).
+- **The detail page is painted before the supervisor is asked.** `enter` renders
+  the session's facts from ccresu's own store from the keystroke, and the
+  supervisor block — `claude daemon status`, `claude daemon logs`,
+  `claude logs <id>` — is read behind the page and filled in when it answers.
+  A read that misses its five-second budget says so in one line, and the rest of
+  the page is the page `sessions status` prints, byte for byte, when it answers.
+- **`esc` works on its own.** A lone escape was decided only when the next
+  keystroke arrived, because decoding an escape sequence means looking ahead and
+  a terminal sends ESC and then waits. The decoder keeps the escape pending and a
+  50 ms timer decides it, so the key the detail screen advertises is the key the
+  detail screen answers. `os.Stdin` on a Linux terminal cannot carry a read
+  deadline (“file type does not support deadline”), which is why the bound is a
+  timer rather than a deadline.
+- **A status line belongs to the screen that wrote it.** Leaving the detail
+  screen no longer paints its `enter, q or esc` footer on the list, which is how
+  a key that had worked came to look like a key that had not.
+- **A call that misses its deadline returns.** `exec.CommandContext` kills the
+  child, but `Wait` also waits for the output pipes, and a descendant that
+  inherited them keeps them open: a stand-in that slept in a child left the
+  browser with no frame after 45 s where the same stand-in sleeping in its own
+  process produced one at exactly the 30 s query timeout. `OSExecer` now sets
+  `cmd.WaitDelay`, so the bound holds whatever the child leaves behind.
+- **The terminal is restored when the browser is signalled.** `SIGTERM`,
+  `SIGINT` and `SIGHUP` now end the browser's loop so its deferred restore runs,
+  instead of killing the process mid-paint. `SIGKILL` cannot be caught, so
+  `docs/cli.md` names `reset` as the remedy for the one exit path that needs the
+  operator — and the command in flight is cancellable, so killing the browser is
+  never the right way to stop one.
+- **`recovery.startup_timeout` has a reader.** The key was accepted, validated,
+  defaulted to `60s` and environment-overridable, and consumed by nothing: every
+  handoff ran under the fixed `claude.DefaultHandoffTimeout` whatever the
+  configuration said. It now bounds the `claude --bg --resume` handoff call
+  itself (and still not the resumed work, which is the supervisor's), and its
+  default moved to `2m` — the value that call already used — so an existing
+  configuration behaves as before.
 - **A blocked session can no longer be reported `RESUMED`.** The mapping covers
   every documented state, both sides of the handoff boundary, an absent entry
   and an unrecognised value; nothing falls through to success.
@@ -109,6 +150,11 @@ by what ccresu infers from a transcript, a PID or its own working directory.
   longer lists `ppid` and `process_start_time` (dropped in `0009`),
   `recovery_attempts` lists `cost_usd` (`0011`), and `attention_episodes`
   (`0010`) is named among the tables.
+- `docs/cli.md` describes the browser as it now behaves: the busy line, `ctrl-c`
+  as the cancel key, the two-part detail page, the detail screen's own key map,
+  `esc`, and `reset` as the remedy for a `SIGKILL`ed browser.
+- `prds/unresponsive-sessions-browser.md` is the defect PRD for the browser, and
+  `prds/README.md` §8 indexes it beside the six it does not belong to.
 
 ## [0.6.0] - 2026-11-13
 
