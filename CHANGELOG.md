@@ -4,6 +4,112 @@ All notable changes to ccresu are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-11-20
+
+The state machine shrank from sixteen states to seven. What ccresu does did not
+change — it reads a transcript, waits for the reset the banner named, hands the
+session a continuation and goes back to reading — but the machine now says
+exactly that. The seven that remain are the beats of that lap plus the three
+verdicts that stop it; the nine that went were detours *inside* a beat, each one
+a step ccresu took while it was already doing something else. Existing databases
+are migrated on first start, so an upgrade asks nothing of the operator but a
+restart — apart from the one thing 0.7.0 told you to install: `ccresu hook` no
+longer exists, so remove that hook from your Claude Code settings (see
+Removed).
+
+### Added
+
+- **Startup migration `0013_simplify_states.sql`.** An upgraded binary rewrites
+  every row that still carries a retired state name through one explicit
+  many-to-one table, in `sessions`, `recovery_attempts`, `state_transitions` and
+  `deleted_sessions`. Nothing is deleted: the conversation, the attempt history
+  and the transition timeline all survive, because a session still waiting for
+  its reset has to be able to show what was already tried. The rows are
+  rewritten rather than filtered because a retired name would be a state the
+  rest of the tool no longer accepts: the audit write path rejects any other
+  name (`unknown transition target state`), the API's state filters accept only
+  the seven, and `ccresu history` prints the stored names verbatim, so an
+  unmigrated timeline would show history in a vocabulary nothing else speaks. A
+  session arriving at `DISCOVERED` from `RETRY_WAIT` or `WAITING_FOR_INPUT` also
+  loses its `retry_at`, because `DISCOVERED` owns no retry instant and
+  `ccresu sessions` would otherwise show it in `NEXT ATTEMPT` (as would
+  `ccresu inspect`) for a wait nothing would act on. The migration runs in the
+  same transaction as its `schema_migrations` row, like every other one, and its
+  `Down` section is a deliberate no-op: a binary rolled back to 0.8.0 reads every
+  migrated row without complaint, but the distinction the collapse removed cannot
+  be restored.
+- **Startup migration `0014_drop_attention_episodes.sql`.** The
+  `attention_episodes` table existed for one purpose: to give the `needs_input`
+  message an identity both of its producers could agree on, and neither producer
+  exists any more (see Removed). Keeping it would ship a table whose only writer
+  is a prune that deletes everything, so the table and its index are dropped. No
+  session, attempt or transition row is touched, and `ccresu inspect` never
+  rendered an episode. Its `Down` section recreates the table exactly as `0010`
+  created it, empty: the rows were bookkeeping for messages already delivered,
+  and a stale episode would suppress the first message of a new block rather than
+  restore it.
+
+### Changed
+
+- **Seven states, one lap, three verdicts.** The survivors are `DISCOVERED`,
+  `WAITING_FOR_RESET`, `RESUMING`, `RESUMED`, `COMPLETED`, `DISABLED` and
+  `UNRECOVERABLE`. `DISCOVERED → WAITING_FOR_RESET → RESUMING → RESUMED →
+  DISCOVERED` is the whole loop, and it repeats for as long as the session keeps
+  hitting its limit. Neither way out of a lap is a verdict about the
+  conversation: a spent attempt budget returns the session to `DISCOVERED`,
+  where the next discovery pass reads the transcript again and starts a fresh
+  budget, and a failure worth retrying parks it in `WAITING_FOR_RESET` with the
+  next try on `sessions.retry_at`. The four beats no longer have states between
+  them: the two pre-flight checks happen inside `RESUMING`, and a due schedule
+  wakes a parked session straight into it.
+- **A blocked session is resumed, not parked.** When the supervisor publishes
+  `blocked` with a handoff outstanding, the continuation landed and the session
+  is `RESUMED`: the question it is waiting on is the operator's to answer,
+  whenever they get to it, and it is not evidence that the resume failed. With
+  no handoff outstanding the pass hands it a continuation like any other
+  session, because a continuation does not have to wait for an unanswered
+  question. What the supervisor said is still recorded verbatim, in the
+  attempt's observation and in the transition reason — it is simply no longer a
+  reason to stop.
+- **A backoff is an instant on the row, not a state.** A failure worth retrying
+  stays in `WAITING_FOR_RESET` with its next try on `sessions.retry_at`, and
+  `ccresu sessions` shows it in the `NEXT ATTEMPT` column while `ccresu inspect`
+  prints it as the next attempt, rather than a state named after it. A real
+  reset stays authoritative when both exist, so a session parked on a banner is
+  woken by the banner.
+- **Finding a limit in a resumed session still cannot spend.** `RESUMED` has no
+  edge to `RESUMING` and no direct edge to `WAITING_FOR_RESET`, so the rescan
+  and `ccresu search-limit` park it through `DISCOVERED` (`RESUMED → DISCOVERED
+  → WAITING_FOR_RESET`). The guard survives the collapse on purpose: without it
+  a just-resumed session would be parked and resumed off its own stale banner.
+
+### Removed
+
+- **Nine states, and the edges that led to them.** `USAGE_LIMIT_DETECTED` and
+  `RESET_TIME_REACHED` are `WAITING_FOR_RESET` (detecting a limit *is* parking
+  on the instant it named); `CHECKING_SESSION` and `CHECKING_LIMIT` are
+  `RESUMING`; `RUNNING` is `RESUMED` (a session that is alive after a resume,
+  still scanned, which is how the next limit is noticed); `RETRY_WAIT` and
+  `WAITING_FOR_INPUT` are `DISCOVERED`; `USER_TERMINATED` and
+  `SPEND_CAP_REACHED` are `DISABLED` (both mean only `ccresu enable` restarts
+  it). The edges went with them, so a transition that used to be legal is now
+  refused with `recovery: invalid state transition`, and one that names a
+  retired state is refused as `"RUNNING" is not a known state` rather than
+  treated as an edge out of the machine.
+- **The needs-input notification path, and the command that fed it.** A
+  `blocked` session is resumed like any other, so nothing can honestly say
+  "waiting for you" any more: `needs_input` is no longer an event the daemon can
+  queue, `telegram.notify_needs_input` is gone with the attention-episode
+  bookkeeping that paced it, and the `ccresu hook` subcommand that 0.7.0 told
+  operators to install as a Claude Code `Notification` hook has been deleted: a
+  settings entry that still runs it now reports an unknown command on every
+  notification (`ccresu: unknown command "hook"`), so delete the hook. It
+  existed to announce one thing, the needs-input message, and that message no
+  longer exists. The config key is *retired*, not unknown: a `config.yaml` that still sets `telegram.notify_needs_input` loads,
+  the loader drops it before the strict decode, and the load says once that it is
+  ignored — every other unknown key, including a typo of this one, is still
+  refused. Delete the line when you see the warning.
+
 ## [0.8.0] - 2026-11-20
 
 A usage limit is no longer the one interruption ccresu can miss. The daemon now

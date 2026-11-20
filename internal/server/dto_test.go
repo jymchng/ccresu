@@ -80,7 +80,7 @@ func TestDescribeState(t *testing.T) {
 	if got := describeState(""); got != "unknown" {
 		t.Fatalf("describeState(\"\") = %q", got)
 	}
-	if got := describeState(storage.StateRunning); got != string(storage.StateRunning) {
+	if got := describeState(storage.StateResumed); got != string(storage.StateResumed) {
 		t.Fatalf("describeState(running) = %q", got)
 	}
 }

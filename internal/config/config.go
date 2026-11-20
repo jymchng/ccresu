@@ -26,6 +26,11 @@ type Config struct {
 	// Source is the path the configuration was loaded from. It is not part of
 	// the YAML document and is empty for programmatically built configs.
 	Source string `yaml:"-"`
+
+	// retired holds the keys the document carried that this release no longer
+	// has; the loader drops them so the file still loads. It is not part of the
+	// document, and RetiredKeys is the read access.
+	retired []string
 }
 
 // App holds process-wide settings.
@@ -56,20 +61,20 @@ type Monitoring struct {
 	// RescanResumed extends the transcript scan to the states the daemon would
 	// otherwise never read again.
 	//
-	// The scan is normally limited to DISCOVERED and RUNNING, because every other
-	// state either has a pending pass that will read the transcript anyway or is a
-	// decision ccresu must not walk back. Three states fall between those two
-	// cases, and a session in one of them that hits a new usage limit is invisible
-	// for ever: RESUMED (Settled, so no pass revisits it), RETRY_WAIT (waiting on a
-	// backoff that will retry into the refusal) and WAITING_FOR_INPUT (parked on a
-	// human). With this on, all three are scanned too, and a limit found there
-	// parks the session in WAITING_FOR_RESET instead of being missed.
+	// The scan is normally limited to DISCOVERED, because every other state either
+	// has a pending pass that will read the transcript anyway (WAITING_FOR_RESET
+	// has its schedule, RESUMING is a resume in flight) or is a decision ccresu
+	// must not walk back (DISABLED, COMPLETED, UNRECOVERABLE). RESUMED falls
+	// between those two cases: it is Settled, so no pass revisits it, and a
+	// resumed session that hits a new usage limit is invisible for ever. With this
+	// on it is scanned too, and a limit found there parks the session in
+	// WAITING_FOR_RESET instead of being missed.
 	//
-	// The name says RESUMED because that is the state that motivated the switch
-	// and the one an operator will recognise; the full set is the three above.
+	// The name says RESUMED because that is the one state it adds.
 	// The scan can only ever *park* a session, never resume one: it writes
-	// USAGE_LIMIT_DETECTED then WAITING_FOR_RESET, and the state machine has no
-	// edge from any of these states to RESUMING.
+	// WAITING_FOR_RESET, reaching it through DISCOVERED because the machine has no
+	// RESUMED -> WAITING_FOR_RESET edge, and it has no edge from either beat to
+	// RESUMING.
 	//
 	// Default true. Turning it off restores the pre-0.8.0 behaviour, in which a
 	// limit that landed in a resumed session's transcript was only ever found by
@@ -142,6 +147,12 @@ func (c *Config) Warnings() []string {
 		return nil
 	}
 	var warnings []string
+	if len(c.retired) > 0 {
+		warnings = append(warnings, strings.Join(c.retired, ", ")+
+			" is no longer a configuration key: it is ignored, not rejected, so a"+
+			" file written for an older release still starts. Nothing enables it and"+
+			" nothing reads it — delete the line to keep the file honest")
+	}
 	if strings.EqualFold(strings.TrimSpace(c.Recovery.Guardrails.PermissionMode), "bypassPermissions") {
 		warnings = append(warnings, "recovery.guardrails.permission_mode is bypassPermissions, "+
 			"which a background session may silently ignore: Claude Code reports that a background "+
@@ -195,10 +206,6 @@ type Telegram struct {
 	NotifyRecoveryFailure  bool   `yaml:"notify_recovery_failure"`
 	NotifyPermanentFailure bool   `yaml:"notify_permanent_failure"`
 	NotifySessionCompleted bool   `yaml:"notify_session_completed"`
-	// NotifyNeedsInput announces that a session is waiting on a human. It is a
-	// new message class, so it defaults to false: an upgrade must not start
-	// sending one (PRD 4 R13), exactly like notify_waiting.
-	NotifyNeedsInput bool `yaml:"notify_needs_input"`
 }
 
 // Server holds local API settings.

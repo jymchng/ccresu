@@ -50,23 +50,20 @@ To get the two values:
 
 ## What you get
 
-Every event is a separate switch, all `true` by default except `notify_waiting`
-and `notify_needs_input`, the two classes that can arrive repeatedly for one
-session. All eight are produced today. The daemon queues `limit_detected` and
-`waiting_for_reset` from one place (`internal/app/daemon.go:345-347`); the four
+Every event is a separate switch, and all are `true` by default except
+`notify_waiting`, the one class that can arrive repeatedly for one session. All
+seven are produced today. The daemon queues `limit_detected` and
+`waiting_for_reset` from one place (`internal/app/daemon.go:389-392`); the four
 recovery events come from the recovery engine, which reports each milestone to an
 observer that renders and queues it (`internal/app/notifications.go`); and
 `session_completed` comes from the daemon's own `complete` stage
-(`internal/app/daemon.go:505-533`), because a completed session never enters the
+(`internal/app/daemon.go:542-571`), because a completed session never enters the
 recovery engine at all.
 
-`needs_input` is the only class **two** producers reach: the daemon's observation
-of a session that has gone `blocked`, and `ccresu hook` — a Claude Code
-`Notification` hook that asks for one observation the moment the CLI says a human
-is wanted. Both raise the same milestone from the same observation, so an
-installed hook makes the message arrive in seconds instead of at the next poll,
-and never produces a second copy of it. Installing the hook is yours to do; see
-[Hearing about a session that needs you](#hearing-about-a-session-that-needs-you).
+There is no "needs your input" message, and no hook to install to get one. A
+session the supervisor publishes as `blocked` is handed a continuation like any
+other: ccresu does not park it and does not ask you about it, so "this session
+needs you" is never a true statement about a session it manages.
 
 | Event | YAML key | Subject | Queued today |
 | --- | --- | --- | --- |
@@ -74,19 +71,18 @@ and never produces a second copy of it. Installing the hook is yours to do; see
 | Waiting for the reset | `notify_waiting` (default `false`) | Waiting for the usage limit to reset | yes, when the banner named no reset |
 | Recovery started | `notify_recovery_started` | Recovery started | yes, once per attempt, when the attempt row is written |
 | Recovery succeeded | `notify_recovery_success` | Recovery succeeded | yes, once per proven resume |
-| Attempt failed | `notify_recovery_failure` | Recovery attempt failed | yes, once per attempt that goes to `RETRY_WAIT` |
+| Attempt failed | `notify_recovery_failure` | Recovery attempt failed | yes, once per attempt that is parked in `WAITING_FOR_RESET` with a retry instant |
 | Permanent failure | `notify_permanent_failure` | Automatic recovery stopped | yes, once per failure classified `recovery.ClassPermanent` |
 | Session completed | `notify_session_completed` | Session completed | yes, once per session that settles as `COMPLETED` |
-| Needs your input | `notify_needs_input` (default `false`) | Session needs your input | yes, once per attention episode: from the daemon's observation of a `blocked` session, or seconds after it from an installed Claude Code hook |
 
 `notify_waiting` is off by default, and it is not a second copy of the detection
 message: the daemon skips it whenever the reset time is known
-(`internal/app/daemon.go:352-355`), so it only arrives when the banner carried no
+(`internal/app/daemon.go:396-400`), so it only arrives when the banner carried no
 time and ccresu has to poll for the window to clear. Turn it on to hear about
 that wait as it begins.
 
 The recovery events are rendered from the milestone the engine reports, so a
-successful recovery looks like this (`internal/telegram/template.go:116-124`):
+successful recovery looks like this (`internal/telegram/template.go:123-131`):
 
 ```text
 Recovery succeeded
@@ -96,65 +92,17 @@ The original conversation continues under the background supervisor.
 Duration: 2m14s
 ```
 
-Two things are deliberately not announced. A usage-limit refusal is a wait with a
-known end rather than a failure, so it raises no `recovery_failure`: the
-`limit_detected` and `waiting_for_reset` messages already described it. And
+Three things are deliberately not announced. A usage-limit refusal is a wait with
+a known end rather than a failure, so it raises no `recovery_failure`: the
+`limit_detected` and `waiting_for_reset` messages already described it. A
+`blocked` session is a resume ccresu is already making, not a question for you, so
+there is no message for it and nothing to answer from your phone. And
 `notify_permanent_failure` is worth calling out because its name invites the
 wrong reading: it belongs to a failure classified permanent
 (`recovery.ClassPermanent`), and a spent attempt budget is not one — that returns
 the session to `DISCOVERED`, where the daemon re-reads the transcript and plans
-the next reset (`internal/recovery/manager.go:353-359`), so it is a pause in a
+the next reset (`internal/recovery/manager.go:447-455`), so it is a pause in a
 cycle rather than a verdict about the conversation.
-
-## Hearing about a session that needs you
-
-A session that goes `blocked` is waiting on a human, and until it is answered it
-does nothing. The daemon notices at its next pass. A Claude Code `Notification`
-hook notices immediately, and that is the whole point of `ccresu hook`: one
-observation, no state change, at most one `needs_input` message.
-
-Installing it is **documented, never performed**. `ccresu` does not read or write
-`~/.claude/settings.json`, so you add the hook yourself and you can remove it
-again. Put this in the `hooks` object of that file:
-
-```json
-{
-  "hooks": {
-    "Notification": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "ccresu hook",
-            "timeout": 15
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-The explicit `timeout` matters. A command hook's default is 600 seconds, and a
-hook that can hold a session for ten minutes is worse than no hook: `ccresu hook`
-bounds itself to a few seconds of stdin, one `claude agents --json --all` read
-and one database write, so 15 seconds is generous and the default is not.
-
-No `matcher` is given on purpose. The hook is invoked for every notification type
-and ignores all but `agent_needs_input` and `agent_completed`, because the others
-describe an interactive terminal session, which ccresu does not model.
-
-Three more properties are worth knowing before you install it:
-
-- **It always exits 0 and prints nothing.** A hook runs inside a session's
-  transcript, so a message there or a non-zero exit would be a visible defect.
-  A missing payload, a broken configuration, a locked database and an unknown
-  session id are all silent no-ops.
-- **It never creates, discovers, enables or recovers anything.** It observes a
-  session ccresu already knows; discovery remains discovery's job.
-- **It cannot double up with the daemon.** Both producers compute the same
-  dedupe key for one episode, so installing the hook makes the message arrive
-  sooner, not twice.
 
 ## Escaping and length
 
@@ -210,7 +158,7 @@ To prove delivery, watch `pending` in the status route above while a real event
 is queued: it drops as the sender drains the row. A row that stays pending is
 the delivery failing, and `GET /api/v1/sessions/{id}` lists that session's
 notifications with `attempts` and `last_error`
-(`internal/server/dto.go:240-249`), so the reason is readable rather than
+(`internal/server/dto.go:242-251`), so the reason is readable rather than
 guessed at.
 
 Both routes are documented in [api.md](api.md).
@@ -224,7 +172,7 @@ Both routes are documented in [api.md](api.md).
 | `403 bot was blocked by the user` | The chat blocked the bot; unblock it and send `/start`. |
 | `429` repeatedly | Telegram is rate limiting the bot; the queue keeps the message and backs off. |
 | Nothing arrives, `enabled: false` | The switch is off: `ccresu config validate` prints `telegram: no`. |
-| Nothing arrives, one event missing | Check that event's switch first: `notify_waiting` is off by default, and it stays silent even when on if the banner named a reset time. `notify_recovery_failure` is deliberately not sent for a usage-limit refusal (that is a wait, reported by `notify_limit_detected`), and `notify_permanent_failure` only fires for a failure classified `recovery.ClassPermanent` — a spent attempt budget returns the session to `DISCOVERED` and announces nothing. `notify_session_completed` needs a session that has actually settled as `COMPLETED`. `notify_needs_input` is off by default too, and even switched on it needs a session the supervisor publishes as `blocked`: answer the prompt and the message is no longer true, so none is sent. |
+| Nothing arrives, one event missing | Check that event's switch first: `notify_waiting` is off by default, and it stays silent even when on if the banner named a reset time. `notify_recovery_failure` is deliberately not sent for a usage-limit refusal (that is a wait, reported by `notify_limit_detected`), and `notify_permanent_failure` only fires for a failure classified `recovery.ClassPermanent` — a spent attempt budget returns the session to `DISCOVERED` and announces nothing. `notify_session_completed` needs a session that has actually settled as `COMPLETED`. |
 
 The token is a credential: it is registered with the log redactor at startup, so
 it is scrubbed from every log line and error string, and it is masked in

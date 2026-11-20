@@ -58,15 +58,14 @@ leaves `state` and `enabled` alone (`sessions.go:36-39`), so a rediscovery can
 neither resurrect a disabled session nor reset a recovery in progress.
 2. **Detection** — the daemon's `detectIn` tails the newest
 `defaultTranscriptTail = 25` transcript lines (`internal/app/daemon.go:23-27`,
-used at `daemon.go:287`), joins them and hands the text to the detector. Which
-sessions are read is `scannedStates` (`daemon.go:268-279`): `DISCOVERED` and
-`RUNNING` always, plus `RESUMED`, `RETRY_WAIT` and `WAITING_FOR_INPUT` when
-`monitoring.rescan_resumed` is on — the default. The three are the states no
-other pass would ever read again: `RESUMED` is Settled, `RETRY_WAIT` is counting
-down a backoff that would retry into the same refusal, and `WAITING_FOR_INPUT` is
-parked on a human, so a limit that lands in one of them is otherwise invisible for
-ever. A rescan can only park: the writes it makes are `USAGE_LIMIT_DETECTED` and
-`WAITING_FOR_RESET`, and no edge from any of the three reaches `RESUMING`. The
+used at `daemon.go:284`), joins them and hands the text to the detector. Which
+sessions are read is `scannedStates` (`daemon.go:264-278`): `DISCOVERED` always,
+plus `RESUMED` when `monitoring.rescan_resumed` is on — the default. `RESUMED` is
+Settled, so no other pass would ever read that transcript again, and a limit that
+lands after a resume is otherwise invisible for ever. A rescan can only park: it
+writes `DISCOVERED → WAITING_FOR_RESET` — through `DISCOVERED`, because the
+machine deliberately has no `RESUMED → WAITING_FOR_RESET` edge — and no edge
+from either state reaches `RESUMING`. The
 detector normalises it (lowercase, collapsed whitespace, folded quotes/dashes,
 ANSI stripped) and scores it against the built-in patterns and any
 `detector.custom_patterns`; guards subtract penalties for conditional, modal,
@@ -80,8 +79,8 @@ unknown type and a confidence outside `[0,1]`, and writes the banner (bounded to
 2000 bytes), the plan's reset fields, the confidence, the paused flag and
 `DetectedAt`. Idempotence is by comparison: the newest `usage_limits` row is the
 fingerprint, and the same `reset_raw` with the same truncated `raw_message`
-records nothing and sends nothing (`daemon.go:307`, `alreadyDetected` at
-`daemon.go:355-362`).
+records nothing and sends nothing (`daemon.go:304`, `alreadyDetected` at
+`daemon.go:362-369`).
 4. **Reset resolution** — `Scheduler.PlanEvent` (`scheduler.go:162-164`) calls
 `Plan`, which turns `resets 12pm (Europe/Berlin)` into an absolute instant in
 that zone, independent of the host timezone. A phrase that names a zone is
@@ -90,16 +89,18 @@ guessed, because guessing could shift the wake-up by hours. A failed resolution
 degrades to polling instead of giving up: the schedule is marked `Unknown` with
 `NextPollAt = now + initial`.
 5. **Wait** — `SaveSchedule` (`internal/storage/schedules.go:21`) upserts the
-row, and the session moves `USAGE_LIMIT_DETECTED → WAITING_FOR_RESET` with
+row, and the session moves `DISCOVERED → WAITING_FOR_RESET` with
 reason `waiting until <RFC3339>` when the reset is known. The row, not a timer,
 is the source of truth: a restart, an upgrade or a reboot mid-wait resumes from
 the database. `LoadSchedules` orders the earliest deadline first and excludes
 rows with no deadline at all, because such a row could never become due.
-6. **Handoff** — when a schedule is due, `actOnSchedules` records
-`RESET_TIME_REACHED` first and then asks for a recovery
-(`daemon.go:408-460`, `markResetReached` at `467-481`). The manager records the
+6. **Handoff** — when a schedule is due, `actOnSchedules` asks for a recovery
+(`daemon.go:414-468`). There is no "the reset time arrived" state to record
+first: with seven states the pass wakes the session from whatever state it is in
+(`WAITING_FOR_RESET → RESUMING`), so the intermediate beat the old machine needed
+is gone. The manager records the
 attempt *before* it issues the continuation (`StartAttempt` at
-`manager.go:655`) and calls `claude.HandoffArgs`, whose vector is
+`manager.go:631`) and calls `claude.HandoffArgs`, whose vector is
 `[]string{"--bg", "--resume", sessionID, "--name", HandoffLabel(sessionID), message}`
 (`internal/claude/handoff.go:148-158`). The message is the **last** element because
 the CLI takes the prompt as a positional argument after the flags, so it follows
@@ -108,7 +109,7 @@ cannot be combined, so the print-mode vector is absent by construction. The labe
 is `ccresu-<first-8-hex>` derived from the session id, which makes a recovered
 session identifiable in agent view without consulting the database. The attempt's
 `command` column is a preview rendered in the same order
-(`manager.go:1411-1429`). The CLI answers a handoff with a
+(`manager.go:1399-1406`). The CLI answers a handoff with a
 `backgrounded · <short-id> · <name>` block that `claude` parses into
 `Handoff{StateID, Name, Copied, …}`; a handoff that prints no block is
 `ErrHandoffNotAcknowledged`, because ccresu could not then name what it created.
@@ -118,19 +119,23 @@ state is what happens next. `ObservationSource.Observe`
 per pass — always `--all`, whatever `claude.discover_all_sessions` says — indexes
 it by `sessionId` (`claude.PublishedListing`, `internal/claude/published.go:62`),
 and hands the entry to the total mapping `recovery.Observe`
-(`internal/recovery/published.go:115`). `working` after a handoff is `RESUMED`;
-`blocked` is `WAITING_FOR_INPUT` with the reason verbatim, and no continuation is
-sent; `done` before a handoff is `COMPLETED`; `failed` and `stopped` are retries;
-an unrecognised value is a retry with the value recorded. A session missing from
-the listing while a handoff is outstanding is `HandoffUnobserved` → `RETRY_WAIT`,
-never a failure, and a read that fails is `ErrObservationUnavailable`, which keeps
-the attempt open: an outage is not a verdict. Transcript growth is still
-measured, but only as a diagnostic (`verify.go:189`), and it can never make a
-blocked session read as recovered.
+(`internal/recovery/published.go:123`). `working` after a handoff is `RESUMED`;
+`blocked` is **not** a park any more: with a handoff outstanding the continuation
+landed, so the session is `RESUMED` and the prompt it waits on is the operator's
+to answer, and with no handoff the pass hands it a continuation like any other
+session; `done` before a handoff is `COMPLETED`; `failed` and `stopped` are
+retries; an unrecognised value is a retry with the value recorded. A session
+missing from the listing while a handoff is outstanding is `HandoffUnobserved` →
+`WAITING_FOR_RESET`, never a failure, and a read that fails is
+`ErrObservationUnavailable`, which keeps the attempt open: an outage is not a
+verdict. Transcript growth is still measured, but only as a diagnostic
+(`verify.go:189`), and it can never make a blocked session read as anything other
+than what the supervisor published.
 8. **Refusal** — if the CLI ran but said the limit is still in force, the
-session does **not** go to `RETRY_WAIT`: it returns to `WAITING_FOR_RESET`
-through the `RESUMING → WAITING_FOR_RESET` edge, because a backoff would ask the
-same question a minute later. A refusal is not a failure and is not retried.
+session does **not** go to a backoff: it returns to `WAITING_FOR_RESET`
+through the `RESUMING → WAITING_FOR_RESET` edge, because a retry a minute later
+would ask the same question. A refusal is not a failure and is not retried on the
+attempt schedule.
 9. **Notification** — the `deliver` stage drains the queue. Each message carries
 a `dedupe_key` that is `UNIQUE` in the table, which is what stops a crash or a
 restart from double-sending; the notifier can never block or fail a recovery.
@@ -138,7 +143,7 @@ restart from double-sending; the notifier can never block or fail a recovery.
 ## Persistence
 
 The SQLite database (default `~/.local/share/ccresu/ccresu.db`,
-`internal/config/defaults.go:90`) holds nine tables, created by embedded
+`internal/config/defaults.go:85-89`) holds eight tables, created by embedded
 migrations under `internal/storage/migrations`, plus one bookkeeping table:
 
 | Table | Holds |
@@ -149,7 +154,6 @@ migrations under `internal/storage/migrations`, plus one bookkeeping table:
 | `state_transitions` | the append-only audit trail: `session_id`, `attempt_id`, `from_state`, `to_state`, `reason`, `occurred_at` |
 | `schedules` | the durable wait: `session_id` (primary key), `usage_limit_id`, `reset_at`, `reset_timezone`, `reset_raw`, `unknown_reset`, `attempts`, `next_poll_at`, `created_at`, `updated_at` |
 | `notifications` | queued/sent/failed messages: `session_id`, `attempt_id`, `event`, `dedupe_key`, `body`, `status`, `attempts`, `last_error`, `created_at`, `updated_at`, `sent_at` |
-| `attention_episodes` | the current "waiting for a human" stretch per session: `session_id` (primary key), `started_at`, `reason` — the instant both producers of a `needs_input` message key on, so one block is one message |
 | `settings` | operator overrides as `key`/`value`/`updated_at` (global enable/disable and the API token fingerprint) |
 | `deleted_sessions` | tombstones: `id`, `project_path`, `transcript_path`, `state`, `deleted_at` |
 | `schema_migrations` | bookkeeping: `version`, `name`, `checksum`, `applied_at` |
@@ -157,7 +161,7 @@ migrations under `internal/storage/migrations`, plus one bookkeeping table:
 `deleted_sessions` is a tombstone rather than a soft-delete flag. Discovery
 reads the transcripts on disk, so deleting only the `sessions` row would be
 undone by the next pass; discovery therefore skips every id named there
-(`0005_deleted_sessions.sql:4-9`, `daemon.go:169-180`). Nothing under `~/.claude`
+(`0005_deleted_sessions.sql:4-9`, `daemon.go:167-178`). Nothing under `~/.claude`
 is touched, and the paths are kept so `ccresu enable <id>` can rebuild the row
 without re-reading the transcript.
 
@@ -206,25 +210,46 @@ production caller is `internal/app/runtime.go:140`, immediately after
 adopts an older database automatically; an older binary cannot read a newer
 schema, which is why downgrades need a backup.
 
+- **Old state names are migrated at startup, not tolerated at runtime.** The
+  seven states are a subset of the sixteen, so migration
+  `0013_simplify_states.sql` rewrites every row that still carries a retired name
+  — in `sessions`, `recovery_attempts`, `state_transitions` and
+  `deleted_sessions` — through one explicit many-to-one table: a detected limit
+  and a reached reset time both become `WAITING_FOR_RESET`, the two pre-flight
+  checks become `RESUMING`, `RUNNING` becomes `RESUMED`, a backoff and a
+  `blocked` park become `DISCOVERED`, and `USER_TERMINATED` and
+  `SPEND_CAP_REACHED` become `DISABLED`. Nothing is deleted: the conversation,
+  the attempt history and the transition timeline all survive. The rows are
+  migrated rather than filtered because a retired name is a state the rest of the
+  tool no longer accepts: the audit write path rejects any other name
+  (`internal/storage/transitions.go:12-15`), the API's state filters accept only
+  the seven (`internal/server/dto.go:346`), and `ccresu history` prints the
+  stored names verbatim, so an unmigrated timeline would be history in a
+  vocabulary nothing else speaks. The reverse is not possible and
+  is not attempted: after the collapse nothing records whether a given
+  `WAITING_FOR_RESET` was once `USAGE_LIMIT_DETECTED` or `RESET_TIME_REACHED`, and
+  writing one of them back would put a session in a state it was never in.
+
 ## Why recovery is idempotent
 
 Four independent guards, all in `internal/recovery` and `internal/storage`:
 
 - **Transition validation.** `CanTransition` and `ValidateTransition`
-(`state.go:92-240`) reject any edge that is not in the `transitions` map, so a
+(`state.go:160-209`) reject any edge that is not in the `transitions` map, so a
 duplicate tick cannot move a session from `RESUMED` straight back into
-`RESUMING`. The map is the authoritative table: 16 states, and only the edges
+`RESUMING`. The map is the authoritative table: seven states, and only the edges
 written there are legal. A repeat `WAITING_FOR_RESET → WAITING_FOR_RESET` is
 allowed because an unknown-reset session re-enters the waiting state after every
 poll and a restart re-observes the wait; moving to the state it is already in
 still writes the audit row, because "the limit was checked again and was still
-in force" is worth keeping (`manager.go:1261-1279`).
-- **Per-session locking.** `manager.sessionLocks` (`manager.go:1281-1344`) takes a
+in force" is worth keeping (`manager.go:1238-1256`).
+- **Per-session locking.** `manager.sessionLocks` (`manager.go:1261-1314`) takes a
 non-blocking lock per session, so the daemon tick and a manual `ccresu recover`
 cannot work the same session at once (`manager.go:410`).
-- **Settled states.** `Settled(s)` — `RESUMED`, `COMPLETED`, `USER_TERMINATED`,
-`DISABLED`, `UNRECOVERABLE` (`state.go:297-304`) — refuses further work, which is
-what prevents a finished conversation from being resumed again.
+- **Settled states.** `Settled(s)` — `RESUMED`, `COMPLETED`, `DISABLED`,
+`UNRECOVERABLE` (`state.go:233-240`) — refuses further work, which is what
+prevents a finished conversation from being resumed again, and what stops a
+just-resumed session from being resumed off its own stale banner.
 - **The persisted attempt plus the unique constraint.** The attempt row is
 written before the resume and its `UNIQUE (session_id, attempt_number)` index is
 the arbiter, so a duplicate allocation loses in the database rather than in a
@@ -234,39 +259,56 @@ race. `StartAttempt` retries allocation up to
 
 The state machine itself is defined once. `recovery.State` is an alias of
 `storage.State` (`state.go:17`), so a state passes straight to the repository
-with no translation layer. The happy path is
-`DISCOVERED → RUNNING → USAGE_LIMIT_DETECTED → WAITING_FOR_RESET →
-RESET_TIME_REACHED → CHECKING_SESSION → CHECKING_LIMIT → RESUMING → RESUMED`,
-with `RETRY_WAIT` looping back to `CHECKING_SESSION`. There is no terminal
-failure state: every state that permits automatic work has an edge back to
-`DISCOVERED`, and entering `DISCOVERED` resets the attempt budget, so a spent
-budget is a pause rather than a failure. `Terminal(s)` is true only when no edge
-leaves `s` (`COMPLETED`, `USER_TERMINATED`, `UNRECOVERABLE`); `Pending(s)` is
-what a restarted daemon must pick up (`USAGE_LIMIT_DETECTED`,
-`WAITING_FOR_RESET`, `WAITING_FOR_INPUT`, `RESET_TIME_REACHED`,
-`CHECKING_SESSION`, `CHECKING_LIMIT`, `RESUMING`, `RETRY_WAIT`).
+with no translation layer. One lap is four beats and it repeats for as long as
+the session keeps hitting its limit:
 
-Three edges exist only so a limit can be noticed in a session that is otherwise
-finished with: `RESUMED`, `RETRY_WAIT` and `WAITING_FOR_INPUT` each reach
-`USAGE_LIMIT_DETECTED`. The rescan takes them, and `ccresu search-limit` takes the
-`RESUMED` one on the operator's behalf. They are parks, not resumptions — none of
-the three reaches `RESUMING`, and `RESUMED` still has no direct edge to
-`WAITING_FOR_RESET`, so the observation that produced the wait is always its own
-`state_transitions` row rather than an inference from the row before it.
+```text
+DISCOVERED → WAITING_FOR_RESET → RESUMING → RESUMED → DISCOVERED
+```
+
+`DISCOVERED` is the transcript read, `WAITING_FOR_RESET` is the durable wait on
+the instant a banner named, `RESUMING` is the one attempt spent handing the
+backgrounded session a continuation, and `RESUMED` is the landing beat — whose
+edge back to `DISCOVERED` is what makes the loop a loop. There is no terminal
+failure state: every beat that permits automatic work has an edge back to
+`DISCOVERED`, and entering `DISCOVERED` resets the attempt budget, so a spent
+budget is a pause rather than a failure. `Terminal(s)` is true for `COMPLETED`,
+`DISABLED` and `UNRECOVERABLE` (`DISABLED` is terminal to every automatic caller
+and has exactly one edge, back to `DISCOVERED`, which only `ccresu enable`
+takes); `Pending(s)` — what a restarted daemon picks up — is `WAITING_FOR_RESET`
+and `RESUMING`; `Failed(s)` is `UNRECOVERABLE` alone.
+
+Two edges exist only so a limit can be noticed in a session that is otherwise
+finished with: `DISCOVERED → RESUMED` and `WAITING_FOR_RESET → RESUMED` record a
+session the supervisor found alive again on its own once the window reset. They
+are observations from the published state, not resumes — no attempt is spent and
+no continuation is handed over. A rescan of a `RESUMED` session takes
+`RESUMED → DISCOVERED → WAITING_FOR_RESET`, and `ccresu search-limit` takes the
+same two on the operator's behalf. They are parks, not resumptions — neither
+reaches `RESUMING` — and `RESUMED` still has no direct edge to `WAITING_FOR_RESET`,
+so the observation that produced the wait is always its own `state_transitions`
+row rather than an inference from the row before it.
 
 ## Concurrency and shutdown
 
-One reconcile pass is an eight-stage pipeline in fixed order — `discover`,
-`detect`, `schedule`, `unpark`, `recover`, `complete`, `attention`, `deliver`
-(`internal/app/daemon.go:127-157`).
+One reconcile pass is a six-stage pipeline in fixed order — `discover`,
+`detect`, `schedule`, `recover`, `complete`, `deliver`
+(`internal/app/daemon.go:127-155`).
 Every stage is best-effort: a failure is joined into the returned error and
 logged, but never aborts the others, because a broken Telegram token must not
 stop recoveries.
 
+Two stages the old machine needed are gone with the states they served. `unpark`
+existed to release sessions parked in a spend-cap state after the operator raised
+a cap; a spend stop is now `DISABLED`, and the way back is `ccresu enable`, which
+is a human act and therefore cannot be a stage. `markResetReached` existed to
+move a waiting session into a "reset time arrived" state; a due schedule now
+wakes the session straight into `RESUMING`, so there is no beat to record first.
+
 `recovery.max_concurrent_recoveries` (default 3,
 `internal/config/defaults.go:59`) bounds parallel resumes through a semaphore
-(`DefaultMaxConcurrent = 3`, `manager.go:19-20`, `manager.go:295-301`); excess
-sessions stay in `RESET_TIME_REACHED` until a slot frees up. A per-session lock
+(`DefaultMaxConcurrent = 3`, `manager.go:19-20`, `manager.go:214`); excess
+sessions stay in `WAITING_FOR_RESET` until a slot frees up. A per-session lock
 sits in front of the semaphore so a session never occupies two slots.
 
 `Run` starts the notifier goroutine, runs the first pass immediately so a

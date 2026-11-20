@@ -71,9 +71,6 @@ func Defaults() Config {
 			NotifyRecoveryFailure:  true,
 			NotifyPermanentFailure: true,
 			NotifySessionCompleted: true,
-			// Off by default: an upgrade adds a message class, it does not
-			// start sending one (PRD 4 R13).
-			NotifyNeedsInput: false,
 		},
 		Server: Server{
 			Enabled: true,

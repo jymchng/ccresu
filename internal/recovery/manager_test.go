@@ -200,7 +200,7 @@ func newTestStore(t *testing.T) *storage.Store {
 func seedSession(t *testing.T, store *storage.Store, session storage.Session) storage.Session {
 	t.Helper()
 	if session.State == "" {
-		session.State = StateResetTimeReached
+		session.State = StateWaitingForReset
 	}
 	if session.Type == "" {
 		session.Type = storage.SessionTypeHeadless
@@ -221,7 +221,7 @@ func recoverableSession(id string) storage.Session {
 		ID:              id,
 		ProjectPath:     "/home/u/project",
 		TranscriptPath:  "/home/u/.claude/projects/p/" + id + ".jsonl",
-		State:           StateResetTimeReached,
+		State:           StateWaitingForReset,
 		Enabled:         true,
 		Recoverable:     true,
 		TranscriptSize:  200,
@@ -486,7 +486,7 @@ func TestRecoverResumesAndProvesTheConversationContinued(t *testing.T) {
 	if len(history.Attempts) != 1 {
 		t.Errorf("attempt history = %d rows, want 1", len(history.Attempts))
 	}
-	wantStates := []State{StateCheckingSession, StateCheckingLimit, StateResuming, StateResumed}
+	wantStates := []State{StateResuming, StateResumed}
 	if len(history.Transitions) < len(wantStates) {
 		t.Fatalf("transitions = %d, want at least %d", len(history.Transitions), len(wantStates))
 	}
@@ -608,15 +608,15 @@ func TestRecoverRetriesWhenTheLimitCheckFails(t *testing.T) {
 	if !errors.As(err, &retry) {
 		t.Fatalf("Recover error = %v, want a RetryError", err)
 	}
-	if outcome.State != StateRetryWait || outcome.Delay != retry.Delay {
-		t.Errorf("outcome = %+v, want RETRY_WAIT with the same delay %s", outcome, retry.Delay)
+	if outcome.State != StateWaitingForReset || outcome.Delay != retry.Delay {
+		t.Errorf("outcome = %+v, want WAITING_FOR_RESET with the same delay %s", outcome, retry.Delay)
 	}
 }
 
 func TestRecoverRecordsAPermanentPreResumeFailureAsARetryWait(t *testing.T) {
 	store := newTestStore(t)
 	session := recoverableSession(sessionA)
-	session.State = StateRetryWait
+	session.State = StateWaitingForReset
 	seedSession(t, store, session)
 	ctx := context.Background()
 
@@ -637,8 +637,8 @@ func TestRecoverRecordsAPermanentPreResumeFailureAsARetryWait(t *testing.T) {
 	if errors.As(err, &cycleEnd) {
 		t.Errorf("error = %v, want no cycleEndError: a pre-resume failure rests in RETRY_WAIT", err)
 	}
-	if outcome.State != StateRetryWait || outcome.Delay != retry.Delay {
-		t.Errorf("outcome = %+v, want RETRY_WAIT with the same delay %s", outcome, retry.Delay)
+	if outcome.State != StateWaitingForReset || outcome.Delay != retry.Delay {
+		t.Errorf("outcome = %+v, want WAITING_FOR_RESET with the same delay %s", outcome, retry.Delay)
 	}
 	if retry.Attempt != 0 || retry.Max != DefaultMaxAttempts {
 		t.Errorf("retry = %+v, want no attempt spent out of %d", retry, DefaultMaxAttempts)
@@ -653,8 +653,8 @@ func TestRecoverRecordsAPermanentPreResumeFailureAsARetryWait(t *testing.T) {
 		t.Fatalf("list transitions: %v", err)
 	}
 	last := transitions[len(transitions)-1]
-	if last.FromState != StateCheckingSession || last.ToState != StateRetryWait {
-		t.Errorf("last transition = %s -> %s, want CHECKING_SESSION -> RETRY_WAIT",
+	if last.FromState != StateWaitingForReset || last.ToState != StateWaitingForReset {
+		t.Errorf("last transition = %s -> %s, want the same-state park re-entry WAITING_FOR_RESET -> WAITING_FOR_RESET",
 			last.FromState, last.ToState)
 	}
 	for _, want := range []string{"pre-resume check failed", "permanent", "no attempt was spent"} {
@@ -666,8 +666,8 @@ func TestRecoverRecordsAPermanentPreResumeFailureAsARetryWait(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get session: %v", err)
 	}
-	if stored.State != StateRetryWait {
-		t.Errorf("stored state = %s, want RETRY_WAIT", stored.State)
+	if stored.State != StateWaitingForReset {
+		t.Errorf("stored state = %s, want WAITING_FOR_RESET", stored.State)
 	}
 	if !strings.Contains(stored.LastError, "invalid api key") {
 		t.Errorf("stored LastError = %q, want the cause recorded", stored.LastError)
@@ -684,7 +684,7 @@ func TestRecoverRecordsAPermanentPreResumeFailureAsARetryWait(t *testing.T) {
 func TestRecoverRecordsAFailedPreResumeCheckWithTheBudgetSpent(t *testing.T) {
 	store := newTestStore(t)
 	session := recoverableSession(sessionA)
-	session.State = StateRetryWait
+	session.State = StateWaitingForReset
 	seedSession(t, store, session)
 
 	ctx := context.Background()
@@ -697,7 +697,7 @@ func TestRecoverRecordsAFailedPreResumeCheckWithTheBudgetSpent(t *testing.T) {
 			t.Fatalf("start attempt %d: %v", i+1, err)
 		}
 		if _, err := store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
-			State:      StateRetryWait,
+			State:      StateWaitingForReset,
 			Success:    storage.BoolPtr(false),
 			Error:      "previous failure",
 			FinishedAt: time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC),
@@ -717,16 +717,16 @@ func TestRecoverRecordsAFailedPreResumeCheckWithTheBudgetSpent(t *testing.T) {
 	if !errors.As(err, &retry) {
 		t.Fatalf("Recover error = %v, want a RetryError, not a rejected transition", err)
 	}
-	if outcome.State != StateRetryWait {
-		t.Errorf("outcome state = %s, want RETRY_WAIT", outcome.State)
+	if outcome.State != StateWaitingForReset {
+		t.Errorf("outcome state = %s, want WAITING_FOR_RESET", outcome.State)
 	}
 	transitions, err := store.ListTransitions(ctx, sessionA, 0)
 	if err != nil {
 		t.Fatalf("list transitions: %v", err)
 	}
 	last := transitions[len(transitions)-1]
-	if last.FromState != StateCheckingSession || last.ToState != StateRetryWait {
-		t.Errorf("last transition = %s -> %s, want CHECKING_SESSION -> RETRY_WAIT",
+	if last.FromState != StateWaitingForReset || last.ToState != StateWaitingForReset {
+		t.Errorf("last transition = %s -> %s, want the same-state park re-entry WAITING_FOR_RESET -> WAITING_FOR_RESET",
 			last.FromState, last.ToState)
 	}
 }
@@ -734,7 +734,7 @@ func TestRecoverRecordsAFailedPreResumeCheckWithTheBudgetSpent(t *testing.T) {
 func TestRecoverRecordsAFailedLimitCheckAsARetryWait(t *testing.T) {
 	store := newTestStore(t)
 	session := recoverableSession(sessionA)
-	session.State = StateRetryWait
+	session.State = StateWaitingForReset
 	seedSession(t, store, session)
 	ctx := context.Background()
 
@@ -749,16 +749,16 @@ func TestRecoverRecordsAFailedLimitCheckAsARetryWait(t *testing.T) {
 	if !errors.As(err, &retry) {
 		t.Fatalf("Recover error = %v, want a RetryError, not a rejected transition", err)
 	}
-	if outcome.State != StateRetryWait {
-		t.Errorf("outcome state = %s, want RETRY_WAIT", outcome.State)
+	if outcome.State != StateWaitingForReset {
+		t.Errorf("outcome state = %s, want WAITING_FOR_RESET", outcome.State)
 	}
 	transitions, err := store.ListTransitions(ctx, sessionA, 0)
 	if err != nil {
 		t.Fatalf("list transitions: %v", err)
 	}
 	last := transitions[len(transitions)-1]
-	if last.FromState != StateCheckingLimit || last.ToState != StateRetryWait {
-		t.Errorf("last transition = %s -> %s, want CHECKING_LIMIT -> RETRY_WAIT",
+	if last.FromState != StateWaitingForReset || last.ToState != StateWaitingForReset {
+		t.Errorf("last transition = %s -> %s, want WAITING_FOR_RESET -> WAITING_FOR_RESET",
 			last.FromState, last.ToState)
 	}
 }
@@ -783,7 +783,7 @@ func TestRecoverSchedulesARetryAfterATransientFailure(t *testing.T) {
 	if retry.Delay != time.Second {
 		t.Errorf("retry delay = %s, want the first backoff step", retry.Delay)
 	}
-	if outcome.State != StateRetryWait || outcome.Delay != time.Second {
+	if outcome.State != StateWaitingForReset || outcome.Delay != time.Second {
 		t.Errorf("outcome = %+v, want RETRY_WAIT in %s", outcome, time.Second)
 	}
 	if !strings.Contains(retry.Error(), "retryable") {
@@ -794,7 +794,7 @@ func TestRecoverSchedulesARetryAfterATransientFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get session: %v", err)
 	}
-	if stored.State != StateRetryWait || stored.LastError == "" {
+	if stored.State != StateWaitingForReset || stored.LastError == "" {
 		t.Errorf("persisted session = %s/%q, want RETRY_WAIT with the error recorded", stored.State, stored.LastError)
 	}
 }
@@ -855,8 +855,8 @@ func TestRecoverTreatsAnErrorResultAsAFailure(t *testing.T) {
 	if !errors.Is(err, claude.ErrResumeFailed) {
 		t.Errorf("error = %v, want ErrResumeFailed", err)
 	}
-	if outcome.State != StateRetryWait {
-		t.Errorf("outcome state = %s, want RETRY_WAIT", outcome.State)
+	if outcome.State != StateWaitingForReset {
+		t.Errorf("outcome state = %s, want WAITING_FOR_RESET", outcome.State)
 	}
 }
 
@@ -933,7 +933,7 @@ func TestRecoverRecordsADisabledSessionWithoutWork(t *testing.T) {
 }
 
 func TestRecoverRefusesSettledSessions(t *testing.T) {
-	cases := []State{StateCompleted, StateUserTerminated, StateUnrecoverable}
+	cases := []State{StateCompleted, StateDisabled, StateUnrecoverable}
 	for _, state := range cases {
 		t.Run(string(state), func(t *testing.T) {
 			store := newTestStore(t)
@@ -979,7 +979,7 @@ func exhaustBudget(t *testing.T, store *storage.Store, sessionID string, n int) 
 			t.Fatalf("start attempt %d: %v", i+1, err)
 		}
 		if _, err := store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
-			State:      StateRetryWait,
+			State:      StateWaitingForReset,
 			Success:    storage.BoolPtr(false),
 			Error:      "previous failure",
 			FinishedAt: time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC),
@@ -990,23 +990,20 @@ func exhaustBudget(t *testing.T, store *storage.Store, sessionID string, n int) 
 }
 
 func TestRecoverRecordsAnExhaustedBudgetFromEveryLiveState(t *testing.T) {
-	// The budget guard has to be able to write PERMANENTLY_FAILED from wherever
-	// the session actually stands when the budget runs out: the scheduler parks a
+	// The budget guard has to be able to return the session to DISCOVERED from
+	// wherever it actually stands when the budget runs out: the scheduler parks a
 	// session in WAITING_FOR_RESET while the limit is still in force, and a crash
-	// mid-check leaves it in CHECKING_SESSION. Asking for an edge the machine does
-	// not define loses both the terminal state and the reason for it, and reports
-	// ErrMaxAttempts as an ordinary failure.
+	// mid-pass leaves it in RESUMING. Asking for an edge the machine does not
+	// define loses both the state and the reason for it, and reports ErrMaxAttempts
+	// as an ordinary failure.
+	//
+	// RESUMED is deliberately absent: it is Settled, so the pass leaves it alone
+	// before the budget is ever consulted.
 	ctx := context.Background()
 	states := []State{
 		StateDiscovered,
-		StateRunning,
-		StateUsageLimitDetected,
 		StateWaitingForReset,
-		StateResetTimeReached,
-		StateCheckingSession,
-		StateCheckingLimit,
 		StateResuming,
-		StateRetryWait,
 	}
 	for _, from := range states {
 		t.Run(string(from), func(t *testing.T) {
@@ -1072,7 +1069,7 @@ func TestRecoverRecordsAnExhaustedBudgetFromEveryLiveState(t *testing.T) {
 func TestRecoverHonoursTheAttemptBudgetAndForce(t *testing.T) {
 	store := newTestStore(t)
 	session := recoverableSession(sessionA)
-	session.State = StateRetryWait
+	session.State = StateWaitingForReset
 	seedSession(t, store, session)
 
 	ctx := context.Background()
@@ -1082,7 +1079,7 @@ func TestRecoverHonoursTheAttemptBudgetAndForce(t *testing.T) {
 			t.Fatalf("start attempt %d: %v", i+1, err)
 		}
 		if _, err := store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
-			State:      StateRetryWait,
+			State:      StateWaitingForReset,
 			Success:    storage.BoolPtr(false),
 			Error:      "previous failure",
 			FinishedAt: time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC),
@@ -1122,7 +1119,7 @@ func TestBudgetRestartsWhenASessionIsRediscovered(t *testing.T) {
 	// command to clear it.
 	store := newTestStore(t)
 	session := recoverableSession(sessionA)
-	session.State = StateRetryWait
+	session.State = StateWaitingForReset
 	seedSession(t, store, session)
 
 	ctx := context.Background()
@@ -1214,7 +1211,7 @@ func TestRecoverEnforcesTheConcurrencyLimit(t *testing.T) {
 func TestAProcessExitIsNotAFailedRecovery(t *testing.T) {
 	store := newTestStore(t)
 	session := recoverableSession(sessionA)
-	session.State = StateRetryWait
+	session.State = StateWaitingForReset
 	seedSession(t, store, session)
 	ctx := context.Background()
 
@@ -1290,22 +1287,22 @@ func TestAProcessExitIsNotAFailedRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list transitions: %v", err)
 	}
-	found, retryWait := false, false
+	found, parked := false, false
 	for _, transition := range transitions {
 		if strings.Contains(transition.Reason, "interrupted") {
 			switch transition.ToState {
 			case StateDiscovered:
 				found = true
-			case StateRetryWait:
-				retryWait = true
+			case StateWaitingForReset:
+				parked = true
 			}
 		}
 	}
 	if !found {
 		t.Errorf("transitions = %+v, want the interruption recorded as a return to DISCOVERED", transitions)
 	}
-	if retryWait {
-		t.Error("the interruption was recorded as RETRY_WAIT, which schedules the second recovery R6 forbids")
+	if parked {
+		t.Error("the interruption was recorded as a park, which schedules the second recovery R6 forbids")
 	}
 }
 
@@ -1325,8 +1322,8 @@ func TestRecoverKeepsGoingAfterAnUnprovenResume(t *testing.T) {
 	if outcome.Verification.Proven {
 		t.Error("Proven = true, want false")
 	}
-	if outcome.State != StateRetryWait {
-		t.Errorf("outcome state = %s, want RETRY_WAIT for a retryable verification failure", outcome.State)
+	if outcome.State != StateWaitingForReset {
+		t.Errorf("outcome state = %s, want WAITING_FOR_RESET for a retryable verification failure", outcome.State)
 	}
 }
 
@@ -1351,8 +1348,8 @@ func TestRecoverRetriesWhenThePostResumeCheckFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("Recover = nil error, want the verification failure")
 	}
-	if outcome.State != StateRetryWait {
-		t.Errorf("outcome state = %s, want RETRY_WAIT", outcome.State)
+	if outcome.State != StateWaitingForReset {
+		t.Errorf("outcome state = %s, want WAITING_FOR_RESET", outcome.State)
 	}
 	attempts, listErr := store.ListAttempts(context.Background(), sessionA, 0)
 	if listErr != nil {
@@ -1382,18 +1379,18 @@ func TestRecoverRetriesWhenThePreResumeCheckFails(t *testing.T) {
 	if !errors.As(err, &retry) {
 		t.Fatalf("Recover error = %v, want a RetryError", err)
 	}
-	if outcome.State != StateRetryWait {
-		t.Errorf("outcome state = %s, want RETRY_WAIT", outcome.State)
+	if outcome.State != StateWaitingForReset {
+		t.Errorf("outcome state = %s, want WAITING_FOR_RESET", outcome.State)
 	}
 	if retry.Attempt != 0 || retry.Delay != time.Second {
 		t.Errorf("retry = %+v, want the first backoff step with no attempt spent", retry)
 	}
 }
 
-func TestRecoverRecordsARepeatedWaitWithoutChangingState(t *testing.T) {
+func TestRecoverResumesAParkedSession(t *testing.T) {
 	store := newTestStore(t)
 	session := recoverableSession(sessionA)
-	session.State = StateCheckingSession
+	session.State = StateWaitingForReset
 	seedSession(t, store, session)
 	manager := testManager(t, store, growthProvider(10, 12), nil)
 
@@ -1408,8 +1405,8 @@ func TestRecoverRecordsARepeatedWaitWithoutChangingState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list transitions: %v", err)
 	}
-	if len(transitions) == 0 || transitions[0].FromState != StateCheckingSession || transitions[0].ToState != StateCheckingSession {
-		t.Errorf("first transition = %+v, want the same-state re-entry recorded", transitions)
+	if len(transitions) == 0 || transitions[0].FromState != StateWaitingForReset || transitions[0].ToState != StateResuming {
+		t.Errorf("first transition = %+v, want the park to advance to RESUMING", transitions)
 	}
 }
 
@@ -1419,9 +1416,9 @@ func TestPendingReturnsOnlySessionsThatWantWork(t *testing.T) {
 	waiting.State = StateWaitingForReset
 	seedSession(t, store, waiting)
 
-	retrying := recoverableSession(sessionB)
-	retrying.State = StateRetryWait
-	seedSession(t, store, retrying)
+	resuming := recoverableSession(sessionB)
+	resuming.State = StateResuming
+	seedSession(t, store, resuming)
 
 	done := recoverableSession(sessionC)
 	done.State = StateCompleted
@@ -1470,9 +1467,9 @@ func TestTargetFor(t *testing.T) {
 		want    State
 	}{
 		{ClassUnrecoverable, 1, 10, StateUnrecoverable},
-		{ClassCanceled, 3, 10, StateRetryWait},
+		{ClassCanceled, 3, 10, StateWaitingForReset},
 		{ClassPermanent, 1, 10, StateDiscovered},
-		{ClassRetryable, 1, 10, StateRetryWait},
+		{ClassRetryable, 1, 10, StateWaitingForReset},
 		{ClassRetryable, 10, 10, StateDiscovered},
 	}
 	for _, tc := range cases {

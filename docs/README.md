@@ -36,8 +36,9 @@ how the packages and tables fit together.
    rather than guessing. Both the instant and the poll count are persisted, so a
    restart continues the same wait instead of starting it again.
 5. **The handoff.** When the schedule is due the session walks
-   `WAITING_FOR_RESET → RESET_TIME_REACHED → CHECKING_SESSION → CHECKING_LIMIT →
-   RESUMING`, and ccresu hands the same session id to Claude Code's background
+   `WAITING_FOR_RESET → RESUMING → RESUMED` — the pre-flight checks happen inside
+   `RESUMING`, because one resume is one beat — and ccresu hands the same session
+   id to Claude Code's background
    supervisor:
    `claude --bg --resume <session-id> --name ccresu-<first-8-hex> "<message>"`.
    The invocation returns as soon as the supervisor accepts the session, so the
@@ -47,10 +48,11 @@ how the packages and tables fit together.
    <name>` block the CLI prints. What happens afterwards is *read*, not inferred:
    one `claude agents --json --all` per pass publishes `working`, `blocked`,
    `done`, `failed` or `stopped` for the session, and that published state is
-   what the decision rests on. `blocked` parks the session in
-   `WAITING_FOR_INPUT` with the reason carried verbatim; a session missing from
-   the listing is `HandoffUnobserved`, never a failure; a transcript that grew is
-   recorded as a diagnostic and proves nothing on its own.
+   what the decision rests on. `blocked` is not a park: with a handoff outstanding the continuation landed and
+   the session is `RESUMED`, with the reason carried verbatim, and with no handoff
+   it is handed a continuation like any other; a session missing from the listing
+   is `HandoffUnobserved`, never a failure; a transcript that grew is recorded as
+   a diagnostic and proves nothing on its own.
 7. **A refusal is a wait, not a failure.** If the CLI answers the resume with
    the limit banner, the attempt is finished with that banner, the banner is
    recorded as a usage limit, and the session returns to `WAITING_FOR_RESET`
@@ -58,7 +60,8 @@ how the packages and tables fit together.
    consulted: what ends the wait is the reset, not a count of tries. A failure
    that cannot be retried on this schedule returns the session to `DISCOVERED`,
    where the next discovery pass re-reads the transcript and schedules the next
-   reset; a transient one waits in `RETRY_WAIT` and is tried again with backoff.
+   reset; a transient one stays in `WAITING_FOR_RESET` with its next try
+   recorded on `sessions.retry_at`, and is tried again with backoff.
 
 Every stage appends to the audit trail — a `state_transitions` row per state
 change and a `recovery_attempts` row per resume — which is what
@@ -69,8 +72,11 @@ for one session: the daemon records that as a decision instead of retrying, and
 `ccresu enable` undoes it — as it also undoes `ccresu sessions delete`. Retries
 within one cycle are bounded by the attempt budget
 (`recovery.max_attempts`, ten) with a backoff of 30s doubling to 15m, and a
-spent budget returns the session to `DISCOVERED` rather than to a failure state:
-there is no terminal failure state.
+spent budget returns the session to `DISCOVERED` rather than to a failure state.
+The machine has no `FAILED`: it ends only in `COMPLETED` (the work finished),
+`DISABLED` (an operator stopped it; `ccresu enable` is the one way back) and
+`UNRECOVERABLE` (no verified way to resume), and a spent budget reaches none of
+them.
 
 ## Build and install
 

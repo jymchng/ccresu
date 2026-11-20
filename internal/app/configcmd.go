@@ -183,6 +183,14 @@ func (a *App) cmdConfigValidate(args []string) error {
 		return withCode(ExitFailure, fmt.Errorf("configuration %s is empty", path))
 	}
 
+	// loadConfig reports advisory problems once per load. validate loads the file
+	// through the same loader but does not go through loadConfig, so it reports
+	// them here rather than staying silent about a key the loader dropped — this
+	// is the command an operator runs right after editing the file.
+	for _, warning := range cfg.Warnings() {
+		fmt.Fprintf(a.stderr, "warning: %s\n", warning)
+	}
+
 	if a.json {
 		return a.writeJSON(a.stdout, map[string]any{
 			"path":     path,

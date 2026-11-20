@@ -27,8 +27,10 @@ type NextAttempt struct {
 // nextAttemptReasons names the non-scheduled outcomes, so `ccresu inspect` and
 // the `ccresu sessions` table describe the same situation in the same words.
 const (
-	// ReasonDisabled is reported for a session the operator turned off.
-	ReasonDisabled = "session is not enabled"
+	// ReasonDisabled is reported for a session the operator turned off, and for one
+	// that stopped at a spend cap: both are DISABLED, and both need the same act —
+	// `ccresu enable` — before anything else happens.
+	ReasonDisabled = "session is disabled; run `ccresu enable` to resume it"
 	// ReasonNoLimit is reported for a session with no usage limit detected yet.
 	ReasonNoLimit = "no usage limit detected yet"
 	// ReasonRediscovered is reported for a session returned to discovery, which
@@ -42,20 +44,14 @@ const (
 	ReasonResumed = "already resumed"
 	// ReasonCompleted is reported for a session that finished normally.
 	ReasonCompleted = "session completed"
-	// ReasonTerminated is reported for a session the operator ended.
-	ReasonTerminated = "session was terminated"
 	// ReasonInFlight is reported while a recovery is actually running.
 	ReasonInFlight = "recovery in progress"
-	// ReasonNoSchedule is reported when a session is waiting but the row that
-	// holds the instant is missing, which means the store lost it.
-	ReasonNoSchedule = "waiting for the reset but no schedule is stored"
-	// ReasonNoRetryInstant is reported when a session is in RETRY_WAIT without a
-	// stored instant, which also means the store lost it.
-	ReasonNoRetryInstant = "waiting to retry but the next instant is not stored"
-	// ReasonSpendCapReached is reported for a session parked because its recorded
-	// spend reached a configured cap. It names the remedy, because nothing will
-	// happen on its own: the state is deliberately not pending.
-	ReasonSpendCapReached = "paused at the spend cap; raise the cap or run `ccresu recover` to continue"
+	// ReasonNoSchedule is reported when a session is parked but neither a schedule
+	// nor a retry instant is stored, which means the store lost it.
+	ReasonNoSchedule = "parked but neither a reset time nor a retry instant is stored"
+	// ReasonRetrying is reported for a session parked after a failed attempt: the
+	// instant is the backoff ccresu computed, not a usage-limit reset.
+	ReasonRetrying = "retrying after a failed attempt"
 )
 
 // NextAttemptFor resolves the next attempt for a session.
@@ -71,45 +67,41 @@ func NextAttemptFor(session storage.Session, sched *storage.Schedule, now time.T
 
 	switch session.State {
 	case storage.StateWaitingForReset:
-		if sched == nil {
-			return NextAttempt{Reason: ReasonNoSchedule}
+		// A park is woken either by the schedule that holds the reset instant or,
+		// when the session was parked by a failure rather than a banner, by the
+		// retry instant the backoff computed. Preferring the schedule keeps a real
+		// reset authoritative when both exist.
+		if sched != nil {
+			if at := sched.DueAt(); !at.IsZero() {
+				return NextAttempt{At: at.UTC(), Reason: waitingReason(sched), Scheduled: true}
+			}
 		}
-		at := sched.DueAt()
-		if at.IsZero() {
-			return NextAttempt{Reason: ReasonNoSchedule}
+		if session.RetryAt != nil {
+			return NextAttempt{At: session.RetryAt.UTC(), Reason: ReasonRetrying, Scheduled: true}
 		}
-		return NextAttempt{At: at.UTC(), Reason: waitingReason(sched), Scheduled: true}
+		return NextAttempt{Reason: ReasonNoSchedule}
 
-	case storage.StateRetryWait:
-		if session.RetryAt == nil {
-			return NextAttempt{Reason: ReasonNoRetryInstant}
-		}
-		return NextAttempt{At: session.RetryAt.UTC(), Reason: "retrying after a failed attempt", Scheduled: true}
-
-	case storage.StateResetTimeReached, storage.StateCheckingSession,
-		storage.StateCheckingLimit, storage.StateResuming:
+	case storage.StateResuming:
 		// The instant is now; the wait is over and the work has started.
 		return NextAttempt{At: now.UTC(), Reason: ReasonInFlight, Scheduled: true}
 
 	case storage.StateDiscovered:
+		if session.RetryAt != nil {
+			return NextAttempt{At: session.RetryAt.UTC(), Reason: ReasonRetrying, Scheduled: true}
+		}
 		return NextAttempt{Reason: ReasonRediscovered}
-	case storage.StateUnrecoverable:
-		return NextAttempt{Reason: ReasonUnrecoverable}
-	case storage.StateSpendCapReached:
-		return NextAttempt{Reason: ReasonSpendCapReached}
 	case storage.StateResumed:
 		return NextAttempt{Reason: ReasonResumed}
 	case storage.StateCompleted:
 		return NextAttempt{Reason: ReasonCompleted}
-	case storage.StateUserTerminated:
-		return NextAttempt{Reason: ReasonTerminated}
 	case storage.StateDisabled:
 		return NextAttempt{Reason: ReasonDisabled}
+	case storage.StateUnrecoverable:
+		return NextAttempt{Reason: ReasonUnrecoverable}
 
 	default:
-		// RUNNING and USAGE_LIMIT_DETECTED both mean the same thing to an
-		// operator: nothing is scheduled, because no limit is being waited out
-		// yet.
+		// A state this build does not know: nothing is scheduled, and saying so is
+		// better than inventing an instant.
 		return NextAttempt{Reason: ReasonNoLimit}
 	}
 }

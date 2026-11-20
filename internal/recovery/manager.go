@@ -233,25 +233,6 @@ func (m *Manager) announce(ctx context.Context, kind MilestoneKind, outcome Outc
 	})
 }
 
-// announceObservation reports a milestone together with the published state it
-// was raised from, so the message can quote the CLI instead of paraphrasing it.
-//
-// It exists next to announce because a needs-input milestone is only honest if
-// it carries the observation: "blocked on a permission prompt" and "blocked, no
-// reason reported" are different messages, and only the observation can tell
-// them apart. Like announce it does nothing when no observer is installed.
-func (m *Manager) announceObservation(ctx context.Context, kind MilestoneKind, outcome Outcome, observation StateObservation) {
-	if m.observer == nil {
-		return
-	}
-	m.observer(ctx, Milestone{
-		Kind:        kind,
-		Outcome:     outcome,
-		MaxAttempts: m.maxAttempts,
-		Observation: observation,
-	})
-}
-
 // attemptObservation picks the observation an attempt row should carry: the one
 // taken after the resume when there is one, and the pass's pre-resume read
 // otherwise (PRD 2 / R13).
@@ -348,7 +329,7 @@ type Outcome struct {
 	Attempt      storage.RecoveryAttempt
 	Verification Verification
 	// Delay is how long the caller should wait before the next attempt. It is
-	// set only when State is RETRY_WAIT.
+	// set only when a failed attempt was parked in WAITING_FOR_RESET for a retry.
 	Delay time.Duration
 	// Wait is how long the session must wait before ccresu looks again. It is
 	// set only when State is WAITING_FOR_RESET because a resume was refused by a
@@ -451,13 +432,13 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 		}
 		return Outcome{SessionID: sessionID, State: state.current}, sessionError(ErrUnrecoverable, sessionID)
 	}
-	if Settled(state.current) && state.current != StateResumed {
-		return Outcome{SessionID: sessionID, State: state.current},
-			stateError(sessionID, state.current, StateCheckingSession)
-	}
-	if state.current == StateResumed {
-		return Outcome{SessionID: sessionID, State: state.current, Resumed: true},
-			stateError(sessionID, state.current, StateCheckingSession)
+	// A settled session is left alone: RESUMED because it is already alive and
+	// the banner that parked it must not drive a second resume, COMPLETED because
+	// there is nothing to continue, and the two verdicts because neither is
+	// ccresu's to undo.
+	if Settled(state.current) {
+		return Outcome{SessionID: sessionID, State: state.current, Resumed: state.current == StateResumed},
+			stateError(sessionID, state.current, StateResuming)
 	}
 	attempts, err := m.attemptsThisCycle(ctx, sessionID)
 	if err != nil {
@@ -499,10 +480,14 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 	outcome := Outcome{SessionID: sessionID}
 	baseline := BaselineFromSession(session)
 
-	if err := state.move(StateCheckingSession, "checking the session before resuming", 0); err != nil {
-		return Outcome{SessionID: sessionID, State: state.current}, err
-	}
-
+	// Everything below until the handoff is pre-flight: reading the supervisor,
+	// the status and the published listing, then the limit and spend checks. It
+	// runs in the state the pass found the session in — DISCOVERED, or
+	// WAITING_FOR_RESET for a session woken by its schedule — because the machine
+	// has no separate "checking" beat. RESUMING is entered once, immediately
+	// before the continuation is handed over, so every attempt row sits under
+	// exactly one RESUMING transition and the audit trail says what was spent.
+	//
 	// PRD 3 R1/R2: the supervisor is read once per pass, and its version is
 	// compared with the CLI ccresu would hand off with. Three answers are
 	// possible and each is its own outcome: no supervisor (normal, carry on), an
@@ -570,19 +555,6 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 	observed.ObservePublished(observation, decision)
 
 	switch {
-	case decision.NeedsInput:
-		// A session waiting on a human is never handed a continuation: it would
-		// queue behind a prompt nobody is there to answer (R4, R11). It parks
-		// instead, and the operator is told once, with whatever reason the CLI
-		// published — including none.
-		m.recordTranscriptMetrics(ctx, sessionID, status)
-		if err := state.move(StateWaitingForInput, decision.Reason, 0); err != nil {
-			return Outcome{SessionID: sessionID, State: state.current}, err
-		}
-		outcome.State = state.current
-		outcome.Verification = observed
-		m.announceObservation(ctx, MilestoneNeedsInput, outcome, observation)
-		return outcome, nil
 	case decision.State == StateResumed:
 		// It continued on its own once the window reset: a success, and one that
 		// must be recognised without issuing a resume, because resuming a session
@@ -617,9 +589,10 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 	// limit has reset, and continuing the conversation is what recovery does.
 	baseline = merged
 
-	if err := state.move(StateCheckingLimit, "checking the usage limit has cleared", 0); err != nil {
-		return Outcome{SessionID: sessionID, State: state.current}, err
-	}
+	// The limit check is the last of the pre-flight checks. It runs before
+	// RESUMING is entered, because a limit that is still in force means no
+	// continuation will be handed over at all: the session is parked on the reset
+	// the banner named, and the next lap starts when that instant arrives.
 	if m.limitCheck != nil {
 		cleared, err := m.limitCheck(ctx, sessionID)
 		if err != nil {
@@ -649,6 +622,9 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 	if strings.TrimSpace(message) == "" {
 		message = m.message
 	}
+	// Every pre-flight check has passed, so the continuation is about to be
+	// handed over: this is the one beat that spends an attempt, and the attempt
+	// row is written under it.
 	if err := state.move(StateResuming, "resuming the original session", 0); err != nil {
 		return Outcome{SessionID: sessionID, State: state.current}, err
 	}
@@ -717,9 +693,9 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 		// So the pass asks once more, after the handoff. A session the supervisor
 		// no longer lists (having listed it before) or lists as `stopped`,
 		// `failed` or an unknown value is not proven resumed: the session is
-		// parked in RETRY_WAIT with a scheduled retry that re-observes before
-		// handing off again, and nothing about it is reported as a permanent
-		// failure or "cured" with a respawn.
+		// parked on a retry instant that re-observes it before handing off again,
+		// and nothing about it is reported as a permanent failure or "cured" with
+		// a respawn.
 		m.observations.Reset()
 		after, obsErr := m.observations.Observe(ctx, sessionID)
 		if obsErr != nil {
@@ -787,18 +763,18 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 
 // fail records a failed attempt and moves the session along the retry path.
 //
-// A retryable failure below the attempt budget goes to RETRY_WAIT with the
-// computed delay. Everything else is rediscovered: the session returns to
-// DISCOVERED, where the next cycle re-reads its transcript with a fresh budget.
-// Only a proved-unrecoverable session stops there, because that verdict is a
-// fact about the conversation rather than a count of attempts.
+// A retryable failure below the attempt budget is parked in WAITING_FOR_RESET
+// with the computed delay on retry_at. Everything else is rediscovered: the
+// session returns to DISCOVERED, where the next cycle re-reads its transcript
+// with a fresh budget. Only a proved-unrecoverable session stops there, because
+// that verdict is a fact about the conversation rather than a count of attempts.
 //
-// A failure reported before the resume was issued — the pre-resume status check
-// or the limit check — has no attempt row behind it, so it spends no budget and
-// always rests in RETRY_WAIT (unless ccresu has proved the session
-// unrecoverable). That is a decision about the truth, not about which edges the
-// machine happens to define: rediscovery is where a spent budget leads, and this
-// failure spent none of it.
+// A failure reported before the resume was issued — the pre-resume status check,
+// the limit check or the spend cap — has no attempt row behind it, so it spends
+// no budget. A spend stop and an unrecoverable verdict are still destinations,
+// because repeating either on a backoff would be the spending or the loop the
+// verdict exists to prevent; everything else a pre-resume check can decide is
+// worth another look, so it waits.
 func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome, baseline Baseline,
 	attempt storage.RecoveryAttempt, verification Verification, cause error) (Outcome, error) {
 	class := Classify(cause)
@@ -859,12 +835,15 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 		}
 	}
 
-	// RETRY_WAIT is the one destination with a schedule to hand back, so the
-	// persisted state and the wait the caller performs can never disagree. It is
-	// also the only answer the machine gives for a failed pre-resume check, so a
-	// clamped failure and a cancellation report the delay they will observe.
+	// WAITING_FOR_RESET is the park, and it is the one destination with a wait to
+	// hand back, so the persisted state and the delay the caller observes can
+	// never disagree. The session stays there rather than returning to
+	// DISCOVERED: entering DISCOVERED resets the attempt budget, so a failure that
+	// looped back there could spend an unlimited number of attempts on a flaky
+	// network. The instant the retry is due goes on retry_at, which is a schedule
+	// and not a state.
 	retry := class.Retryable() && attemptNumber < m.maxAttempts
-	if retry || target == StateRetryWait {
+	if retry || target == StateWaitingForReset {
 		delay := m.backoff.Delay(attemptNumber)
 		reason := fmt.Sprintf("attempt %d/%d failed (%s); next attempt in %s: %v",
 			attemptNumber, m.maxAttempts, class, delay, cause)
@@ -872,7 +851,7 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 			reason = fmt.Sprintf("the pre-resume check failed (%s); no attempt was spent, next check in %s: %v",
 				class, delay, cause)
 		}
-		if err := state.move(StateRetryWait, truncate(reason), attempt.ID); err != nil {
+		if err := state.move(StateWaitingForReset, truncate(reason), attempt.ID); err != nil {
 			return Outcome{SessionID: outcome.SessionID, State: state.current}, err
 		}
 		// Persist the instant the wait ends, so `ccresu sessions` and
@@ -884,9 +863,10 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 		_ = m.store.SetSessionError(ctx, outcome.SessionID, truncate(cause.Error()))
 		outcome.State = state.current
 		outcome.Delay = delay
-		// The session is in RETRY_WAIT and ccresu will try again by itself, so
-		// this is the "attempt failed, still working on it" message. A refusal
-		// never reaches here: park() handles ClassLimitInForce above.
+		// The session is parked with a scheduled retry and ccresu will try again
+		// by itself, so this is the "attempt failed, still working on it"
+		// message. A refusal never reaches here: park() handles ClassLimitInForce
+		// above.
 		m.announce(ctx, MilestoneFailed, outcome, cause)
 		return outcome, &RetryError{
 			SessionID: outcome.SessionID, Attempt: attemptNumber, Max: m.maxAttempts,
@@ -936,8 +916,8 @@ func (m *Manager) park(ctx context.Context, state *stateWalker, outcome Outcome,
 	// The attempt the CLI answered is finished before the wait is planned: it ran,
 	// it refused, and saying so is the truth about it. Leaving the row open would
 	// make the next Recover close it as "interrupted by a process restart" and
-	// record a RETRY_WAIT transition over a session that is parked, which is a
-	// false account of an attempt that has already been answered.
+	// record a retry transition over a session that is parked, which is a false
+	// account of an attempt that has already been answered.
 	if attempt.ID != 0 {
 		verification := outcome.Verification
 		if _, err := m.store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
@@ -984,20 +964,18 @@ func (m *Manager) park(ctx context.Context, state *stateWalker, outcome Outcome,
 // preResumeTarget is where a failure reported before the resume is issued ends.
 //
 // It is a policy, not a reachability trick: no attempt row exists yet, so no
-// budget was spent, and sending the session back to DISCOVERED — which is what a
-// spent budget leads to — would be a lie about this session. An unrecoverable verdict is left alone,
-// because no retry can answer it and the machine allows that edge from both
-// pre-resume states. Both of those states also reach RETRY_WAIT, so the move is
-// always legal; if a future call site breaks that, move() says so loudly rather
-// than the failure being swallowed.
+// budget was spent. A spend stop and an unrecoverable verdict are destinations —
+// repeating either on a backoff would be the spending, or the loop, that the
+// verdict exists to prevent — and both are legal edges from every state a
+// pre-resume check can run in. Everything else waits: WAITING_FOR_RESET is the
+// machine's only park, and a check that failed is exactly what a retry instant
+// describes. If a future call site breaks that, move() says so loudly rather than
+// the failure being swallowed.
 func preResumeTarget(target State) State {
-	// A spend stop and an unrecoverable verdict are destinations: repeating them
-	// on a backoff would be the spending the cap exists to prevent. Everything
-	// else a pre-resume check can decide is worth another look, so it waits.
-	if target == StateUnrecoverable || target == StateSpendCapReached {
+	if target == StateUnrecoverable || target == StateDisabled {
 		return target
 	}
-	return StateRetryWait
+	return StateWaitingForReset
 }
 
 // attemptsThisCycle counts the attempts spent since the session last entered
@@ -1038,13 +1016,13 @@ func (m *Manager) attemptsThisCycle(ctx context.Context, sessionID string) (int,
 }
 
 // targetFor decides the state a failed attempt leaves the session in.
+//
+// The class already names the destination (see Class.State); the only thing
+// decided here is the attempt budget. A retryable failure with the budget spent
+// is rediscovered rather than parked, so the next cycle re-reads the transcript
+// and starts a fresh budget instead of backing off forever on a session that has
+// already been tried ten times.
 func targetFor(class Class, attemptNumber, maxAttempts int) State {
-	switch class {
-	case ClassUnrecoverable:
-		return StateUnrecoverable
-	case ClassCanceled:
-		return StateRetryWait
-	}
 	if class.Retryable() && attemptNumber >= maxAttempts {
 		// The cycle's budget is spent. The session is rediscovered, not
 		// abandoned, so this is the same target as any other non-unrecoverable
@@ -1078,18 +1056,17 @@ var ErrHandoffUnobserved = errors.New("recovery: the handed-off session is not b
 //     that the continuation ran, and PRD 2's mapping already says so.
 //
 // A session still `working`, already `done`, or now `blocked` is not lost: the
-// supervisor owns the work, and a blocked session is parked by the next pass on
-// its published state rather than by a guess here.
+// supervisor owns the work, and a blocked session has been handed a continuation
+// that is sitting behind a prompt, which is a landed handoff rather than a lost
+// one.
 func handoffLost(after, before StateObservation) (reason string, lost bool) {
 	decision := Observe(after, true, false)
 	switch {
-	case decision.NeedsInput:
-		return "", false
 	case decision.HandoffUnobserved && before.InListing:
 		return "the session vanished from the supervisor's listing after the handoff", true
 	case decision.HandoffUnobserved:
 		return "", false
-	case decision.State == StateRetryWait:
+	case decision.State == StateWaitingForReset:
 		return fmt.Sprintf("the supervisor publishes %q for the handed-off session, which is not evidence that the continuation ran", after.State), true
 	}
 	return "", false
@@ -1102,7 +1079,7 @@ func handoffLost(after, before StateObservation) (reason string, lost bool) {
 // became of the work is unknown. Writing `false` would claim the continuation
 // failed, and writing `true` would claim it ran; neither is something ccresu saw.
 //
-// The session is parked in RETRY_WAIT with a scheduled retry, so the next pass
+// The session is parked with a scheduled retry, so the next pass
 // re-observes it before handing off again (R7). Nothing here is announced as a
 // permanent failure and nothing is resolved with `respawn` (R4): an idle stop is
 // expected, the conversation is on disk, and the retry continues it.
@@ -1115,7 +1092,7 @@ func (m *Manager) retryHandoff(ctx context.Context, state *stateWalker, outcome 
 
 	reasonText := fmt.Sprintf("%s; re-observing the session before the next handoff", reason)
 	if _, err := m.store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
-		State:             StateRetryWait,
+		State:             StateWaitingForReset,
 		Error:             truncate(reasonText),
 		SessionIDVerified: boolPtr(verification.SessionIDPreserved),
 		TranscriptGrew:    boolPtr(verification.TranscriptGrew),
@@ -1131,7 +1108,7 @@ func (m *Manager) retryHandoff(ctx context.Context, state *stateWalker, outcome 
 
 	attemptNumber := attempt.AttemptNumber
 	delay := m.backoff.Delay(attemptNumber)
-	if err := state.move(StateRetryWait, truncate(fmt.Sprintf("%s; next check in %s", reasonText, delay)), attempt.ID); err != nil {
+	if err := state.move(StateWaitingForReset, truncate(fmt.Sprintf("%s; next check in %s", reasonText, delay)), attempt.ID); err != nil {
 		return Outcome{SessionID: outcome.SessionID, State: state.current, Supervisor: outcome.Supervisor}, err
 	}
 	if err := m.store.SetSessionRetryAt(ctx, outcome.SessionID, m.now().Add(delay)); err != nil {
@@ -1160,7 +1137,7 @@ func (m *Manager) retryHandoff(ctx context.Context, state *stateWalker, outcome 
 //     "unresolved", which is exactly what an attempt nobody watched end is;
 //     writing `false` claimed a verdict a restart cannot support and made the
 //     operator read a failure for work that never stopped.
-//   - The session returns to DISCOVERED rather than to RETRY_WAIT, so the next
+//   - The session returns to DISCOVERED rather than being parked, so the next
 //     pass re-observes it (PRD 2) instead of handing off again on top of a
 //     session the supervisor may still be hosting. DISCOVERED is also what makes
 //     the interruption free: the attempt budget counts the attempts started since

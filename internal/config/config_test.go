@@ -106,18 +106,6 @@ func TestParseAppliesDefaultsBeforeOverrides(t *testing.T) {
 	}
 }
 
-// TestNeedsInputDefaultsToOff is PRD 4 R13: needs_input is a new message class,
-// so neither the built-in defaults nor the shipped example may start sending one
-// because ccresu was upgraded.
-func TestNeedsInputDefaultsToOff(t *testing.T) {
-	if Defaults().Telegram.NotifyNeedsInput {
-		t.Error("Defaults().Telegram.NotifyNeedsInput = true, want false: an upgrade must not start sending a new class")
-	}
-	if Defaults().Telegram.NotifyWaiting {
-		t.Error("Defaults().Telegram.NotifyWaiting = true, want false: the two repeat-prone classes are both opt-in")
-	}
-}
-
 func TestParseExampleConfigFile(t *testing.T) {
 	t.Parallel()
 
@@ -139,9 +127,6 @@ func TestParseExampleConfigFile(t *testing.T) {
 	}
 	if cfg.Telegram.Enabled {
 		t.Error("example config must ship with telegram disabled")
-	}
-	if cfg.Telegram.NotifyNeedsInput {
-		t.Error("example config must ship with notify_needs_input off, like the default (PRD 4 R13)")
 	}
 	if !strings.HasPrefix(cfg.Storage.Path, "/") {
 		t.Errorf("storage.path should be expanded to an absolute path, got %q", cfg.Storage.Path)

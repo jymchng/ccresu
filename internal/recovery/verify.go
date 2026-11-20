@@ -165,17 +165,19 @@ func (v Verification) Reason() string {
 // This is the only way a non-handoff continuation can be proven. The decision is
 // passed in rather than re-derived so the manager and the verification cannot
 // disagree about what the same observation meant.
+//
+// There is no special case for a `blocked` session any more. A continuation
+// handed to a session that then reports `blocked` landed: the supervisor took it
+// and the conversation is waiting for a human to answer a prompt, which is the
+// operator's business and not evidence that the resume failed. Excluding it here
+// is what used to make a blocked session unresumable, so its absence is the
+// point rather than an omission.
 func (v *Verification) ObservePublished(obs StateObservation, decision Decision) {
 	v.PublishedState = obs.State
 	v.ObservationRecorded = obs.InListing
 	v.Observation = obs
 	v.Proven = false
 	switch {
-	case decision.NeedsInput:
-		// A blocked session is not a recovered one. This is the defect PRD 2
-		// exists to close, and it is closed here as well as in the mapping so no
-		// single edit can reopen it.
-		v.Notes = append(v.Notes, decision.Reason)
 	case decision.State == StateResumed && v.SessionIDPreserved:
 		v.Proven = true
 		v.Notes = append(v.Notes, decision.Reason)

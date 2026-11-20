@@ -181,7 +181,7 @@ func BuildRuntime(ctx context.Context, cfg *config.Config, clk clock.Clock, log 
 
 	manager, err := recoveryFromConfig(cfg, store, provider, clk, log,
 		limitParker(store, sched, limitDetector, clk, log),
-		notificationObserver(queue, store, log))
+		notificationObserver(queue, log))
 	if err != nil {
 		_ = store.Close()
 		return nil, err

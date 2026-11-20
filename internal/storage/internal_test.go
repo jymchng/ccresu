@@ -213,7 +213,7 @@ func TestClosedStoreUniformErrors(t *testing.T) {
 		"ListSessions":              func() error { _, err := store.ListSessions(ctx, SessionFilter{}); return err }(),
 		"CountSessions":             func() error { _, err := store.CountSessions(ctx, SessionFilter{}); return err }(),
 		"SetSessionEnabled":         store.SetSessionEnabled(ctx, "x", true),
-		"TransitionSession":         func() error { _, err := store.TransitionSession(ctx, "x", StateRunning, "", 0); return err }(),
+		"TransitionSession":         func() error { _, err := store.TransitionSession(ctx, "x", StateResumed, "", 0); return err }(),
 		"SetSessionPID":             store.SetSessionPID(ctx, "x", 1),
 		"SetSessionTranscriptStats": store.SetSessionTranscriptMetrics(ctx, "x", "/t", 1, 1),
 		"SetSessionError":           store.SetSessionError(ctx, "x", "e"),
@@ -230,7 +230,7 @@ func TestClosedStoreUniformErrors(t *testing.T) {
 		"CountAttempts":             func() error { _, err := store.CountAttempts(ctx, "x"); return err }(),
 		"LatestAttempt":             func() error { _, err := store.LatestAttempt(ctx, "x"); return err }(),
 		"DeleteAttempt":             store.DeleteAttempt(ctx, 1),
-		"RecordTransition":          store.RecordTransition(ctx, Transition{SessionID: "x", ToState: StateRunning}),
+		"RecordTransition":          store.RecordTransition(ctx, Transition{SessionID: "x", ToState: StateResumed}),
 		"ListTransitions":           func() error { _, err := store.ListTransitions(ctx, "x", 0); return err }(),
 		"ListTransitionsForAttempt": func() error { _, err := store.ListTransitionsForAttempt(ctx, 1); return err }(),
 		"EnqueueNotification": func() error {

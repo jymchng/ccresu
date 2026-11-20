@@ -52,8 +52,8 @@ var (
 // RetryError carries the retry schedule for a failed but retryable attempt.
 //
 // It is returned alongside the Outcome so a caller can sleep until NextAttempt
-// instead of recomputing the backoff, and so the persisted RETRY_WAIT state and
-// the value the daemon actually waits for can never disagree.
+// instead of recomputing the backoff, and so the retry instant persisted on the
+// session and the delay the daemon actually waits for can never disagree.
 type RetryError struct {
 	SessionID string
 	Attempt   int

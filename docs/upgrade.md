@@ -130,6 +130,84 @@ Verify the upgrade:
 ~/.local/bin/ccresu doctor
 ```
 
+### The state machine collapsed to seven states
+
+0.9.0 keeps seven of the sixteen states: `DISCOVERED`, `WAITING_FOR_RESET`,
+`RESUMING`, `RESUMED`, `COMPLETED`, `DISABLED` and `UNRECOVERABLE`. Nothing is
+asked of you on upgrade — the first start runs migration
+`0013_simplify_states.sql`, which rewrites every row carrying a retired name in
+`sessions`, `recovery_attempts`, `state_transitions` and `deleted_sessions`, so
+the sessions you were watching keep waiting on the resets they were waiting on
+and the history you could read stays readable. The same start also runs
+`0014_drop_attention_episodes.sql`, which drops the `attention_episodes` table
+that only existed to pace the deleted needs-input message; no session, attempt or
+transition row is touched, and `ccresu inspect` never read it.
+
+Two consequences are worth knowing before you upgrade:
+
+- **A `--state` name you scripted may be gone.** `RUNNING` is now `RESUMED`,
+  `RETRY_WAIT` and `WAITING_FOR_INPUT` are `DISCOVERED`, `USER_TERMINATED` and
+  `SPEND_CAP_REACHED` are `DISABLED`, and the four pre-flight and limit states
+  are folded into `WAITING_FOR_RESET` and `RESUMING`. `ccresu sessions --state
+  RUNNING` is refused with `ccresu: unknown state "RUNNING"` and exit 2, rather
+  than silently matching nothing.
+- **The distinctions the collapse removed are not recoverable.** A rolled-back
+  binary reads every migrated row without complaint, but nothing records whether
+  a given `WAITING_FOR_RESET` was once `USAGE_LIMIT_DETECTED` or
+  `RESET_TIME_REACHED`, so a rollback keeps the rows and loses the nuance. Take
+  the backup below if you intend to go back.
+
+### `telegram.notify_needs_input` is tolerated, not refused
+
+0.9.0 removed the needs-input message, so the key that switched it no longer
+exists — but the example configuration and the docs shipped it, so a plain
+`config.yaml` from 0.8.x still carries it. The loader drops that one key before
+the strict decode: ccresu starts, the key enables nothing, and the load prints
+
+```text
+warning: telegram.notify_needs_input is no longer a configuration key: it is ignored, not rejected, …
+```
+
+Delete the line at your convenience. Strictness is unchanged everywhere else: a
+typo of the retired key (`notify_needs_inputt`) and any other key ccresu does not
+know are still refused by name, so a mistyped setting can never quietly leave a
+default in place.
+
+### An installed `ccresu hook` must be removed
+
+0.7.0 shipped `ccresu hook` as a Claude Code `Notification` hook, and its
+documentation told you to paste something like this into
+`~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "Notification": [
+      {
+        "hooks": [
+          { "type": "command", "command": "ccresu hook", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}
+```
+
+0.9.0 deletes the subcommand: it existed to announce that a `blocked` session
+needed you, and a blocked session is now resumed instead, so there is nothing
+left for it to say. An installed hook keeps firing on every notification and now
+fails with
+
+```text
+ccresu: unknown command "hook"
+Run 'ccresu --help' for usage.
+```
+
+on stderr and exit code 2. Delete the `Notification` entry (or the whole `hooks`
+block, if that was the only hook). ccresu never needed the hook to function and
+never wrote your settings file, so nothing re-adds it for you — and nothing stops
+working once it is gone.
+
 ### `recovery.startup_timeout` now has a reader
 
 The key used to be accepted, validated, defaulted and environment-overridable,

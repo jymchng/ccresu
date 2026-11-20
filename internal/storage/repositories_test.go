@@ -120,7 +120,7 @@ func TestListSessionsFiltersAndOrdering(t *testing.T) {
 			t.Fatalf("seed %s: %v", id, err)
 		}
 	}
-	for i, state := range []storage.State{storage.StateRunning, storage.StateWaitingForReset, storage.StateRunning, storage.StateUnrecoverable} {
+	for i, state := range []storage.State{storage.StateResumed, storage.StateWaitingForReset, storage.StateResumed, storage.StateUnrecoverable} {
 		if _, err := store.TransitionSession(ctx, []string{"s1", "s2", "s3", "s4"}[i], state, "seed", 0); err != nil {
 			t.Fatalf("transition: %v", err)
 		}
@@ -154,12 +154,12 @@ func TestListSessionsFiltersAndOrdering(t *testing.T) {
 		t.Fatalf("enabled filter returned %d, want 2", len(onlyEnabled))
 	}
 
-	running, err := store.ListSessions(ctx, storage.SessionFilter{States: []storage.State{storage.StateRunning}})
+	resumed, err := store.ListSessions(ctx, storage.SessionFilter{States: []storage.State{storage.StateResumed}})
 	if err != nil {
 		t.Fatalf("list by state: %v", err)
 	}
-	if len(running) != 2 || running[0].ID != "s1" || running[1].ID != "s3" {
-		t.Fatalf("state filter wrong: %+v", running)
+	if len(resumed) != 2 || resumed[0].ID != "s1" || resumed[1].ID != "s3" {
+		t.Fatalf("state filter wrong: %+v", resumed)
 	}
 
 	if _, err := store.ListSessions(ctx, storage.SessionFilter{States: []storage.State{storage.State("BOGUS")}}); !errors.Is(err, storage.ErrInvalid) {
@@ -190,7 +190,7 @@ func TestSessionMutationsReportMissingSessions(t *testing.T) {
 	checks := map[string]error{
 		"enable":             store.SetSessionEnabled(ctx, missing, true),
 		"disable":            store.SetSessionEnabled(ctx, missing, false),
-		"transition":         func() error { _, err := store.TransitionSession(ctx, missing, storage.StateRunning, "", 0); return err }(),
+		"transition":         func() error { _, err := store.TransitionSession(ctx, missing, storage.StateResumed, "", 0); return err }(),
 		"pid":                store.SetSessionPID(ctx, missing, 1),
 		"transcript metrics": store.SetSessionTranscriptMetrics(ctx, missing, "/t", 1, 2),
 		"error":              store.SetSessionError(ctx, missing, "boom"),
@@ -273,8 +273,8 @@ func TestDisableKeepsTheRecordedError(t *testing.T) {
 	// Disable from a state other than DISCOVERED, because the page claims the
 	// command parks a session from whatever state it is in. Storage does not
 	// enforce edges, so the transition is enough to set the starting point.
-	if _, err := store.TransitionSession(ctx, session.ID, storage.StateRetryWait, "backoff", 0); err != nil {
-		t.Fatalf("transition to RETRY_WAIT: %v", err)
+	if _, err := store.TransitionSession(ctx, session.ID, storage.StateWaitingForReset, "backoff", 0); err != nil {
+		t.Fatalf("transition to WAITING_FOR_RESET: %v", err)
 	}
 	if err := store.SetSessionEnabled(ctx, session.ID, false); err != nil {
 		t.Fatalf("disable: %v", err)
@@ -666,12 +666,14 @@ func TestTransitionRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// One and a half laps of the loop, which is the only path the machine
+	// defines: DISCOVERED -> WAITING_FOR_RESET -> RESUMING -> RESUMED -> DISCOVERED.
 	path := []storage.State{
-		storage.StateUsageLimitDetected,
 		storage.StateWaitingForReset,
-		storage.StateResetTimeReached,
-		storage.StateCheckingSession,
-		storage.StateCheckingLimit,
+		storage.StateResuming,
+		storage.StateResumed,
+		storage.StateDiscovered,
+		storage.StateWaitingForReset,
 		storage.StateResuming,
 	}
 	for _, state := range path {
@@ -744,11 +746,11 @@ func TestTransitionRepository(t *testing.T) {
 	if err := store.RecordTransition(ctx, storage.Transition{SessionID: session.ID, ToState: storage.State("NOPE")}); !errors.Is(err, storage.ErrInvalid) {
 		t.Fatalf("bad target state = %v", err)
 	}
-	if err := store.RecordTransition(ctx, storage.Transition{SessionID: session.ID, FromState: storage.State("NOPE"), ToState: storage.StateRunning}); !errors.Is(err, storage.ErrInvalid) {
+	if err := store.RecordTransition(ctx, storage.Transition{SessionID: session.ID, FromState: storage.State("NOPE"), ToState: storage.StateResumed}); !errors.Is(err, storage.ErrInvalid) {
 		t.Fatalf("bad source state = %v", err)
 	}
 	// occurred_at defaults to the store clock when the caller omits it.
-	if err := store.RecordTransition(ctx, storage.Transition{SessionID: session.ID, ToState: storage.StateRunning}); err != nil {
+	if err := store.RecordTransition(ctx, storage.Transition{SessionID: session.ID, ToState: storage.StateResumed}); err != nil {
 		t.Fatalf("default occurred_at: %v", err)
 	}
 }
@@ -961,11 +963,8 @@ func TestSettingsRepository(t *testing.T) {
 
 func TestModelValidationHelpers(t *testing.T) {
 	for _, state := range []storage.State{
-		storage.StateDiscovered, storage.StateRunning, storage.StateUsageLimitDetected,
-		storage.StateWaitingForReset, storage.StateResetTimeReached, storage.StateCheckingSession,
-		storage.StateCheckingLimit, storage.StateResuming, storage.StateResumed,
-		storage.StateRetryWait, storage.StateCompleted,
-		storage.StateUserTerminated, storage.StateDisabled, storage.StateUnrecoverable,
+		storage.StateDiscovered, storage.StateWaitingForReset, storage.StateResuming,
+		storage.StateResumed, storage.StateCompleted, storage.StateDisabled, storage.StateUnrecoverable,
 	} {
 		if !state.Valid() {
 			t.Errorf("state %s should be valid", state)
@@ -1006,12 +1005,12 @@ func TestModelValidationHelpers(t *testing.T) {
 		t.Error("unknown notification status reported valid")
 	}
 	// The event set is compared with the notifier's own enumeration rather than
-	// retyped. `needs_input` was in telegram.Events() and in Valid() but missing
-	// from this test's hand-typed slice, so the storage-level check silently
-	// covered seven of eight events; a list that is derived cannot fall behind
-	// that way. Equality is asserted in both directions, so adding an event to
-	// one side alone — storage without a template, or a template storage rejects
-	// as invalid — fails here.
+	// retyped. An event once lived in telegram.Events() and in Valid() but was
+	// missing from this test's hand-typed slice, so the storage-level check
+	// silently covered seven of eight events; a list that is derived cannot fall
+	// behind that way. Equality is asserted in both directions, so adding an
+	// event to one side alone — storage without a template, or a template
+	// storage rejects as invalid — fails here.
 	rendered := telegram.Events()
 	for _, event := range rendered {
 		if !event.Valid() {

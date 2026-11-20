@@ -119,10 +119,6 @@ telegram:
   notify_recovery_failure: true
   notify_permanent_failure: true
   notify_session_completed: true
-  # A session is waiting on a human (a permission prompt, a sandbox decision, an
-  # answer, an expired login). Off by default like notify_waiting: a new message
-  # class should not start arriving because ccresu was upgraded.
-  notify_needs_input: false
 
 server:
   enabled: true

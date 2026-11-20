@@ -118,7 +118,6 @@ func helpRows(t *testing.T) []helpRow {
 		{command: "history", prose: helpRowProse},
 		{command: "doctor", prose: helpRowProse},
 		{command: "serve", prose: helpRowProse},
-		{command: "hook", prose: helpRowProse},
 		{command: "version", prose: helpRowProse},
 	}
 }
@@ -333,7 +332,10 @@ func TestVersionRejectsArguments(t *testing.T) {
 
 func TestStatusReportsPersistedState(t *testing.T) {
 	h := newHarness(t)
-	h.seedSession(t, canonicalSessionID, nil)
+	// A live session: RESUMED is where RUNNING collapsed to.
+	h.seedSession(t, canonicalSessionID, func(s *storage.Session) {
+		s.State = storage.StateResumed
+	})
 	h.seedSession(t, "22222222-2222-4222-8222-222222222222", func(s *storage.Session) {
 		disabled := false
 		s.Enabled = disabled
@@ -345,7 +347,7 @@ func TestStatusReportsPersistedState(t *testing.T) {
 		t.Fatalf("exit = %d (stderr %q)", code, stderr)
 	}
 	for _, want := range []string{
-		"sessions:", "2 total, 1 enabled", "ccresu sessions --all shows all 2", "telegram:", "recovery:", "RUNNING", "DISABLED",
+		"sessions:", "2 total, 1 enabled", "ccresu sessions --all shows all 2", "telegram:", "recovery:", "RESUMED", "DISABLED",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("status output missing %q:\n%s", want, stdout)
@@ -363,7 +365,7 @@ func TestStatusReportsPersistedState(t *testing.T) {
 	if report.Sessions != 2 || report.EnabledSessions != 1 {
 		t.Errorf("report = %+v", report)
 	}
-	if report.States["RUNNING"] != 1 || report.States["DISABLED"] != 1 {
+	if report.States["RESUMED"] != 1 || report.States["DISABLED"] != 1 {
 		t.Errorf("state histogram = %+v", report.States)
 	}
 	if !report.RecoveryEnabled || report.MaxAttempts != 3 {
@@ -502,7 +504,7 @@ func TestInspectPrintsEverythingKnown(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("save schedule: %v", err)
 	}
-	if _, err := h.store.TransitionSession(ctx, canonicalSessionID, storage.StateRunning, "started", 0); err != nil {
+	if _, err := h.store.TransitionSession(ctx, canonicalSessionID, storage.StateResumed, "the continuation landed", 0); err != nil {
 		t.Fatalf("transition: %v", err)
 	}
 
@@ -511,7 +513,7 @@ func TestInspectPrintsEverythingKnown(t *testing.T) {
 		t.Fatalf("exit = %d (stderr %q)", code, stderr)
 	}
 	for _, want := range []string{
-		canonicalSessionID, "RUNNING", "Latest usage limit", "five_hour",
+		canonicalSessionID, "RESUMED", "Latest usage limit", "five_hour",
 		"12pm (Europe/Berlin)", "Schedule", "Recent transitions",
 	} {
 		if !strings.Contains(stdout, want) {
@@ -559,7 +561,7 @@ func TestHistoryShowsAttemptsAndTransitions(t *testing.T) {
 		s.State = storage.StateDiscovered
 	})
 	ctx := context.Background()
-	if _, err := h.store.TransitionSession(ctx, canonicalSessionID, storage.StateRunning, "process is alive", 0); err != nil {
+	if _, err := h.store.TransitionSession(ctx, canonicalSessionID, storage.StateResumed, "the continuation landed", 0); err != nil {
 		t.Fatalf("transition: %v", err)
 	}
 
@@ -567,7 +569,7 @@ func TestHistoryShowsAttemptsAndTransitions(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit = %d (stderr %q)", code, stderr)
 	}
-	if !strings.Contains(stdout, "DISCOVERED -> RUNNING") {
+	if !strings.Contains(stdout, "DISCOVERED -> RESUMED") {
 		t.Errorf("history output missing the transition:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "No recovery attempts recorded") {
@@ -650,7 +652,7 @@ func TestRecoverRefusesADisabledSession(t *testing.T) {
 func TestRecoverResumesAWaitingSession(t *testing.T) {
 	h := newHarness(t)
 	h.seedSession(t, canonicalSessionID, func(s *storage.Session) {
-		s.State = storage.StateResetTimeReached
+		s.State = storage.StateWaitingForReset
 		s.TranscriptSize = 10
 		s.TranscriptLines = 1
 	})
@@ -716,7 +718,7 @@ func TestRecoverResumesAWaitingSession(t *testing.T) {
 func TestRecoverReportsALimitRefusalAsNotEligible(t *testing.T) {
 	h := newHarness(t)
 	h.seedSession(t, canonicalSessionID, func(s *storage.Session) {
-		s.State = storage.StateResetTimeReached
+		s.State = storage.StateWaitingForReset
 		s.TranscriptSize = 10
 		s.TranscriptLines = 1
 	})

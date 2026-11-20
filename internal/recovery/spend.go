@@ -126,60 +126,13 @@ func (m *Manager) checkAttemptCap(attempt storage.RecoveryAttempt, cost *float64
 	return attemptCapError(m.limits.PerAttempt, attempt, *cost)
 }
 
-// UnparkAffordable releases sessions parked in SPEND_CAP_REACHED once the cap
-// they hit no longer binds them.
+// There is deliberately no UnparkAffordable here any more.
 //
-// PRD 5's failure-mode table says raising the cap must be enough: "the next pass
-// re-evaluates: a session in SPEND_CAP_REACHED with room under the cap returns to
-// DISCOVERED. No restart required." That is a re-evaluation, not a resume \u2014 R8
-// keeps the state out of PendingStates so no pass may resume it, and this
-// function moves it no further than DISCOVERED, where the ordinary cycle decides
-// what happens next.
-//
-// It reports how many sessions it released so a caller can log a number rather
-// than a promise.
-func (m *Manager) UnparkAffordable(ctx context.Context) (int, error) {
-	parked, err := m.store.ListSessions(ctx, storage.SessionFilter{
-		States: []storage.State{StateSpendCapReached},
-	})
-	if err != nil {
-		return 0, fmt.Errorf("list sessions parked at the spend cap: %w", err)
-	}
-	released := 0
-	for _, session := range parked {
-		reason, ok := m.affordableReason(ctx, session)
-		if !ok {
-			continue
-		}
-		if _, err := m.store.TransitionSession(ctx, session.ID, StateDiscovered, reason, 0); err != nil {
-			m.log.Warn("release a session parked at the spend cap", "session", session.ID, "error", err)
-			continue
-		}
-		released++
-	}
-	return released, nil
-}
-
-// affordableReason reports whether a parked session has room under the cap now,
-// and the sentence to record if it does.
-func (m *Manager) affordableReason(ctx context.Context, session storage.Session) (string, bool) {
-	if !m.limits.SessionCapped() {
-		return "the session spend cap was removed; returned to discovery", true
-	}
-	spend, err := m.store.SessionSpend(ctx, session.ID)
-	if err != nil {
-		// An unreadable spend figure is not evidence that the cap now has room,
-		// so the session stays parked and the next pass tries again.
-		m.log.Warn("read session spend for a parked session", "session", session.ID, "error", err)
-		return "", false
-	}
-	if spend.KnownUSD >= m.limits.PerSession {
-		return "", false
-	}
-	return fmt.Sprintf("the session spend cap was raised to %s and %s is recorded; returned to discovery",
-		formatUSD(m.limits.PerSession), formatUSD(spend.KnownUSD)), true
-}
-
+// It existed to release sessions parked in SPEND_CAP_REACHED once the operator
+// raised the cap. That state is gone: with seven states a spend stop is DISABLED
+// (see Class.State), because "nothing may be spent until a human decides" is what
+// DISABLED means, and the way back is `ccresu enable` — one command, no daemon
+// stage, and no way for a pass to resume a session whose cap it just refused.
 // knownCost is the cost an attempt may be judged by: what the CLI reported, with
 // an absent or unusable figure reading as unknown rather than as zero.
 func knownCost(reported *float64) *float64 { return claude.KnownCost(reported) }

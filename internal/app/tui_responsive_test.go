@@ -657,7 +657,7 @@ func TestARefusedActionIsReportedOnTheStatusLine(t *testing.T) {
 func TestAnActionFailureKeepsTheBrowserRunning(t *testing.T) {
 	h := newHarness(t)
 	h.seedSession(t, canonicalSessionID, func(s *storage.Session) {
-		s.State = storage.StateResetTimeReached
+		s.State = storage.StateWaitingForReset
 		s.TranscriptSize = 10
 		s.TranscriptLines = 1
 	})

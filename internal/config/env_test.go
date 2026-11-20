@@ -59,7 +59,6 @@ var everyEnvSetterSamples = map[string]string{
 	"CCRESU_TELEGRAM__NOTIFY_RECOVERY_FAILURE":              "false",
 	"CCRESU_TELEGRAM__NOTIFY_PERMANENT_FAILURE":             "false",
 	"CCRESU_TELEGRAM__NOTIFY_SESSION_COMPLETED":             "false",
-	"CCRESU_TELEGRAM__NOTIFY_NEEDS_INPUT":                   "true",
 	"CCRESU_SERVER__ENABLED":                                "false",
 	"CCRESU_SERVER__HOST":                                   "127.0.0.1",
 	"CCRESU_SERVER__PORT":                                   "9000",

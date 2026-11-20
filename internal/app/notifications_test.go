@@ -39,7 +39,7 @@ func countEvent(h *harness, event storage.NotificationEvent) int {
 func readyToResume(t *testing.T, h *harness) {
 	t.Helper()
 	h.seedSession(t, canonicalSessionID, func(s *storage.Session) {
-		s.State = storage.StateResetTimeReached
+		s.State = storage.StateWaitingForReset
 		s.TranscriptSize = 10
 		s.TranscriptLines = 1
 	})
@@ -173,7 +173,7 @@ func TestPermanentFailureQueuesPermanentFailureOnly(t *testing.T) {
 func TestSpentAttemptBudgetQueuesNothing(t *testing.T) {
 	h := newHarness(t)
 	h.seedSession(t, canonicalSessionID, func(s *storage.Session) {
-		s.State = storage.StateRetryWait
+		s.State = storage.StateDiscovered
 	})
 	ctx := context.Background()
 	// Spend the whole budget (the harness manager allows three) without going
@@ -285,12 +285,15 @@ func (s *recordingSender) SendMessage(_ context.Context, text string) (telegram.
 // hand on purpose: a new kind has to be added here, and the distinctness check
 // below is what makes that more than bookkeeping.
 func TestEveryMilestoneHasAnEvent(t *testing.T) {
+	// The needs-input kind is deliberately absent: the engine no longer parks a
+	// blocked session, so it has nothing to announce, and a kind nothing may
+	// raise would be a promise the engine cannot keep. The event is gone from
+	// the vocabulary for the same reason.
 	kinds := []recovery.MilestoneKind{
 		recovery.MilestoneStarted,
 		recovery.MilestoneSucceeded,
 		recovery.MilestoneFailed,
 		recovery.MilestonePermanent,
-		recovery.MilestoneNeedsInput,
 	}
 	seen := make(map[storage.NotificationEvent]recovery.MilestoneKind, len(kinds))
 	for _, kind := range kinds {
@@ -313,11 +316,6 @@ func TestEveryMilestoneHasAnEvent(t *testing.T) {
 
 	if _, ok := notificationEvent(recovery.MilestoneKind("not_a_milestone")); ok {
 		t.Error("an unknown milestone must not map onto an event")
-	}
-	// needs_input is the one event two producers reach, and both compute it from
-	// this same mapping (PRD 4 R14).
-	if event, _ := notificationEvent(recovery.MilestoneNeedsInput); event != storage.EventNeedsInput {
-		t.Errorf("MilestoneNeedsInput maps to %q, want %q", event, storage.EventNeedsInput)
 	}
 }
 
@@ -356,8 +354,8 @@ func TestSpendStopAnnouncesPermanentFailure(t *testing.T) {
 		if !strings.Contains(req.Data.Reason, "max_cost_usd_per_attempt") {
 			t.Errorf("reason = %q, want it to name the knob that stopped recovery", req.Data.Reason)
 		}
-		if req.Data.State != string(storage.StateSpendCapReached) {
-			t.Errorf("state = %q, want %q", req.Data.State, storage.StateSpendCapReached)
+		if req.Data.State != string(storage.StateDisabled) {
+			t.Errorf("state = %q, want %q: a spend stop parks the session in DISABLED", req.Data.State, storage.StateDisabled)
 		}
 	}
 
@@ -365,8 +363,7 @@ func TestSpendStopAnnouncesPermanentFailure(t *testing.T) {
 	for _, event := range queuedEvents(h) {
 		switch event {
 		case storage.EventRecoveryStarted, storage.EventRecoverySuccess,
-			storage.EventRecoveryFailure, storage.EventPermanentFailure,
-			storage.EventNeedsInput:
+			storage.EventRecoveryFailure, storage.EventPermanentFailure:
 		default:
 			t.Errorf("queued unknown event %q; PRD 5 introduces no new event", event)
 		}

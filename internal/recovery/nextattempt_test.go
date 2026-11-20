@@ -65,31 +65,19 @@ func TestNextAttemptForEveryState(t *testing.T) {
 			wantWhy:  ReasonNoSchedule,
 		},
 		{
-			// RETRY_WAIT is the state with no Schedule row: the instant is the
+			// A park after a failed attempt has no Schedule row: the instant is the
 			// backoff computed when the attempt failed and persisted on the session.
-			name:      "retry wait reports the persisted retry instant",
-			session:   storage.Session{State: storage.StateRetryWait, Enabled: true, RetryAt: at(retryAt)},
+			name:      "a park after a failed attempt reports the persisted retry instant",
+			session:   storage.Session{State: storage.StateWaitingForReset, Enabled: true, RetryAt: at(retryAt)},
 			wantAt:    retryAt,
 			wantSched: true,
 			wantWhy:   "retrying after a failed attempt",
-		},
-		{
-			name:    "retry wait without a stored instant says so",
-			session: storage.Session{State: storage.StateRetryWait, Enabled: true},
-			wantWhy: ReasonNoRetryInstant,
 		},
 		{
 			// The wait is over: the work is happening as this is read, so the
 			// answer is "now" rather than a countdown.
 			name:      "a recovery in flight reports now",
 			session:   storage.Session{State: storage.StateResuming, Enabled: true},
-			wantAt:    fixedNow,
-			wantSched: true,
-			wantWhy:   ReasonInFlight,
-		},
-		{
-			name:      "reset time reached reports now",
-			session:   storage.Session{State: storage.StateResetTimeReached, Enabled: true},
 			wantAt:    fixedNow,
 			wantSched: true,
 			wantWhy:   ReasonInFlight,
@@ -115,11 +103,6 @@ func TestNextAttemptForEveryState(t *testing.T) {
 			wantWhy: ReasonCompleted,
 		},
 		{
-			name:    "user terminated reports that the operator ended it",
-			session: storage.Session{State: storage.StateUserTerminated, Enabled: true},
-			wantWhy: ReasonTerminated,
-		},
-		{
 			name:    "a disabled state reports that it is disabled",
 			session: storage.Session{State: storage.StateDisabled},
 			wantWhy: ReasonDisabled,
@@ -133,8 +116,12 @@ func TestNextAttemptForEveryState(t *testing.T) {
 			wantWhy: ReasonRediscovered,
 		},
 		{
-			name:    "usage limit detected but unscheduled reports none",
-			session: storage.Session{State: storage.StateUsageLimitDetected, Enabled: true},
+			// A row left over from the sixteen-state machine is not a state this
+			// build knows, so nothing is scheduled for it: the startup migration
+			// rewrites such rows, and until it has, reporting no instant is the
+			// honest answer rather than inventing one.
+			name:    "a state this build does not know schedules nothing",
+			session: storage.Session{State: storage.State("USAGE_LIMIT_DETECTED"), Enabled: true},
 			wantWhy: ReasonNoLimit,
 		},
 		{
@@ -142,7 +129,7 @@ func TestNextAttemptForEveryState(t *testing.T) {
 			// on, so reporting a pending wait for it would promise work the daemon
 			// will not do — even when the stored instant is still there.
 			name:      "disabled beats a stored retry instant",
-			session:   storage.Session{State: storage.StateRetryWait, Enabled: false, RetryAt: at(retryAt)},
+			session:   storage.Session{State: storage.StateWaitingForReset, Enabled: false, RetryAt: at(retryAt)},
 			wantSched: false,
 			wantWhy:   ReasonDisabled,
 		},

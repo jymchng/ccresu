@@ -213,15 +213,14 @@ fails a named test rather than passing quietly.
    never invents a command for a session it does not understand.
 3. The daemon tails the newest 25 transcript lines per session
    (`defaultTranscriptTail`), joins them, and hands the text to the detector. It
-   reads `DISCOVERED` and `RUNNING` sessions always, and — when
-   `monitoring.rescan_resumed` is on, which is the default — also `RESUMED`,
-   `RETRY_WAIT` and `WAITING_FOR_INPUT`: the three states no other pass revisits,
-   so a limit landing in one of them would otherwise never be seen. A rescan can
-   only park the session in `WAITING_FOR_RESET`; it can never resume or spend (see
-   [the state machine](#the-state-machine)). An operator who knows a `RESUMED`
-   session has gone idle asks for the same read with
+   reads `DISCOVERED` sessions always, and — when `monitoring.rescan_resumed` is
+   on, which is the default — also `RESUMED`, which is Settled and which no other
+   pass revisits, so a limit landing after a resume would otherwise never be seen.
+   A rescan can only park the session in `WAITING_FOR_RESET`; it can never resume
+   or spend (see [the state machine](#the-state-machine)). An operator who knows a
+   `RESUMED` session has gone idle asks for the same read with
    `ccresu search-limit <session-id>`, which takes the identical walk
-   `RESUMED → USAGE_LIMIT_DETECTED → WAITING_FOR_RESET` and writes the same rows.
+   `RESUMED → DISCOVERED → WAITING_FOR_RESET` and writes the same rows.
 4. The text is normalised, then scored against the built-in patterns and any
    `detector.custom_patterns`, with guards and negatives deciding what counts
    (below).
@@ -442,45 +441,47 @@ deadline at all, because such a row could never become due.
 
 ## The state machine
 
-States are persisted; every change writes a `state_transitions` row.
+States are persisted; every change writes a `state_transitions` row. There are
+seven of them, because ccresu does one thing: it reads a session's transcript,
+waits for the usage limit the banner named to reset, hands the session a
+continuation, and goes back to reading. Those four beats are the whole of it, and
+three verdicts stop it.
 
 ```text
-DISCOVERED → RUNNING → USAGE_LIMIT_DETECTED → WAITING_FOR_RESET → RESET_TIME_REACHED
-                                                                    ↓
-                                                          CHECKING_SESSION → CHECKING_LIMIT
-                                                                    ↓                ↓
-                                                                 RESUMING ──────→ RESUMED
-                                                                    ↓
-                                                    RETRY_WAIT / DISCOVERED
+DISCOVERED → WAITING_FOR_RESET → RESUMING → RESUMED → DISCOVERED      one lap, and it repeats
+                    ↑                  │
+                    └──────────────────┘                              the resume was refused
 
-RESUMING ──→ WAITING_FOR_RESET    (the resume was refused: the limit is still in force)
+DISCOVERED ──→ COMPLETED / DISABLED / UNRECOVERABLE                   the three verdicts
+DISABLED   ──→ DISCOVERED                                             ccresu enable
 ```
 
-`DISCOVERED` is both the start and the retry state: a failed attempt, and a spent
-attempt budget, return the session there, and the next discovery pass reads its
-transcript again and schedules the next reset.
+`DISCOVERED` is both the start of a lap and the place a lap that found nothing
+stays: it is the transcript read, and a failed attempt or a spent attempt budget
+returns the session there so the next discovery pass reads its transcript again
+and schedules the next reset. `WAITING_FOR_RESET` is the durable wait on the
+instant the banner named — a row in `schedules`, not a timer. `RESUMING` is the
+one beat that spends: an attempt is recorded and the continuation is handed over.
+`RESUMED` is the landing beat, and its edge back to `DISCOVERED` is what makes
+the loop a loop — the next scan notices the next limit and a new lap starts.
+
+`RESUMED` exists as a state, rather than an immediate return to `DISCOVERED`, for
+one reason: the banner that parked the session is still inside the transcript tail
+the detector reads, so a session that went straight back to `DISCOVERED` would be
+re-parked and re-resumed off its own stale banner.
 
 Legal edges are declared once, in `internal/recovery/state.go`, and any other
 edge is rejected with `ErrInvalidTransition`. The map is the authoritative table:
-16 states, and only the edges written there are legal.
+seven states, and only the edges written there are legal.
 
 | From | Allowed |
 | --- | --- |
-| `DISCOVERED` | `RUNNING`, `CHECKING_SESSION` (recover/retry start by checking the session), `DISABLED`, `UNRECOVERABLE`, itself |
-| `RUNNING` | `USAGE_LIMIT_DETECTED`, `COMPLETED`, `USER_TERMINATED`, `DISABLED`, `DISCOVERED` |
-| `USAGE_LIMIT_DETECTED` | `WAITING_FOR_RESET`, `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED`, `DISCOVERED` |
-| `WAITING_FOR_RESET` | itself (unknown-reset re-poll or a restart), `RESET_TIME_REACHED`, `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED`, `DISCOVERED` |
-| `RESET_TIME_REACHED` | `CHECKING_SESSION`, `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED`, `DISCOVERED` |
-| `CHECKING_SESSION` | `CHECKING_LIMIT`, `RESUMED` (the supervisor published `working` without a handoff), `COMPLETED` (it had already finished its last turn), `WAITING_FOR_INPUT` (it published `blocked`), `RETRY_WAIT` (the status check itself failed, or an unrecognised state was published), `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED`, `DISCOVERED` |
-| `CHECKING_LIMIT` | `RESUMING`, `SPEND_CAP_REACHED` (the pre-attempt spend check refused the resume), `RETRY_WAIT`, `WAITING_FOR_RESET` (the limit is still in force), `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED`, `DISCOVERED` |
-| `RESUMING` | `RESUMED`, `SPEND_CAP_REACHED` (one attempt cost more than the per-attempt cap allows), `RETRY_WAIT`, `WAITING_FOR_INPUT` (the session is blocked, so the continuation is withheld), `WAITING_FOR_RESET` (the resume was refused because the limit is still in force), `DISCOVERED`, `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED` |
-| `SPEND_CAP_REACHED` | `CHECKING_SESSION` (an explicit `ccresu recover`), `DISCOVERED` (the cap was raised, or a reset), `USER_TERMINATED`, `DISABLED` — never straight to `RESUMING`, because nothing in this state may spend by itself |
-| `WAITING_FOR_INPUT` | `RUNNING`, `RESUMED`, `RETRY_WAIT`, `USAGE_LIMIT_DETECTED` (the rescan found a limit while the prompt was open), `USER_TERMINATED`, `DISABLED`, `UNRECOVERABLE`, `DISCOVERED`, itself |
-| `RETRY_WAIT` | `CHECKING_SESSION`, `WAITING_FOR_RESET`, `USAGE_LIMIT_DETECTED` (the rescan found a limit during the backoff), `DISCOVERED`, `USER_TERMINATED`, `DISABLED` |
-| `RESUMED` | `RUNNING`, `COMPLETED`, `USAGE_LIMIT_DETECTED` (`ccresu search-limit`, or the rescan), `USER_TERMINATED`, `DISABLED` — never straight back to `RESUMING` |
+| `DISCOVERED` | itself (the scan found nothing), `WAITING_FOR_RESET` (a limit was parsed out of the transcript), `RESUMING` (`ccresu recover`/`retry` asks for a resume now), `RESUMED` (the supervisor found it alive again without a handoff), `COMPLETED`, `DISABLED`, `UNRECOVERABLE` |
+| `WAITING_FOR_RESET` | itself (an unknown-reset poll, or a restart re-observing the wait), `RESUMING` (the parsed instant arrived), `RESUMED` (it resumed itself once the window reset), `DISCOVERED` (the wait no longer applies, a permanent failure, or a spent budget), `COMPLETED`, `DISABLED`, `UNRECOVERABLE` |
+| `RESUMING` | `RESUMED` (the handoff was verified), `WAITING_FOR_RESET` (refused, because the limit is still in force — or a retryable failure waiting out its backoff), `DISCOVERED` (a permanent failure, or a spent budget), `COMPLETED` (it finished while the continuation was prepared), `DISABLED`, `UNRECOVERABLE` |
+| `RESUMED` | `DISCOVERED` (the next limit, via the rescan or `ccresu search-limit`), `COMPLETED`, `DISABLED`, `UNRECOVERABLE` — never `RESUMING`, and never straight back to `WAITING_FOR_RESET` |
 | `COMPLETED` | — (terminal) |
-| `USER_TERMINATED` | — (terminal) |
-| `DISABLED` | `RUNNING`, `DISCOVERED`, `USER_TERMINATED` |
+| `DISABLED` | `DISCOVERED` — the only edge out, and only `ccresu enable` takes it |
 | `UNRECOVERABLE` | — (terminal) |
 
 A repeat `WAITING_FOR_RESET → WAITING_FOR_RESET` is legal because an
@@ -488,90 +489,128 @@ unknown-reset session re-enters the waiting state after every poll and a restart
 re-observes the wait; moving to the state it is already in still writes the audit
 row, because "the limit was checked again and was still in force" is worth
 keeping. `RESUMED` is not strictly terminal — a resumed session can hit its limit
-again — but nothing resumes it from there. The only way out towards a wait is
-`USAGE_LIMIT_DETECTED`, reached when the rescan or `ccresu search-limit` reads the
-transcript and finds a banner. The edge goes through that observation rather than
-straight to `WAITING_FOR_RESET`, so the audit trail records what produced the
-wait, and there is no edge to `RESUMING` at all: finding a limit parks a session,
-it never spends on one.
+again — but nothing resumes it from there, and the only way back towards a wait is
+through `DISCOVERED`, which the rescan and `ccresu search-limit` write before the
+park. The edge goes through that observation rather than straight to
+`WAITING_FOR_RESET`, so the audit trail records what produced the wait; there is
+no edge from `RESUMED` to `RESUMING` at all, because a session that was just
+resumed must be observed again before it can be resumed a second time.
+
+Every live beat has the same four exits, so no beat can strand a session:
+`DISCOVERED` (the way back into the loop), `COMPLETED`, `DISABLED` and
+`UNRECOVERABLE`. Two more edges exist for a session the supervisor found alive
+again without any continuation being handed over — `DISCOVERED → RESUMED` and
+`WAITING_FOR_RESET → RESUMED`. They are observations from the published state, not
+resumes: no attempt is spent and no budget is consumed, and they do not weaken the
+stale-banner guard, which is about `RESUMED`'s *outgoing* edges.
 
 ### Which states are terminal, settled and pending
 
 Three predicates classify a state, and they are what every caller consults:
 
-- **Terminal** — no edge leaves the state: `COMPLETED`, `USER_TERMINATED`,
-  `UNRECOVERABLE`. The session will not move again without an operator.
-- **Settled** — must be left alone: `RESUMED`, `COMPLETED`, `USER_TERMINATED`,
-  `DISABLED`, `UNRECOVERABLE`. Recovery refuses to touch a settled session, which
-  is what stops a completed conversation from being resumed again.
+- **Terminal** — nothing automatic runs from here: `COMPLETED`, `DISABLED`,
+  `UNRECOVERABLE`. `COMPLETED` and `UNRECOVERABLE` have no edge out at all;
+  `DISABLED` is terminal to every pass and every command except `ccresu enable`,
+  which is the human decision to turn the loop back on.
+- **Settled** — must be left alone: `RESUMED`, `COMPLETED`, `DISABLED`,
+  `UNRECOVERABLE`. Recovery refuses to touch a settled session, which is what
+  stops a completed conversation from being resumed again and what stops a
+  just-resumed session from being resumed off its own stale banner.
 - **Pending** — still wants automatic work, and what a restarted daemon must pick
-  up: `USAGE_LIMIT_DETECTED`, `WAITING_FOR_RESET`, `RESET_TIME_REACHED`,
-  `CHECKING_SESSION`, `CHECKING_LIMIT`, `RESUMING`, `RETRY_WAIT`,
-  `WAITING_FOR_INPUT`.
+  up: `WAITING_FOR_RESET` and `RESUMING`. `DISCOVERED` is deliberately **not**
+  pending: the scan reads every discovered session on its own schedule, and
+  treating it as pending would make the recovery pass resume sessions that never
+  showed a limit.
 
-`WAITING_FOR_INPUT` is the one pending state ccresu cannot act on: the supervisor
-published `blocked`, so a continuation would queue behind a prompt nobody is there
-to answer. It is pending because the conversation is not finished — the pass that
-re-observes it is what notices the operator unblocked it, and dropping it here
-would strand a parked session across a restart. Being pending is not the same as
-being resumable: a session in this state is **observed, never handed off**.
+A blocked session is not a park. When the supervisor publishes `blocked` with a
+handoff outstanding, the continuation landed and the session is `RESUMED` — the
+prompt it is waiting on is a human's to answer, whenever they get to it, and it is
+not evidence that the resume failed. With no handoff outstanding the pass hands
+the session a continuation like any other, because a continuation does not have to
+wait for an unanswered question. What the supervisor said is still recorded
+verbatim, in the attempt's observation and in the transition reason; it is simply
+no longer a reason to stop, and there is no state for "ccresu is waiting for a
+human".
 
-`SPEND_CAP_REACHED` is deliberately **not** pending: it is the one state a
-reconcile pass must not act on, because rediscovery is how a spend cap would be
-defeated. It leaves only by an explicit operator action — raising the cap (the
-next pass returns the session to `DISCOVERED`), `ccresu recover <id>`, or
-`ccresu retry <id>` — and the state offers no edge to `RESUMING`. Both commands
-are manual requests, and a manual request is the one thing the cap does not bind
-(PRD 5 R11); the state itself never spends, which is what stops a reconcile pass
-from defeating the cap by rediscovering the session.
+`DISABLED` is where a spend stop lands. A session that ccresu refuses to spend on
+— because the attempt would cross `recovery.guardrails.max_cost_usd_per_attempt`,
+or because the session has recorded more than `...max_cost_usd_per_session` — is
+disabled with a reason that names the knob and both numbers. No reconcile pass
+resumes a disabled session, so the cap cannot be defeated by rediscovery; the way
+back is `ccresu enable <id>`, and a manual `ccresu recover <id>` is the one thing
+the cap does not bind (PRD 5 R11).
 
 There is no terminal *failure* state: the only state ccresu declares failed is
-`UNRECOVERABLE`, and only because it has positively established it has no
-verified way to continue the conversation. A spent attempt budget returns the
-session to `DISCOVERED`, so it is a pause, not a failure.
+`UNRECOVERABLE`, and only because it has positively established it has no verified
+way to continue the conversation. A spent attempt budget returns the session to
+`DISCOVERED`, so it is a pause, not a failure.
 
-`RETRY_WAIT` is "this might work on the same schedule": retryable failures wait
-with exponential backoff plus jitter — `initial_delay` 30s, ×2, capped at
-`max_delay` 15m, ±`jitter` 15% — so the sequence is roughly 30s, 1m, 2m, 4m, 8m,
-then 15m. Anything else — a non-retryable failure, or an exhausted budget — sends
-the session back to `DISCOVERED`. The budget is `DefaultMaxAttempts = 10` per
-discovery cycle.
+A retryable failure is a *wait*, not a state of its own. It parks the session in
+`WAITING_FOR_RESET` with a `retry_at` instant on the row, so the session keeps the
+attempt budget it has already spent, and the daemon's `recover` stage wakes it when
+that instant is due. The delay is exponential with jitter — `initial_delay` 30s,
+×2, capped at `max_delay` 15m, ±`jitter` 15% — so the sequence is roughly 30s, 1m,
+2m, 4m, 8m, then 15m. A session parked on a usage-limit reset has no `retry_at`:
+that wait is the scheduler's, and the two are told apart by the column, not by a
+state name. The attempt budget is `DefaultMaxAttempts = 10` per discovery cycle.
 
 A resume the CLI **refused** because the limit is still in force is neither: it is
 not a failure to retry and not a success to celebrate, so it parks the session in
-`WAITING_FOR_RESET` until the reset the banner named — see [When the resume is
-refused because the limit is still in force](#when-the-resume-is-refused-because-the-limit-is-still-in-force).
+`WAITING_FOR_RESET` until the reset the banner named — see
+[When the resume is refused because the limit is still in force](#when-the-resume-is-refused-because-the-limit-is-still-in-force).
 
-There is no terminal failure state. A session that cannot be resumed is not
-broken for ever: it is waiting for its limit to clear, or for a condition that
-has since changed. Returning it to `DISCOVERED` lets the daemon read its
-transcript again, find the next reset time and schedule another attempt, so an
-operator never has to clear a failure by hand. `ccresu retry <session-id>` and
-`ccresu recover <session-id> --force` still exist for a session an operator wants
-to push right now — see [cli.md](cli.md).
-
-A failure **before** the resume is issued — the status check in
-`CHECKING_SESSION` or the limit check in `CHECKING_LIMIT` — is different: no
+A failure **before** the resume is issued — the supervisor read, the status check,
+the published listing, the pre-attempt limit check or the spend check, all of
+which run in whatever state the pass found the session in — is different: no
 attempt row exists, so no budget was spent, and the session rests in
-`RETRY_WAIT` whatever the error is classified as (an `UNRECOVERABLE` verdict
-still wins), because a rediscovery would claim a budget this failure never spent.
-Its transition reason says so explicitly, e.g. `the pre-resume check failed
+`WAITING_FOR_RESET` with a retry instant, whatever the error is classified as (an
+`UNRECOVERABLE` verdict still wins, and a spend stop is `DISABLED`). Its
+transition reason says so explicitly, e.g. `the pre-resume check failed
 (permanent); no attempt was spent, next check in 1m0s: …`, so `ccresu history`
 explains the wait.
 
-The **attempt budget** is measured per discovery cycle, not per session. The
-guard runs before any check and counts the attempts started since the session
-last entered `DISCOVERED`; when ten of them have been spent it records
-`maximum attempts reached (10); returned to discovery for the next reset`, moves
-the session to `DISCOVERED`, and returns `errors.Is(err, ErrMaxAttempts)`.
+The **attempt budget** is measured per discovery cycle, not per session. The guard
+runs before any check and counts the attempts started since the session last
+entered `DISCOVERED`; when ten of them have been spent it records `maximum
+attempts reached (10); returned to discovery for the next reset`, moves the
+session to `DISCOVERED`, and returns `errors.Is(err, ErrMaxAttempts)`.
 
 Entering `DISCOVERED` therefore starts a fresh budget — which is the whole point:
 the daemon rediscovers the session, reads its transcript, plans the next reset and
 tries again, without anyone running a command. The budget is a safety valve
 against a tight loop inside one cycle, not a verdict about the session. Because
 the guard can fire wherever a session is parked — `WAITING_FOR_RESET` after an
-unknown-reset poll, `CHECKING_SESSION` after a crash mid-check — every state that
-still permits automatic work has an edge to `DISCOVERED`.
+unknown-reset poll, `RESUMING` after a crash mid-check — every beat that still
+permits automatic work has an edge to `DISCOVERED`.
+
+### Coming from 0.8.0: nine states are gone
+
+Version 0.9.0 collapsed the machine from sixteen states to these seven. Each
+retired state was a detour off the loop, and each is now part of the beat it
+belonged to:
+
+| Retired state | Where it went | Why |
+| --- | --- | --- |
+| `RUNNING` | `RESUMED` | a session that is alive after a resume; still scanned, which is how the next limit is noticed |
+| `USAGE_LIMIT_DETECTED` | `WAITING_FOR_RESET` | detecting a limit *is* parking on the instant it named |
+| `RESET_TIME_REACHED` | `WAITING_FOR_RESET` | a due schedule now wakes the session straight into `RESUMING`, so there is no beat to record in between |
+| `CHECKING_SESSION` | `RESUMING` | the pre-flight read is part of one resume |
+| `CHECKING_LIMIT` | `RESUMING` | the limit check is part of the same resume |
+| `RETRY_WAIT` | `DISCOVERED` | a backoff was never a condition, only a wait; the wait is `sessions.retry_at`, and the beat that reads the wait is discovery |
+| `WAITING_FOR_INPUT` | `DISCOVERED` | a blocked park is rediscovered like any other; `blocked` is a supervisor status, not a state, and a session handed a continuation is `RESUMED` |
+| `USER_TERMINATED` | `DISABLED` | both are "the operator stopped it; only `ccresu enable` restarts it" |
+| `SPEND_CAP_REACHED` | `DISABLED` | a spend stop is a decision that nothing more may be spent until an operator acts |
+
+Nothing is lost on upgrade. The seven survivors are a subset of the sixteen, so
+migration `0013_simplify_states.sql` rewrites every row carrying a retired name —
+in `sessions`, `recovery_attempts`, `state_transitions` and `deleted_sessions` —
+through exactly the table above, at the next startup. A session arriving at
+`DISCOVERED` from
+`RETRY_WAIT` or `WAITING_FOR_INPUT` also has its `retry_at` cleared, because
+`DISCOVERED` owns no retry instant and `ccresu sessions` would otherwise report a
+wait nothing would act on. A binary rolled back to 0.8.0 reads every migrated row
+without complaint; what cannot be restored is the distinction the collapse
+removed, and nothing tries to.
 
 ## When the session is still attached to a background agent
 
@@ -903,13 +942,13 @@ and a reason respectively.
 | Observed `state` | No handoff outstanding | Handoff outstanding |
 | --- | --- | --- |
 | `working` | `RESUMED` — it continued on its own once the window reset | no transition; the supervisor owns it |
-| `blocked` | `WAITING_FOR_INPUT` | `WAITING_FOR_INPUT` |
+| `blocked` | no transition — the pass hands it a continuation like any other session | `RESUMED` — the continuation landed, and the prompt it waits on is a human's to answer |
 | `done` | `COMPLETED` — nothing to continue | `RESUMED` |
-| `failed` | `RETRY_WAIT` | `RETRY_WAIT` |
-| `stopped` | `RETRY_WAIT` (or `USER_TERMINATED` if ccresu issued the stop) | same |
-| absent, session in the listing | no transition — `state` is for background sessions only | `HandoffUnobserved` → `RETRY_WAIT` |
-| absent, session not in the listing | no transition — expected before a handoff | `HandoffUnobserved` → `RETRY_WAIT` |
-| any other value | `RETRY_WAIT`, value recorded verbatim | `RETRY_WAIT`, value recorded verbatim |
+| `failed` | `WAITING_FOR_RESET` — parked on a retry instant | same |
+| `stopped` | `WAITING_FOR_RESET` (or `DISABLED` if ccresu issued the stop) | same |
+| absent, session in the listing | no transition — `state` is for background sessions only | `HandoffUnobserved` → `WAITING_FOR_RESET` |
+| absent, session not in the listing | no transition — expected before a handoff | `HandoffUnobserved` → `WAITING_FOR_RESET` |
+| any other value | `WAITING_FOR_RESET`, value recorded verbatim | `WAITING_FOR_RESET`, value recorded verbatim |
 
 Two properties of that table are load-bearing:
 
@@ -922,10 +961,13 @@ Two properties of that table are load-bearing:
   failed listing is likewise recorded as a failure rather than read as an empty
   listing — that conversion is how an outage becomes a verdict.
 
-A `blocked` observation raises exactly one `needs_input` milestone and never a
-success milestone. The milestone is raised whether or not the CLI published a
-`waitingFor`: a live payload shows `blocked` entries with no reason at all, so a
-missing reason is a fact worth reporting rather than a reason to stay silent.
+A `blocked` observation never reads as a success on its own: the continuation is
+only proven when a handoff is outstanding, and then what is recorded is the
+supervisor's own wording. The published reason is kept whether or not the CLI
+supplied a `waitingFor` — a live payload shows `blocked` entries with no reason at
+all, so a missing reason is a fact worth recording rather than a reason to stay
+silent. What changed in 0.9.0 is that being blocked no longer *stops* anything: it
+is a conversation waiting on a human, not evidence that the resume failed.
 
 ## Verification: proof, not optimism
 
@@ -993,7 +1035,7 @@ the final word.
 | Normal completion | recognised as completion; not resumed |
 | Limit still in force at resume time | the attempt is finished with the banner, the banner is recorded as a usage limit, and the session returns to `WAITING_FOR_RESET`; no further resume until the reset it named |
 | Session still attached to a background agent | nothing special: the continuation is a handoff to the supervisor that holds it, not a print-mode resume that would collide with it |
-| Supervisor published `blocked` | `WAITING_FOR_INPUT`, with the reason carried verbatim; no continuation is issued, because it would queue behind a prompt nobody is there to answer |
+| Supervisor published `blocked` | `RESUMED` when a handoff is outstanding — the continuation landed and the reason is carried verbatim; with no handoff the session is handed a continuation like any other |
 | Session missing from the supervisor's listing | `HandoffUnobserved` when a handoff is outstanding, otherwise no transition — never `failed`, never `stopped` |
 | Attempt budget spent | back to `DISCOVERED`; the next discovery pass re-reads the transcript, schedules the next reset and starts a fresh budget |
 

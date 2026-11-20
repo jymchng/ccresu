@@ -2,7 +2,6 @@ package recovery
 
 import (
 	"context"
-	"strings"
 )
 
 // MilestoneKind names a recovery moment an operator may want to be told about.
@@ -24,14 +23,15 @@ const (
 	// session had already resumed on its own once the window reset.
 	MilestoneSucceeded MilestoneKind = "recovery_success"
 	// MilestoneFailed is reported for a retryable failure: the attempt failed,
-	// the session is in RETRY_WAIT, and ccresu will try again by itself.
+	// the session is parked on a retry instant, and ccresu will try again by
+	// itself.
 	//
 	// A failure reported before the resume was issued — the pre-resume status
-	// check or the limit check — is announced too: it also rests in RETRY_WAIT
-	// with a scheduled retry, and it is the only notice an operator gets that
-	// ccresu is looping without spending budget. A usage-limit refusal is not
-	// announced at all: it is a wait with a known end, not a failure, and the
-	// limit-detected messages already reported it.
+	// check, the limit check or the spend cap — is announced too: it also rests
+	// on a retry instant, and it is the only notice an operator gets that ccresu
+	// is looping without spending budget. A usage-limit refusal is not announced
+	// at all: it is a wait with a known end, not a failure, and the limit
+	// messages already reported it.
 	MilestoneFailed MilestoneKind = "recovery_failure"
 	// MilestonePermanent is reported for a failure the retry policy classified
 	// ClassPermanent — an authentication failure, a missing binary, a session id
@@ -42,18 +42,13 @@ const (
 	// verdict about the conversation, and calling it "automatic recovery
 	// stopped" would be a false alarm every night.
 	MilestonePermanent MilestoneKind = "permanent_failure"
-	// MilestoneNeedsInput is reported when the supervisor publishes `blocked`
-	// for a session: it is waiting on a permission prompt, a sandbox decision,
-	// an answer, or an expired login that only the operator can clear.
+	// There is deliberately no needs-input kind.
 	//
-	// The kind is named for the event PRD 4 maps it onto (`needs_input`), so the
-	// two vocabularies cannot drift apart.
-	//
-	// It is raised whether or not the observation carried a `waitingFor`. A live
-	// payload shows blocked entries with no reason at all, and a missing reason
-	// is a fact worth reporting rather than a reason to stay silent. Use
-	// Milestone.NeedsInputReason to render both cases honestly.
-	MilestoneNeedsInput MilestoneKind = "needs_input"
+	// One used to exist, raised by the Claude Code hook when the supervisor
+	// published `blocked`. It is gone because a blocked session is no longer
+	// parked: recovery.Observe hands it a continuation like any other session, so
+	// "this one needs you" describes a session ccresu is already resuming. A kind
+	// nothing may raise would be a promise the engine cannot keep.
 )
 
 // Milestone is one recovery moment, carrying the facts a message needs.
@@ -70,33 +65,14 @@ type Milestone struct {
 	// Cause is the failure, for the two failure kinds. Nil otherwise.
 	Cause error
 	// ProjectPath is the session's working directory, when the caller knows it.
-	// The recovery engine leaves it empty; `ccresu hook` fills it from the
-	// persisted session row, so a needs-input message can name the project the
-	// prompt belongs to without the hook resolving or trusting the payload's
-	// cwd.
+	// The recovery engine leaves it empty; a caller that has the persisted session
+	// row fills it, so a message can name the project it is about.
 	ProjectPath string
 	// RunsInPath is where the session actually runs, when the caller knows it
 	// (PRD 6 R1). It is filled from the persisted row like ProjectPath, and it
 	// differs exactly when the session has moved into a worktree — the case a
 	// message should name rather than hide.
 	RunsInPath string
-	// Observation is the published state a needs-input milestone was raised
-	// from, verbatim. It is the payload the message is built from, so the
-	// operator sees what the CLI said — including that it said no reason —
-	// rather than a paraphrase.
-	Observation StateObservation
-}
-
-// NeedsInputReason returns the reason the supervisor published, verbatim, and
-// whether it published one at all.
-//
-// The two answers are what keep the operator-facing message honest: a blocked
-// session with `waitingFor: "permission prompt"` names the prompt, and a blocked
-// session with no `waitingFor` says no reason was reported. Neither case invents
-// the other, and neither suppresses the milestone.
-func (m Milestone) NeedsInputReason() (reason string, reported bool) {
-	reason = strings.TrimSpace(m.Observation.WaitingFor)
-	return reason, reason != ""
 }
 
 // Observer receives the milestones of every recovery.

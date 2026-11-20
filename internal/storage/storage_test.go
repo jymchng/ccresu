@@ -280,9 +280,10 @@ func TestMigrateFromEmptyAndRollback(t *testing.T) {
 		t.Fatalf("next_attempt_at missing after migrate: %v", sessionColumns(ctx, t, store))
 	}
 
-	// Roll back the newest version. It is a data migration (it re-opens
-	// PERMANENTLY_FAILED sessions), so no table changes; the point of asserting
-	// it here is that the runner reports it and its rollback succeeds.
+	// Roll back the newest version. It is a data migration (it rewrites retired
+	// state names to the states that replaced them), so no table changes; the
+	// point of asserting it here is that the runner reports it and its rollback
+	// succeeds.
 	reverted, err := store.Rollback(ctx, latest-1)
 	if err != nil {
 		t.Fatalf("rollback to %d: %v", latest-1, err)
@@ -522,7 +523,7 @@ func TestPersistenceAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start attempt: %v", err)
 	}
-	if _, err := first.TransitionSession(ctx, session.ID, storage.StateUsageLimitDetected, "detected", attempt.ID); err != nil {
+	if _, err := first.TransitionSession(ctx, session.ID, storage.StateWaitingForReset, "detected", attempt.ID); err != nil {
 		t.Fatalf("transition: %v", err)
 	}
 	yes := true
@@ -559,8 +560,8 @@ func TestPersistenceAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get session after reopen: %v", err)
 	}
-	if got.State != storage.StateUsageLimitDetected {
-		t.Fatalf("state = %s, want USAGE_LIMIT_DETECTED", got.State)
+	if got.State != storage.StateWaitingForReset {
+		t.Fatalf("state = %s, want WAITING_FOR_RESET", got.State)
 	}
 	if got.PID != 1234 {
 		t.Fatalf("pid lost: %+v", got)

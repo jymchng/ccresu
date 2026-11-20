@@ -161,8 +161,8 @@ func TestAnUnreadableSupervisorStatusIsItsOwnFailure(t *testing.T) {
 	if provider.resumeCount() != 0 {
 		t.Error("a resume was issued while the supervisor could not be read")
 	}
-	if outcome.State != StateRetryWait {
-		t.Errorf("state = %s, want RETRY_WAIT: the failure is retried, not fatal", outcome.State)
+	if outcome.State != StateWaitingForReset {
+		t.Errorf("state = %s, want WAITING_FOR_RESET: the failure is retried, not fatal", outcome.State)
 	}
 }
 
@@ -252,8 +252,8 @@ func TestSupervisorStoppedMidHandoffIsRetryable(t *testing.T) {
 	if !errors.Is(err, ErrHandoffUnobserved) {
 		t.Errorf("Recover error = %v, want ErrHandoffUnobserved", err)
 	}
-	if outcome.State != StateRetryWait {
-		t.Errorf("state = %s, want RETRY_WAIT", outcome.State)
+	if outcome.State != StateWaitingForReset {
+		t.Errorf("state = %s, want WAITING_FOR_RESET", outcome.State)
 	}
 	if outcome.Delay <= 0 {
 		t.Error("Delay = 0, want a schedule: the next pass re-observes and hands off again")

@@ -54,6 +54,14 @@ type, a negative duration, an unparsable timezone, a non-absolute path where one
 is required, or an out-of-range value is fatal and the message names the field
 (e.g. `server.token_path must resolve to a file path`).
 
+The one exception is a key this release has *retired*: a file written for an
+older version still loads, the key is dropped before the strict decode, and the
+load prints a warning naming it (`telegram.notify_needs_input is no longer a
+configuration key: it is ignored, not rejected …`) so the stale line can be
+deleted. The list is closed and permanent — today it holds exactly
+`telegram.notify_needs_input`, withdrawn in 0.9.0 — so a typo of a retired key
+(`notify_needs_inputt`) and a key that never existed both still fail.
+
 ## Environment overrides
 
 Any field can be set with an environment variable: prefix `CCRESU_`, the YAML
@@ -117,7 +125,7 @@ rather than handed to a command line.
 | `enabled` | `true` | Master switch for the watchdog. |
 | `detect_usage_limits` | `true` | Recognise usage-limit interruptions. |
 | `detect_session_completion` | `true` | Recognise normal completion so a finished session is not resumed. |
-| `rescan_resumed` | `true` | Extends the transcript scan to the three states no other pass reads again: `RESUMED` (Settled, so nothing revisits it), `RETRY_WAIT` (a backoff that would retry into the same refusal) and `WAITING_FOR_INPUT` (parked on a human). A limit found in one of them parks the session in `WAITING_FOR_RESET` on the reset the banner names. The scan can only ever park a session — the state machine gives it no edge to `RESUMING` — so a rescan cannot spend, and cannot resume a finished conversation twice. `DISCOVERED` and `RUNNING` are scanned regardless. Set it to `false` (or `CCRESU_MONITORING__RESCAN_RESUMED=false`) to restore the pre-0.8.0 behaviour, in which a limit that landed after a resume was only ever found by an operator running `ccresu search-limit`. |
+| `rescan_resumed` | `true` | Extends the transcript scan to the one state no other pass reads again: `RESUMED` is Settled, so nothing revisits that transcript, and a limit that lands after a resume would otherwise be invisible for ever. A limit found there goes `RESUMED → DISCOVERED → WAITING_FOR_RESET` on the reset the banner names — through `DISCOVERED`, because the machine has no `RESUMED → WAITING_FOR_RESET` edge — so a rescan can only ever park a session. It has no edge to `RESUMING`, so it cannot spend, and cannot resume a finished conversation twice. `DISCOVERED` is scanned regardless. Set it to `false` (or `CCRESU_MONITORING__RESCAN_RESUMED=false`) to restore the pre-0.8.0 behaviour, in which a limit that landed after a resume was only ever found by an operator running `ccresu search-limit`. |
 
 ### `detector`
 
@@ -192,9 +200,12 @@ per run — `--max-budget-usd`, `--max-turns`, `--json-schema`,
 `--permission-prompts` — are documented as print mode only and are never passed;
 the two spend caps above are ccresu's replacement for them.
 
-A session stopped by either cap is parked in `SPEND_CAP_REACHED`, which no
-reconcile pass resumes. It leaves that state when the operator raises the cap (the
-next pass returns it to `DISCOVERED`), runs `ccresu recover <id>`, or resets it.
+A session stopped by either cap is `DISABLED`, which no reconcile pass resumes —
+and a spend stop and an operator's `ccresu disable` are deliberately the same
+state, because both mean "nothing automatic happens until a human decides". The
+way back is `ccresu enable <id>` once the cap is raised or reset; an explicit
+`ccresu recover <id>` or `ccresu retry <id>` is allowed past the cap without
+enabling the session.
 The caps apply to automatic recovery only: an explicit `ccresu recover` or
 `ccresu retry` is a human act and is allowed past the cap, though its cost is
 still recorded and the override is logged.
@@ -212,9 +223,9 @@ rejected at config validation because the templates emit HTML), and the
 `notify_*` toggles (`limit_detected`,
 `waiting`
 (default `false`), `recovery_started`, `recovery_success`,
-`recovery_failure`, `permanent_failure`, `session_completed` — all `true` by
-default — plus `needs_input` (default `false`: it is a new message class, and an
-upgrade should not start sending one).
+`recovery_failure`, `permanent_failure`, `session_completed` — the rest `true` by
+default). There is no needs-input switch: a session the supervisor publishes as
+`blocked` is resumed rather than announced.
 
 ### `server`
 

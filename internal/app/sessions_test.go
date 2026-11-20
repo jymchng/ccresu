@@ -19,7 +19,7 @@ func seedDeletableSession(t *testing.T, h *harness, id string) {
 	t.Helper()
 	ctx := context.Background()
 	h.seedSession(t, id, func(s *storage.Session) {
-		s.State = storage.StateCheckingSession
+		s.State = storage.StateResuming
 		s.LastError = "resume failed"
 	})
 	attempt, err := h.store.StartAttempt(ctx, id, 0, "claude -p --resume "+id)
@@ -27,12 +27,12 @@ func seedDeletableSession(t *testing.T, h *harness, id string) {
 		t.Fatalf("seed attempt: %v", err)
 	}
 	if _, err := h.store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
-		State: storage.StateRetryWait,
+		State: storage.StateDiscovered,
 		Error: "resume failed",
 	}); err != nil {
 		t.Fatalf("finish attempt: %v", err)
 	}
-	if _, err := h.store.TransitionSession(ctx, id, storage.StateRetryWait, "seed transition", 0); err != nil {
+	if _, err := h.store.TransitionSession(ctx, id, storage.StateDiscovered, "seed transition", 0); err != nil {
 		t.Fatalf("seed transition: %v", err)
 	}
 }
@@ -44,7 +44,7 @@ func seedFailedSession(t *testing.T, h *harness, id string) {
 	t.Helper()
 	ctx := context.Background()
 	h.seedSession(t, id, func(s *storage.Session) {
-		s.State = storage.StateCheckingSession
+		s.State = storage.StateResuming
 		s.LastError = "resume failed"
 	})
 	attempt, err := h.store.StartAttempt(ctx, id, 0, "claude -p --resume "+id)
@@ -52,7 +52,7 @@ func seedFailedSession(t *testing.T, h *harness, id string) {
 		t.Fatalf("seed attempt: %v", err)
 	}
 	if _, err := h.store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
-		State: storage.StateRetryWait,
+		State: storage.StateDiscovered,
 		Error: "resume failed",
 	}); err != nil {
 		t.Fatalf("finish attempt: %v", err)
@@ -65,7 +65,7 @@ func TestSessionsStatusShowsEverythingKnown(t *testing.T) {
 	h := newHarness(t)
 	seedFailedSession(t, h, canonicalSessionID)
 	if _, err := h.store.TransitionSession(context.Background(), canonicalSessionID,
-		storage.StateRetryWait, "seeded so the history section has a row", 0); err != nil {
+		storage.StateDiscovered, "seeded so the history section has a row", 0); err != nil {
 		t.Fatalf("seed transition: %v", err)
 	}
 
@@ -80,7 +80,7 @@ func TestSessionsStatusShowsEverythingKnown(t *testing.T) {
 	}
 	for _, want := range []string{
 		"session", canonicalSessionID,
-		"state", "RETRY_WAIT",
+		"state", "DISCOVERED",
 		"recoverable",
 		"transcript",
 		"Next attempt",
@@ -317,7 +317,7 @@ func TestSessionsSubcommandScan(t *testing.T) {
 		{name: "json first", args: []string{"--json", "status", "id"}, want: "status", rest: []string{"--json", "id"}, ok: true},
 		{name: "limit first", args: []string{"--limit", "5", "status", "id"}, want: "status", rest: []string{"--limit", "5", "id"}, ok: true},
 		{name: "limit equals", args: []string{"--limit=5", "status", "id"}, want: "status", rest: []string{"--limit=5", "id"}, ok: true},
-		{name: "state then delete", args: []string{"--state", "RUNNING", "delete", "id"}, want: "delete", rest: []string{"--state", "RUNNING", "id"}, ok: true},
+		{name: "state then delete", args: []string{"--state", "RESUMING", "delete", "id"}, want: "delete", rest: []string{"--state", "RESUMING", "id"}, ok: true},
 		{name: "after separator", args: []string{"--", "status", "id"}, want: "status", rest: []string{"--", "id"}, ok: true},
 		{name: "no subcommand", args: []string{"--all"}, ok: false},
 		{name: "no arguments", args: nil, ok: false},

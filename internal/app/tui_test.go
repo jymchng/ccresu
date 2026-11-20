@@ -503,7 +503,7 @@ func TestSessionsBrowserRecoversAndRetries(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
 			h.seedSession(t, canonicalSessionID, func(s *storage.Session) {
-				s.State = storage.StateResetTimeReached
+				s.State = storage.StateWaitingForReset
 				s.TranscriptSize = 10
 				s.TranscriptLines = 1
 			})
@@ -885,7 +885,7 @@ func TestSessionsBrowserActionsTargetTheCursorRow(t *testing.T) {
 		if got := readSession(t, h, secondID); got.Enabled || got.State != storage.StateDisabled {
 			t.Errorf("the cursor row was not disabled: enabled = %v, state = %s", got.Enabled, got.State)
 		}
-		if got := readSession(t, h, firstID); !got.Enabled || got.State != storage.StateRunning {
+		if got := readSession(t, h, firstID); !got.Enabled || got.State != storage.StateDiscovered {
 			t.Errorf("'d' also touched the row above the cursor: enabled = %v, state = %s", got.Enabled, got.State)
 		}
 		if screen := lastScreen(h.stdout.String()); !strings.Contains(screen, "disable "+shortID(secondID)) {
@@ -908,7 +908,7 @@ func TestSessionsBrowserActionsTargetTheCursorRow(t *testing.T) {
 		if got := readSession(t, h, secondID); !got.Enabled || got.State != storage.StateDiscovered {
 			t.Errorf("the cursor row was not enabled: enabled = %v, state = %s", got.Enabled, got.State)
 		}
-		if got := readSession(t, h, firstID); !got.Enabled || got.State != storage.StateRunning {
+		if got := readSession(t, h, firstID); !got.Enabled || got.State != storage.StateDiscovered {
 			t.Errorf("'e' also touched the row above the cursor: enabled = %v, state = %s", got.Enabled, got.State)
 		}
 	})

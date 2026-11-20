@@ -18,40 +18,39 @@ type State = storage.State
 
 // The states of the recovery state machine, re-exported for callers that do not
 // need to import storage.
+//
+// There are seven, because ccresu does one thing: it reads a session's
+// transcript, waits for the usage limit the banner names to reset, hands the
+// session a continuation, and goes back to reading. Those four beats are the
+// whole of it, and three verdicts stop it.
 const (
-	StateDiscovered         = storage.StateDiscovered
-	StateRunning            = storage.StateRunning
-	StateUsageLimitDetected = storage.StateUsageLimitDetected
-	StateWaitingForReset    = storage.StateWaitingForReset
-	StateResetTimeReached   = storage.StateResetTimeReached
-	StateCheckingSession    = storage.StateCheckingSession
-	StateCheckingLimit      = storage.StateCheckingLimit
-	StateResuming           = storage.StateResuming
-	StateResumed            = storage.StateResumed
-	StateRetryWait          = storage.StateRetryWait
-	StateCompleted          = storage.StateCompleted
-	StateUserTerminated     = storage.StateUserTerminated
-	StateDisabled           = storage.StateDisabled
-	StateUnrecoverable      = storage.StateUnrecoverable
-	// StateWaitingForInput is a session the supervisor reports as `blocked`: it
-	// needs a permission, a sandbox decision, an answer or an expired login
-	// cleared before it can continue, and nothing ccresu can do unblocks it.
+	// StateDiscovered is the first beat: a known session whose transcript the
+	// scan reads. It is where a lap starts and where a lap that found nothing
+	// stays.
+	StateDiscovered = storage.StateDiscovered
+	// StateWaitingForReset is the second beat: a usage limit was parsed out of
+	// the transcript and the session is parked on the instant it named.
+	StateWaitingForReset = storage.StateWaitingForReset
+	// StateResuming is the third beat: the instant arrived and the continuation
+	// is being handed to the backgrounded session.
+	StateResuming = storage.StateResuming
+	// StateResumed is the fourth beat: the handoff was verified and the session
+	// is alive again.
 	//
-	// It is Pending — a restarted daemon re-observes it, because the operator
-	// may have answered the prompt while ccresu was down — and it is not
-	// Settled, because the conversation is not finished. What it is not is a
-	// destination for a handoff: a continuation queued behind an unanswered
-	// prompt is waste, so a session in this state is observed, never resumed.
-	StateWaitingForInput = storage.StateWaitingForInput
-	// StateSpendCapReached is the session parked because its recorded spend
-	// reached a configured cap (PRD 5 R7).
-	//
-	// It is a budget verdict rather than a fact about the conversation, which is
-	// why it is neither terminal nor settled, and why it is deliberately absent
-	// from PendingStates: no reconcile pass may resume it, or the cap would be
-	// defeated by rediscovery. It leaves only by an explicit operator action —
-	// `ccresu recover`, `ccresu retry`, `ccresu disable`, or raising the cap.
-	StateSpendCapReached = storage.StateSpendCapReached
+	// It exists as a state, rather than as an immediate return to DISCOVERED,
+	// for one reason: the banner that parked the session is still inside the
+	// transcript tail the detector reads, so a session that went straight back to
+	// DISCOVERED would be re-parked and re-resumed off its own stale banner.
+	StateResumed = storage.StateResumed
+	// StateCompleted is a verdict: the session finished its last turn, so there
+	// is nothing to continue.
+	StateCompleted = storage.StateCompleted
+	// StateDisabled is the loop's off switch: the operator turned the session
+	// off.
+	StateDisabled = storage.StateDisabled
+	// StateUnrecoverable is a verdict: ccresu has positively established that it
+	// has no verified way to resume this session.
+	StateUnrecoverable = storage.StateUnrecoverable
 )
 
 // ErrInvalidTransition reports an attempt to move a session along an edge that
@@ -60,181 +59,100 @@ var ErrInvalidTransition = errors.New("recovery: invalid state transition")
 
 // transitions is the authoritative edge table.
 //
-// The happy path follows the specification exactly:
+// # The loop
 //
-//	DISCOVERED -> RUNNING -> USAGE_LIMIT_DETECTED -> WAITING_FOR_RESET
-//	-> RESET_TIME_REACHED -> CHECKING_SESSION -> CHECKING_LIMIT -> RESUMING
-//	-> RESUMED
+// One lap is four beats and it repeats for as long as the session keeps hitting
+// its limit:
 //
-// with RETRY_WAIT looping back to CHECKING_SESSION. The remaining edges exist so
-// an operator action (disable, terminate) or an off-nominal observation (already
-// resumed, limit not actually cleared) is recorded instead of being forced
-// through the happy path or silently dropped.
+//	DISCOVERED -> WAITING_FOR_RESET -> RESUMING -> RESUMED -> DISCOVERED
 //
-// RESUMING -> WAITING_FOR_RESET is the refusal edge: the CLI ran, said the usage
-// limit is still in force and named the next reset. That is the same wait the
-// session was already in, reached by an attempt that spent budget, so it returns
-// to the waiting state rather than to RETRY_WAIT, where a backoff would ask the
-// same question again a minute later.
+// Each beat does exactly one thing. DISCOVERED reads the transcript and parses
+// the reset time out of a limit banner. WAITING_FOR_RESET sits on that instant
+// with the wait on a persisted schedule, so a restart or a reboot resumes
+// waiting instead of losing the session. RESUMING spends an attempt handing the
+// backgrounded session a continuation. RESUMED is the landing beat, and the
+// edge back to DISCOVERED is what makes the loop a loop: the next scan notices
+// the next limit and the lap starts again.
 //
-// There is no terminal failure state. A session that cannot be resumed is not
-// broken for ever: the daemon rediscovers it, reads its transcript again, and
-// finds its next reset time. Every state that permits automatic work therefore
-// has an edge back to DISCOVERED, and that is what a failed attempt or an
-// exhausted attempt budget produces. DISCOVERED is the start of a new cycle, not
-// the absence of one: entering it resets the attempt budget, so a session is
-// retried as often as its transcript still shows a usage limit, without an
-// operator running anything.
+// WAITING_FOR_RESET -> WAITING_FOR_RESET is a re-entry rather than progress: a
+// banner that named no reset time is polled, and every poll re-parks the session
+// on the next instant.
 //
-// The only state that stops automatic work on its own is UNRECOVERABLE, and only
-// because ccresu has positively established that it has no verified way to
-// continue the conversation. That is a fact about the session, not a budget.
+// # The four exits
+//
+// Every live beat — DISCOVERED, WAITING_FOR_RESET, RESUMING and RESUMED — has
+// the same four ways out, so no beat can strand a session:
+//
+//   - DISCOVERED, the way back into the loop. A failed attempt, a spent attempt
+//     budget and a wait that no longer applies all return here rather than to a
+//     failure state, which is why the loop needs no operator to keep going.
+//   - COMPLETED, DISABLED and UNRECOVERABLE, the three verdicts that stop it.
+//
+// # The edges that are deliberately absent
+//
+// RESUMED has no edge to RESUMING or to WAITING_FOR_RESET. A session that was
+// just resumed must be observed again before it is parked again, or the stale
+// banner in its tail would drive a resume per pass.
+//
+// # The two observing edges into RESUMED
+//
+// DISCOVERED -> RESUMED and WAITING_FOR_RESET -> RESUMED exist because a pass can
+// find the session already alive: the supervisor publishes `working`, `done`, or
+// `blocked` with a handoff outstanding, which is a session that continued on its
+// own once the window reset. No continuation is handed over and no attempt is
+// spent on that path, so it is an observation rather than a resume, and both
+// edges are entered only from the published state — never from a command.
+//
+// That is also why they do not weaken the stale-banner guard above: the guard is
+// about RESUMED's outgoing edges, and those are unchanged.
+//
+// DISCOVERED -> RESUMING is the operator's way in: `ccresu recover` and
+// `ccresu retry` ask for a resume now instead of waiting for a parsed instant.
+// It is the same loop, entered by hand, and it spends an attempt like any other.
+//
+// DISABLED -> DISCOVERED is the only edge out of a verdict, and only
+// `ccresu enable` takes it: turning the loop back on for a session is a decision
+// a human makes, never something a pass does on its own.
 var transitions = map[State]map[State]struct{}{
 	StateDiscovered: {
-		StateRunning:         {},
-		StateCheckingSession: {}, // recover and retry start by checking the session
-		StateDisabled:        {},
-		StateUnrecoverable:   {},
-		StateDiscovered:      {}, // a fresh cycle for a budget spent before discovery
-	},
-	StateRunning: {
-		StateUsageLimitDetected: {},
-		StateCompleted:          {},
-		StateUserTerminated:     {},
-		StateDisabled:           {},
-		StateDiscovered:         {},
-	},
-	StateUsageLimitDetected: {
-		StateWaitingForReset: {},
-		StateUnrecoverable:   {},
-		StateUserTerminated:  {},
-		StateDisabled:        {},
-		StateDiscovered:      {},
+		StateWaitingForReset: {}, // a limit was parsed out of the transcript
+		StateResuming:        {}, // the operator asked for a resume now
+		StateResumed:         {}, // the supervisor says it is alive again already
+		StateDiscovered:      {}, // the scan found nothing; a lap that keeps going
+		StateCompleted:       {}, // it finished its last turn
+		StateDisabled:        {}, // the operator turned it off
+		StateUnrecoverable:   {}, // there is no verified way to resume it
 	},
 	StateWaitingForReset: {
-		// A repeat entry is legal: an unknown-reset session re-enters the
-		// waiting state after every poll, and a restart re-observes the wait.
-		StateWaitingForReset:  {},
-		StateResetTimeReached: {},
-		StateUnrecoverable:    {},
-		StateUserTerminated:   {},
-		StateDisabled:         {},
-		StateDiscovered:       {},
-	},
-	StateResetTimeReached: {
-		StateCheckingSession: {},
-		StateUnrecoverable:   {},
-		StateUserTerminated:  {},
+		StateWaitingForReset: {}, // an unknown reset is polled again
+		StateResuming:        {}, // the parsed instant arrived
+		StateResumed:         {}, // it resumed itself once the window reset
+		StateDiscovered:      {}, // the wait no longer applies; a new lap
+		StateCompleted:       {},
 		StateDisabled:        {},
-		StateDiscovered:      {},
-	},
-	StateCheckingSession: {
-		StateCheckingLimit:   {},
-		StateResumed:         {}, // it resumed on its own; nothing to do
-		StateCompleted:       {}, // it had already finished its last turn
-		StateRetryWait:       {}, // the status check itself failed
 		StateUnrecoverable:   {},
-		StateUserTerminated:  {},
-		StateDisabled:        {},
-		StateDiscovered:      {},
-		StateWaitingForInput: {}, // the supervisor says a human must act
-	},
-	StateCheckingLimit: {
-		StateResuming:        {},
-		StateSpendCapReached: {}, // the pre-attempt spend check refused the resume
-		StateRetryWait:       {},
-		StateWaitingForReset: {}, // the limit is still in force
-		StateUnrecoverable:   {},
-		StateUserTerminated:  {},
-		StateDisabled:        {},
-		StateDiscovered:      {},
 	},
 	StateResuming: {
-		StateResumed:         {},
-		StateRetryWait:       {},
-		StateWaitingForReset: {}, // the resume was refused: the limit is still in force
-		StateDiscovered:      {},
-		StateUnrecoverable:   {},
-		StateUserTerminated:  {},
-		StateDisabled:        {},
-		// A resume that lands on a blocked session parks instead of pretending
-		// the continuation was delivered.
-		StateWaitingForInput: {},
-		// One attempt cost more than the per-attempt cap allows (R6).
-		StateSpendCapReached: {},
-	},
-	StateRetryWait: {
-		StateCheckingSession: {},
-		StateWaitingForReset: {},
-		// A backoff that would retry into a refusal is not a wait worth having:
-		// a usage limit found in the transcript parks the session on the reset
-		// the banner names instead (`monitoring.rescan_resumed`).
-		StateUsageLimitDetected: {},
-		StateDiscovered:         {},
-		StateUserTerminated:     {},
-		StateDisabled:           {},
-	},
-	// WAITING_FOR_INPUT is a park, not a verdict: the supervisor published
-	// `blocked`, so ccresu cannot act, but the conversation is not finished. The
-	// state therefore needs every edge a live state has — including DISCOVERED,
-	// so a failure while parked can still be recorded — plus itself, because a
-	// pass that observes `blocked` again re-enters the same state and writes the
-	// audit row. It is deliberately not settled (a restarted daemon must
-	// re-observe it) and deliberately not resumable from (a continuation would
-	// queue behind a prompt nobody is there to answer).
-	StateWaitingForInput: {
-		StateRunning:         {},
-		StateResumed:         {},
-		StateRetryWait:       {},
-		StateUserTerminated:  {},
+		StateResumed:         {}, // the handoff was verified
+		StateWaitingForReset: {}, // refused: the limit is still in force
+		StateDiscovered:      {}, // the attempt failed or its budget is spent
+		StateCompleted:       {}, // it finished while the continuation was prepared
 		StateDisabled:        {},
 		StateUnrecoverable:   {},
-		StateDiscovered:      {},
-		StateWaitingForInput: {},
-		// A blocked session can also hit a usage limit. The limit is the nearer
-		// fact — the conversation cannot continue until the window resets, and a
-		// human answering the prompt changes nothing until then — so the session
-		// parks on the reset and is re-observed afterwards, which re-derives
-		// WAITING_FOR_INPUT from the supervisor if the prompt is still open.
-		StateUsageLimitDetected: {},
 	},
-	// SPEND_CAP_REACHED is a park with a budget reason. It offers CHECKING_SESSION
-	// so an explicit `ccresu recover` can walk back into the normal path — R11
-	// exempts a human act from the cap — and DISCOVERED so raising the cap
-	// returns the session to the ordinary cycle without a resume being issued
-	// from here. It offers no edge to RESUMING: nothing in this state may spend
-	// by itself.
-	StateSpendCapReached: {
-		StateCheckingSession: {},
-		StateDiscovered:      {},
-		StateUserTerminated:  {},
-		StateDisabled:        {},
-	},
-	// RESUMED is not strictly terminal — a resumed session can hit its limit
-	// again — but a second recovery is only legal after the session has been
-	// observed running and hit a new limit, never straight from RESUMED.
-	//
-	// USAGE_LIMIT_DETECTED is that observation, and `ccresu search-limit` is the
-	// only thing that produces it from here. RESUMED is Settled, so no daemon
-	// pass reads the session's transcript; an operator who knows the session has
-	// gone idle asks for the read instead. The edge goes through
-	// USAGE_LIMIT_DETECTED rather than straight to WAITING_FOR_RESET so the
-	// audit trail records the observation that produced the wait. There is still
-	// no edge to RESUMING: finding a limit parks a session, it never spends on
-	// one.
 	StateResumed: {
-		StateUsageLimitDetected: {},
-		StateRunning:            {},
-		StateCompleted:          {},
-		StateUserTerminated:     {},
-		StateDisabled:           {},
+		StateDiscovered:    {}, // the next limit was noticed: the lap restarts
+		StateCompleted:     {},
+		StateDisabled:      {},
+		StateUnrecoverable: {},
 	},
-	StateCompleted:      {},
-	StateUserTerminated: {},
+	// COMPLETED and UNRECOVERABLE are the ends of the line: no pass and no
+	// command moves a session out of them.
+	StateCompleted: {},
+	// DISABLED offers exactly one edge, back to DISCOVERED, and only an operator
+	// takes it. Nothing automatic ever resumes a disabled session.
 	StateDisabled: {
-		StateRunning:        {},
-		StateDiscovered:     {},
-		StateUserTerminated: {},
+		StateDiscovered: {},
 	},
 	StateUnrecoverable: {},
 }
@@ -262,12 +180,21 @@ func TransitionsFrom(from State) []State {
 
 // ValidateTransition returns ErrInvalidTransition, naming the legal targets,
 // when from -> to is not allowed.
+//
+// A state that does not exist at all is named as such rather than reported as a
+// missing edge: with the machine this small, the likeliest way to reach this
+// function with a bad state is a value left over from an older version, and
+// "WAITING_FOR_INPUT is not a known state" says that; a list of legal targets
+// would suggest the state exists and only the edge is wrong.
 func ValidateTransition(from, to State) error {
 	if CanTransition(from, to) {
 		return nil
 	}
 	if !from.Valid() {
 		return fmt.Errorf("%w: %q is not a known state", ErrInvalidTransition, from)
+	}
+	if !to.Valid() {
+		return fmt.Errorf("%w: %s -> %q: the target is not a known state", ErrInvalidTransition, from, to)
 	}
 	targets := TransitionsFrom(from)
 	names := make([]string, 0, len(targets))
@@ -281,44 +208,47 @@ func ValidateTransition(from, to State) error {
 		ErrInvalidTransition, from, to, strings.Join(names, ", "))
 }
 
-// Terminal reports whether no further transition is defined from s, i.e. the
-// session will not move again without an operator explicitly restarting it.
-func Terminal(s State) bool {
-	return s.Valid() && len(transitions[s]) == 0
-}
-
-// Settled reports whether a session in state s must be left alone: it finished,
-// was terminated, was disabled or proved unrecoverable. Recovery refuses to
-// touch a settled session, which is what stops a completed conversation from
-// being resumed again.
+// Terminal reports whether the loop stops in s.
 //
-// WAITING_FOR_INPUT is deliberately absent: the conversation is not finished,
-// so ccresu must keep observing it until the operator unblocks it.
-func Settled(s State) bool {
+// COMPLETED and UNRECOVERABLE are the ends of the line: the table defines no
+// edge out of them at all. DISABLED is terminal in the sense that matters to
+// every automatic caller — nothing resumes, polls or waits from here — and it
+// has exactly one edge, DISABLED -> DISCOVERED, which only `ccresu enable`
+// takes.
+func Terminal(s State) bool {
 	switch s {
-	case StateResumed, StateCompleted, StateUserTerminated, StateDisabled, StateUnrecoverable:
+	case StateCompleted, StateDisabled, StateUnrecoverable:
 		return true
 	default:
 		return false
 	}
 }
 
-// Pending reports whether a session in state s still wants automatic work: it
-// is waiting for a reset, being checked, resuming, waiting to retry, or parked
-// because the supervisor published `blocked`. These are the states a restarted
-// daemon must pick up.
+// Settled reports whether recovery must leave a session in state s alone.
 //
-// WAITING_FOR_INPUT is pending even though ccresu cannot act on it: the
-// conversation is not finished, and the pass that re-observes it is what notices
-// the operator unblocked it. Dropping it here would strand a parked session
-// across a restart, which is the failure R11 exists to prevent. Being pending is
-// not the same as being resumable — a session in this state is observed, never
-// handed off.
+// RESUMED is settled on purpose. A resumed session is alive and needs nothing
+// from the engine; the transcript scan still reads it, which is how the next
+// limit is noticed, but no recovery pass may act on it. That separation is what
+// stops a just-resumed session from being resumed again.
+func Settled(s State) bool {
+	switch s {
+	case StateResumed, StateCompleted, StateDisabled, StateUnrecoverable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Pending reports whether a session in state s still wants automatic work, i.e.
+// whether a restarted daemon must pick it up: it is parked on a reset, or a
+// resume is in flight.
+//
+// DISCOVERED is not pending. The scan reads every discovered session on its own
+// schedule, and treating it as pending would make the recovery pass resume
+// sessions that never showed a limit.
 func Pending(s State) bool {
 	switch s {
-	case StateUsageLimitDetected, StateWaitingForReset, StateResetTimeReached,
-		StateCheckingSession, StateCheckingLimit, StateResuming, StateRetryWait,
-		StateWaitingForInput:
+	case StateWaitingForReset, StateResuming:
 		return true
 	default:
 		return false
@@ -328,21 +258,15 @@ func Pending(s State) bool {
 // PendingStates returns every state Pending accepts, in machine order.
 func PendingStates() []State {
 	return []State{
-		StateUsageLimitDetected,
 		StateWaitingForReset,
-		StateResetTimeReached,
-		StateCheckingSession,
-		StateCheckingLimit,
 		StateResuming,
-		StateRetryWait,
-		StateWaitingForInput,
 	}
 }
 
 // Failed reports whether a session in state s has failed in a way that needs an
-// operator. Only UNRECOVERABLE qualifies: a spent attempt budget returns the
-// session to DISCOVERED and is retried on the next discovery cycle, so it is a
-// pause, not a failure.
+// operator. Only UNRECOVERABLE qualifies: a spent attempt budget and a failed
+// attempt both return the session to DISCOVERED, so they are a pause, not a
+// failure.
 func Failed(s State) bool {
 	return s == StateUnrecoverable
 }

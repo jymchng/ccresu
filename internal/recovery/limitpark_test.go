@@ -268,11 +268,10 @@ func TestARefusedAttemptsOwnWritesDoNotProveAResume(t *testing.T) {
 	}
 	first := before[0]
 
-	// The reset arrives, exactly as the daemon's schedule would announce it.
-	if _, err := store.TransitionSession(context.Background(), session.ID, StateResetTimeReached,
-		"the scheduled reset time has arrived", 0); err != nil {
-		t.Fatalf("move to RESET_TIME_REACHED: %v", err)
-	}
+	// The reset arrives. Nothing has to be written to say so: the session is
+	// already parked in WAITING_FOR_RESET, and the daemon's schedule wakes it by
+	// calling Recover again — WAITING_FOR_RESET -> RESUMING is the edge the pass
+	// takes once the limit check clears.
 
 	outcome, err := manager.Recover(context.Background(), session.ID)
 	if err == nil {
@@ -299,14 +298,9 @@ func TestARefusedAttemptsOwnWritesDoNotProveAResume(t *testing.T) {
 				transition.FromState, transition.ToState, transition.Reason)
 		}
 		// The attempt was answered, so nothing about it may be rewritten as a
-		// restart, and a session waiting for a reset may not be sent back into the
-		// retry loop behind the park's back.
+		// restart.
 		if strings.Contains(transition.Reason, "interrupted by a process restart") {
 			t.Errorf("the refused attempt was rewritten as a restart: %s -> %s (%s)",
-				transition.FromState, transition.ToState, transition.Reason)
-		}
-		if transition.ToState == StateRetryWait {
-			t.Errorf("a RETRY_WAIT was logged over a parked session: %s -> %s (%s)",
 				transition.FromState, transition.ToState, transition.Reason)
 		}
 	}

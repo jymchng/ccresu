@@ -144,9 +144,12 @@ provider returns an empty listing on purpose (`tests/support`), so the session i
 reads the published state — one `claude agents --json --all` per pass, keyed by
 `sessionId`, total over every documented value plus absent and unknown — is proven
 where the listing is scripted: the `internal/recovery` acceptance tests. Those
-also cover the other branch, where a `blocked` publication parks the session in
-`WAITING_FOR_INPUT` with the published `waitingFor` verbatim, sends no
-continuation, and raises exactly one needs-input milestone instead of a success.
+also cover the other branch, where a `blocked` publication with a handoff
+outstanding is read as a landed continuation — `RESUMED`, with the published
+`waitingFor` recorded verbatim — instead of a park that sent no continuation. (At
+the time of this report it parked the session in a needs-input state and raised a
+needs-input milestone; 0.9.0 removed both, because a blocked conversation is one
+waiting on a human, not a failed resume.)
 
 Plus two tighter scenarios: a restart in the middle of the wait
 (`TestScenarioSurvivesRestartMidWait`) and `ErrLimitNotCleared` — the limit is

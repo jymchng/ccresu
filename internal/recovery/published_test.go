@@ -32,13 +32,17 @@ import (
 // recorded", which the zero time means (R8).
 var observedAt = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
-func TestABlockedObservationIsNeverResumed(t *testing.T) {
+func TestABlockedObservationResumesRatherThanParks(t *testing.T) {
 	t.Parallel()
 
-	// PRD 2 §6 acceptance criteria, and the whole point of the PRD: `blocked`
-	// "always means the session needs something from you before it can
-	// continue", so no path may turn it into RESUMED. The payload is fed through
-	// the real parser first, so the test covers the wire shape as well as the
+	// `blocked` used to park the session and refuse it a continuation, on the
+	// theory that a continuation queued behind an unanswered prompt is waste.
+	// With the seven-state machine it is not waste: the prompt is the operator's
+	// to answer whenever they get to it, the conversation is intact, and
+	// refusing to continue meant a blocked session was never resumed at all. So
+	// a blocked session is handed its continuation like any other, and what the
+	// supervisor said is still recorded verbatim. The payload is fed through the
+	// real parser first, so the test covers the wire shape as well as the
 	// mapping.
 	const payload = `[{"id":"ab12cd34","sessionId":"11111111-1111-4111-8111-111111111111","state":"blocked","status":"waiting","waitingFor":"permission prompt"}]`
 	entries, err := claude.ParseAgentsJSON([]byte(payload))
@@ -57,26 +61,30 @@ func TestABlockedObservationIsNeverResumed(t *testing.T) {
 		InListing:  true,
 	}
 
-	for _, handoff := range []bool{false, true} {
-		decision := Observe(observation, handoff, false)
-		if decision.State == storage.StateResumed {
-			t.Fatalf("handoff=%v: State = RESUMED, want a blocked session never reported recovered", handoff)
-		}
-		if decision.State != storage.StateWaitingForInput {
-			t.Errorf("handoff=%v: State = %q, want %q", handoff, decision.State, storage.StateWaitingForInput)
-		}
-		if !decision.NeedsInput {
-			t.Errorf("handoff=%v: NeedsInput = false, want the operator told", handoff)
-		}
-		if !decision.Transition() {
-			t.Errorf("handoff=%v: Transition() = false, want the session parked instead of left in place", handoff)
-		}
-		// R12: the reason is carried verbatim, never paraphrased.
+	// Before a handoff: no transition at all. The decision settles nothing, and
+	// the pass falls through to the resume path exactly as it does for `failed`
+	// or an unknown value.
+	before := Observe(observation, false, false)
+	if before.State != "" {
+		t.Errorf("no handoff: State = %q, want no transition so the pass resumes it", before.State)
+	}
+	if before.Transition() {
+		t.Error("no handoff: Transition() = true, want the pass to fall through to the resume path")
+	}
+
+	// After a handoff: the continuation landed and the session is alive.
+	after := Observe(observation, true, false)
+	if after.State != storage.StateResumed {
+		t.Errorf("handoff: State = %q, want %q", after.State, storage.StateResumed)
+	}
+
+	// R12: the reason is carried verbatim, never paraphrased.
+	for _, decision := range []Decision{before, after} {
 		if decision.WaitingFor != "permission prompt" {
-			t.Errorf("handoff=%v: WaitingFor = %q, want it verbatim", handoff, decision.WaitingFor)
+			t.Errorf("WaitingFor = %q, want it verbatim", decision.WaitingFor)
 		}
 		if !decision.WaitingForReported {
-			t.Errorf("handoff=%v: WaitingForReported = false, want true when the CLI named a reason", handoff)
+			t.Error("WaitingForReported = false, want true when the CLI named a reason")
 		}
 	}
 }
@@ -110,8 +118,8 @@ func TestTranscriptGrowthCannotProveSuccess(t *testing.T) {
 
 	// R3, and the previous PRD's RC5 in a new place: the transcript is a file
 	// the attempt itself writes to, so growth cannot be the proof. A grown
-	// transcript alongside `state: blocked` must yield neither a proof nor a
-	// resume.
+	// transcript alongside `state: blocked` must yield no proof, and the
+	// decision must not claim the session was observed to resume.
 	observation := StateObservation{SessionID: sessionA, State: "blocked", InListing: true, ObservedAt: observedAt}
 	verification := Verification{
 		SessionIDPreserved: true,
@@ -128,11 +136,11 @@ func TestTranscriptGrowthCannotProveSuccess(t *testing.T) {
 	if verification.Proven {
 		t.Error("Proven = true, want false: a grown transcript cannot prove a blocked session continued")
 	}
-	if decision.State != storage.StateWaitingForInput {
-		t.Errorf("State = %q, want %q", decision.State, storage.StateWaitingForInput)
+	if decision.State != "" {
+		t.Errorf("State = %q, want no transition: a blocked observation settles nothing on its own", decision.State)
 	}
 	if decision.State == storage.StateResumed {
-		t.Error("State = RESUMED, want a blocked session never resumed")
+		t.Error("State = RESUMED, want growth alone never read as a resume")
 	}
 	// The measurement is kept, just demoted: an operator should be able to see
 	// the numbers without being told they are evidence.
@@ -158,8 +166,8 @@ func TestASessionMissingFromTheListingIsHandoffUnobserved(t *testing.T) {
 	if !withHandoff.HandoffUnobserved {
 		t.Error("HandoffUnobserved = false, want true when a handoff is outstanding and the session is absent")
 	}
-	if withHandoff.State != storage.StateRetryWait {
-		t.Errorf("State = %q, want %q", withHandoff.State, storage.StateRetryWait)
+	if withHandoff.State != storage.StateWaitingForReset {
+		t.Errorf("State = %q, want %q", withHandoff.State, storage.StateWaitingForReset)
 	}
 	if withHandoff.State == storage.StateResumed {
 		t.Error("State = RESUMED, want absence never read as recovery")
@@ -189,8 +197,8 @@ func TestAnUnknownStateValueIsRecordedAndNotGuessed(t *testing.T) {
 	observation := StateObservation{SessionID: sessionA, State: "paused", InListing: true, ObservedAt: observedAt}
 
 	decision := Observe(observation, false, false)
-	if decision.State != storage.StateRetryWait {
-		t.Errorf("State = %q, want %q", decision.State, storage.StateRetryWait)
+	if decision.State != storage.StateWaitingForReset {
+		t.Errorf("State = %q, want %q", decision.State, storage.StateWaitingForReset)
 	}
 	if decision.State == storage.StateResumed {
 		t.Error("State = RESUMED, want an unknown value never read as success")
@@ -208,8 +216,7 @@ func TestNoJobsFileIsRead(t *testing.T) {
 	//
 	// The fixture is decisive by contradiction: the jobs file says `blocked`
 	// while the listing says `working`. If any code path consulted the file, the
-	// session would park in WAITING_FOR_INPUT; following the listing makes it
-	// RESUMED.
+	// session would be parked; following the listing makes it RESUMED.
 	const id = sessionB
 	home := t.TempDir()
 	jobsDir := filepath.Join(home, ".claude", "jobs", "ab12cd34")
@@ -241,8 +248,8 @@ func TestNoJobsFileIsRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSession() error = %v", err)
 	}
-	if stored.State == storage.StateWaitingForInput {
-		t.Fatalf("State = WAITING_FOR_INPUT: the decision followed the jobs file, which must never be read")
+	if stored.State == storage.StateWaitingForReset {
+		t.Fatalf("State = WAITING_FOR_RESET: the decision followed the jobs file, which must never be read")
 	}
 	if stored.State != storage.StateResumed {
 		t.Errorf("State = %q, want %q: the decision follows the published listing", stored.State, storage.StateResumed)
@@ -317,14 +324,14 @@ func TestObserveIsTotalOverEveryDocumentedValue(t *testing.T) {
 		want     storage.State
 		wantHeld bool // HandoffUnobserved
 	}{
-		{name: "failed is a retryable failure", obs: failed, want: storage.StateRetryWait},
-		{name: "failed after a handoff is still a retry", obs: failed, handoff: true, want: storage.StateRetryWait},
-		{name: "stopped outside ccresu is a retry", obs: stopped, want: storage.StateRetryWait},
-		{name: "stopped by ccresu is the operator's decision", obs: stopped, ccresu: true, want: storage.StateUserTerminated},
+		{name: "failed is a retryable failure", obs: failed, want: storage.StateWaitingForReset},
+		{name: "failed after a handoff is still a retry", obs: failed, handoff: true, want: storage.StateWaitingForReset},
+		{name: "stopped outside ccresu is a retry", obs: stopped, want: storage.StateWaitingForReset},
+		{name: "stopped by ccresu is the operator's decision", obs: stopped, ccresu: true, want: storage.StateDisabled},
 		{name: "working before a handoff continued on its own", obs: working, want: storage.StateResumed},
 		{name: "working after a handoff leaves the attempt open", obs: working, handoff: true, want: ""},
-		{name: "no state but listed, after a handoff is unobserved", obs: noStateInListing, handoff: true, want: storage.StateRetryWait, wantHeld: true},
-		{name: "no state and not listed, after a handoff is unobserved", obs: noStateNotListed, handoff: true, want: storage.StateRetryWait, wantHeld: true},
+		{name: "no state but listed, after a handoff is unobserved", obs: noStateInListing, handoff: true, want: storage.StateWaitingForReset, wantHeld: true},
+		{name: "no state and not listed, after a handoff is unobserved", obs: noStateNotListed, handoff: true, want: storage.StateWaitingForReset, wantHeld: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -371,58 +378,6 @@ func TestNewObservationSourceDefaultsAndRefusesWithoutAProvider(t *testing.T) {
 		t.Error("observation.Recorded() = true, want no observation from a failed read")
 	}
 }
-func TestWaitingForInputIsAParkNotAVerdict(t *testing.T) {
-	t.Parallel()
-
-	// R11 defines the state by three properties at once, and each one is a
-	// different kind of mistake if it is wrong: a settled park is never
-	// re-observed (so the operator unblocks the session and nothing notices), a
-	// terminal park cannot even record a failure, and a park with no edge to
-	// RETRY_WAIT strands the session when the observation itself starts failing.
-	state := storage.StateWaitingForInput
-
-	if !state.Valid() {
-		t.Fatalf("%s is not a known state: it must persist like the other fourteen", state)
-	}
-	if !Pending(state) {
-		t.Errorf("Pending(%s) = false, want true: a restarted daemon must re-observe it", state)
-	}
-	if Settled(state) {
-		t.Errorf("Settled(%s) = true, want false: the conversation is not finished", state)
-	}
-	if Terminal(state) {
-		t.Errorf("Terminal(%s) = true, want false: a park is not an endpoint", state)
-	}
-	if Failed(state) {
-		t.Errorf("Failed(%s) = true, want false: needing a human is not a failure ccresu gave up on", state)
-	}
-
-	// The documented edges, and the self-edge that lets a repeated `blocked`
-	// observation be recorded.
-	for _, target := range []State{
-		StateRunning, StateResumed, StateRetryWait, StateUserTerminated,
-		StateDisabled, StateUnrecoverable, StateDiscovered, StateWaitingForInput,
-	} {
-		if !CanTransition(state, target) {
-			t.Errorf("CanTransition(%s, %s) = false, want the documented edge", state, target)
-		}
-	}
-	// The edges that must NOT exist: ccresu never hands a continuation to a
-	// blocked session, so it cannot go straight back to work from here.
-	for _, target := range []State{StateResuming, StateCheckingLimit, StateCompleted} {
-		if CanTransition(state, target) {
-			t.Errorf("CanTransition(%s, %s) = true, want no such edge", state, target)
-		}
-	}
-	// Both ways of parking must be legal: the pre-resume observation and a
-	// resume that turns out to have landed on a blocked session.
-	for _, from := range []State{StateCheckingSession, StateResuming} {
-		if !CanTransition(from, state) {
-			t.Errorf("CanTransition(%s, %s) = false, want the parking edge", from, state)
-		}
-	}
-}
-
 func TestTheRecoveryReadAlwaysPassesAll(t *testing.T) {
 	t.Parallel()
 
@@ -481,17 +436,15 @@ func TestTheRecoveryReadAlwaysPassesAll(t *testing.T) {
 	}
 }
 
-func TestABlockedObservationParksTheSessionAndTellsTheOperatorOnce(t *testing.T) {
-	// R4, R11 and R12 asserted at the engine, not at the mapping. The pure
-	// function can be right while a pass still hands a continuation to a blocked
-	// session, parks it without recording the state it saw, or raises the
-	// milestone from a paraphrase \u2014 so this drives one real pass through
-	// Recover, with an observer installed, which is the branch a deployment with
-	// notifications takes.
+func TestABlockedSessionIsResumedAndAnnouncedOnce(t *testing.T) {
+	// Asserted at the engine, not at the mapping: the pure function can be right
+	// while a pass still refuses to hand a blocked session its continuation. This
+	// drives one real pass through Recover with an observer installed, which is
+	// the branch a deployment with notifications takes.
 	//
-	// Both payload shapes are exercised because R12 turns on the difference:
-	// a blocked session whose `waitingFor` names a permission prompt and one that
-	// reports no reason at all must both reach the operator, and neither may
+	// Both payload shapes are exercised because the recorded reason turns on the
+	// difference: a blocked session whose `waitingFor` names a permission prompt
+	// and one that reports no reason at all must both be resumed, and neither may
 	// invent the other's message.
 	for _, tc := range []struct {
 		name       string
@@ -537,65 +490,50 @@ func TestABlockedObservationParksTheSessionAndTellsTheOperatorOnce(t *testing.T)
 				t.Fatalf("Recover() error = %v", err)
 			}
 
-			// A session waiting on a human is never handed a continuation: it
-			// would queue behind a prompt nobody is there to answer.
-			if got := provider.resumeCount(); got != 0 {
-				t.Errorf("resumes = %d, want 0: a blocked session is never resumed", got)
+			// The whole point of the collapse: a blocked session is handed its
+			// continuation like any other, because the prompt is the operator's to
+			// answer and refusing meant it was never resumed at all.
+			if got := provider.resumeCount(); got != 1 {
+				t.Errorf("resumes = %d, want 1: a blocked session is resumed", got)
 			}
-			if outcome.Resumed {
-				t.Error("Resumed = true, want false: `blocked` is never a recovery")
+			if !outcome.Resumed {
+				t.Error("Resumed = false, want the pass to have resumed the session")
 			}
-			if outcome.State != storage.StateWaitingForInput {
-				t.Errorf("State = %q, want %q", outcome.State, storage.StateWaitingForInput)
+			if outcome.State != storage.StateResumed {
+				t.Errorf("State = %q, want %q", outcome.State, storage.StateResumed)
 			}
 			stored, err := store.GetSession(context.Background(), id)
 			if err != nil {
 				t.Fatalf("GetSession() error = %v", err)
 			}
-			if stored.State != storage.StateWaitingForInput {
-				t.Errorf("persisted State = %q, want %q", stored.State, storage.StateWaitingForInput)
+			if stored.State != storage.StateResumed {
+				t.Errorf("persisted State = %q, want %q", stored.State, storage.StateResumed)
 			}
 
-			// Exactly one needs-input milestone, and no success standing beside
-			// it: the two would contradict each other in the operator's inbox.
-			var needsInput []Milestone
+			// One success milestone and no park: the operator is told the loop kept
+			// turning, not that something stopped.
+			succeeded := 0
 			for _, m := range milestones {
-				switch m.Kind {
-				case MilestoneNeedsInput:
-					needsInput = append(needsInput, m)
-				case MilestoneSucceeded:
-					t.Error("MilestoneSucceeded raised for a blocked session, want only needs_input")
+				if m.Kind == MilestoneSucceeded {
+					succeeded++
+				}
+				if m.Kind == MilestoneFailed || m.Kind == MilestonePermanent {
+					t.Errorf("milestone %q raised for a blocked session that was resumed", m.Kind)
 				}
 			}
-			if len(needsInput) != 1 {
-				t.Fatalf("needs_input milestones = %d, want exactly 1", len(needsInput))
-			}
-
-			// The payload quotes the CLI verbatim, and says so when the CLI said
-			// nothing rather than suppressing the milestone.
-			reason, reported := needsInput[0].NeedsInputReason()
-			if want := tc.waitingFor != ""; reported != want {
-				t.Errorf("NeedsInputReason() reported = %v, want %v", reported, want)
-			}
-			if reason != tc.waitingFor {
-				t.Errorf("NeedsInputReason() reason = %q, want %q carried verbatim", reason, tc.waitingFor)
-			}
-			if got := needsInput[0].Observation.State; got != "blocked" {
-				t.Errorf("milestone Observation.State = %q, want the published value carried through", got)
-			}
-			if got := needsInput[0].Outcome.State; got != storage.StateWaitingForInput {
-				t.Errorf("milestone Outcome.State = %q, want %q", got, storage.StateWaitingForInput)
+			if succeeded != 1 {
+				t.Errorf("succeeded milestones = %d, want exactly 1", succeeded)
 			}
 		})
 	}
 }
 
-func TestAParkDoesNotDependOnANotifier(t *testing.T) {
-	// The nil-observer guard in announceObservation is a design property, not a
-	// defensive afterthought: a deployment with no notifier must recover
-	// identically to one with a notifier, because delivery sits beside the
-	// recovery rather than in its path. So a blocked pass with no observer
-	// installed still has to park the session and return without error.
+func TestAResumeDoesNotDependOnANotifier(t *testing.T) {
+	// The nil-observer guard in announce is a design property, not a defensive
+	// afterthought: a deployment with no notifier must recover identically to one
+	// with a notifier, because delivery sits beside the recovery rather than in
+	// its path. So a blocked pass with no observer installed still has to resume
+	// the session and return without error.
 	const id = sessionA
 	entry := claude.AgentEntry{
 		StateID:    "ab12cd34",
@@ -626,11 +564,11 @@ func TestAParkDoesNotDependOnANotifier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Recover() error = %v", err)
 	}
-	if outcome.State != storage.StateWaitingForInput {
-		t.Errorf("State = %q, want %q with no notifier installed", outcome.State, storage.StateWaitingForInput)
+	if outcome.State != storage.StateResumed {
+		t.Errorf("State = %q, want %q with no notifier installed", outcome.State, storage.StateResumed)
 	}
-	if got := provider.resumeCount(); got != 0 {
-		t.Errorf("resumes = %d, want 0: no notifier must not turn a park into a resume", got)
+	if got := provider.resumeCount(); got != 1 {
+		t.Errorf("resumes = %d, want 1: a missing notifier must not change what the pass does", got)
 	}
 }
 
@@ -805,8 +743,8 @@ func TestAnUnreadableListingDecidesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSession() error = %v", err)
 	}
-	if stored.State != storage.StateRetryWait {
-		t.Errorf("persisted State = %q, want %q", stored.State, storage.StateRetryWait)
+	if stored.State != storage.StateWaitingForReset {
+		t.Errorf("persisted State = %q, want %q", stored.State, storage.StateWaitingForReset)
 	}
 	if stored.RetryAt == nil {
 		t.Error("RetryAt = nil, want the next pass written down so the retry is not lost")

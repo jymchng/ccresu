@@ -20,7 +20,7 @@ func seedPopulatedSession(t *testing.T, store *storage.Store, id string) {
 		ID:             id,
 		ProjectPath:    "/work/example",
 		TranscriptPath: "/home/user/.claude/projects/example/" + id + ".jsonl",
-		State:          storage.StateUnrecoverable,
+		State:          storage.StateDiscovered,
 		Reason:         "attempts exhausted",
 		DiscoveredAt:   now,
 		LastSeenAt:     now,
@@ -29,7 +29,7 @@ func seedPopulatedSession(t *testing.T, store *storage.Store, id string) {
 	}
 	// A transition is what `ccresu history` reads, so a delete has to remove them
 	// too; UpsertSession alone does not record one.
-	if _, err := store.TransitionSession(ctx, id, storage.StateRunning, "seed transition", 0); err != nil {
+	if _, err := store.TransitionSession(ctx, id, storage.StateResumed, "seed transition", 0); err != nil {
 		t.Fatalf("seed transition: %v", err)
 	}
 	if _, err := store.RecordUsageLimit(ctx, storage.UsageLimit{
@@ -85,7 +85,7 @@ func TestForgetSessionRemovesTheSessionAndItsHistory(t *testing.T) {
 	if deleted.ProjectPath != "/work/example" {
 		t.Errorf("deleted ProjectPath = %q, want the stored path", deleted.ProjectPath)
 	}
-	if deleted.State != storage.StateRunning {
+	if deleted.State != storage.StateResumed {
 		t.Errorf("deleted State = %q, want the state the session was in when it was deleted", deleted.State)
 	}
 	if deleted.DeletedAt.IsZero() {

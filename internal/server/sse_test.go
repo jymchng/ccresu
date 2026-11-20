@@ -228,8 +228,8 @@ func TestCursorNeverMovesBackwards(t *testing.T) {
 func TestSeedFeedStartsAtTheHighWaterMark(t *testing.T) {
 	h := newHarness(t)
 	h.seedSession(sessionID, nil)
-	h.recordTransition(sessionID, storage.StateRunning, storage.StateUsageLimitDetected, "limit")
-	h.recordTransition(sessionID, storage.StateUsageLimitDetected, storage.StateWaitingForReset, "queued")
+	h.recordTransition(sessionID, storage.StateDiscovered, storage.StateWaitingForReset, "limit")
+	h.recordTransition(sessionID, storage.StateWaitingForReset, storage.StateResuming, "queued")
 
 	transitions, err := h.store.ListTransitionsSince(context.Background(), 0, 10)
 	if err != nil {
@@ -266,7 +266,7 @@ func TestPollTransitionsPublishesNewOnes(t *testing.T) {
 	events, release := h.server.hub.subscribe()
 	defer release()
 
-	h.recordTransition(sessionID, storage.StateRunning, storage.StateUsageLimitDetected, "usage limit hit")
+	h.recordTransition(sessionID, storage.StateDiscovered, storage.StateWaitingForReset, "usage limit hit")
 	if err := h.server.pollTransitions(context.Background()); err != nil {
 		t.Fatalf("poll: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestPollTransitionsPublishesNewOnes(t *testing.T) {
 		if ev.SessionID != sessionID {
 			t.Fatalf("session = %q, want %s", ev.SessionID, sessionID)
 		}
-		if ev.FromState != string(storage.StateRunning) || ev.ToState != string(storage.StateUsageLimitDetected) {
+		if ev.FromState != string(storage.StateDiscovered) || ev.ToState != string(storage.StateWaitingForReset) {
 			t.Fatalf("transition = %s->%s", ev.FromState, ev.ToState)
 		}
 		if ev.Reason != "usage limit hit" {
@@ -396,8 +396,8 @@ func TestHandleEventsResumesFromLastEventID(t *testing.T) {
 	h := newHarness(t)
 	h.seedSession(sessionID, nil)
 	// Two transitions happen while no client is connected.
-	h.recordTransition(sessionID, storage.StateRunning, storage.StateUsageLimitDetected, "first")
-	h.recordTransition(sessionID, storage.StateUsageLimitDetected, storage.StateWaitingForReset, "second")
+	h.recordTransition(sessionID, storage.StateDiscovered, storage.StateWaitingForReset, "first")
+	h.recordTransition(sessionID, storage.StateWaitingForReset, storage.StateResuming, "second")
 	transitions, err := h.store.ListTransitionsSince(context.Background(), 0, 10)
 	if err != nil {
 		t.Fatalf("list transitions: %v", err)
@@ -426,7 +426,7 @@ func TestHandleEventsResumesFromLastEventID(t *testing.T) {
 	if frames[2].data["reason"] != "second" {
 		t.Fatalf("replayed reason = %v, want second", frames[2].data["reason"])
 	}
-	if frames[2].data["from_state"] != string(storage.StateUsageLimitDetected) {
+	if frames[2].data["from_state"] != string(storage.StateWaitingForReset) {
 		t.Fatalf("replayed from_state = %v", frames[2].data["from_state"])
 	}
 }

@@ -1272,7 +1272,7 @@ func (a *App) reportOutcome(rt *Runtime, outcome recovery.Outcome) error {
 		a.field(a.stdout, "attempt", outcome.Attempt.AttemptNumber)
 		a.field(a.stdout, "verification", describeVerification(outcome))
 	}
-	if outcome.State == storage.StateRetryWait {
+	if outcome.Delay > 0 {
 		a.field(a.stdout, "next attempt in", formatDuration(outcome.Delay))
 	}
 	if outcome.Attempt.Error != "" {

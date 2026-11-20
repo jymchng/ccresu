@@ -10,56 +10,56 @@ import "time"
 type State string
 
 // The persisted session states.
+//
+// The machine is deliberately small. It answers one question — has this
+// session's usage limit reset, and is it time to resume it? — and the live path
+// is four beats:
+//
+//	DISCOVERED -> WAITING_FOR_RESET -> RESUMING -> RESUMED -> DISCOVERED
+//
+// A session with nothing pending sits in DISCOVERED, where the scan reads its
+// transcript. A usage limit found there parks it in WAITING_FOR_RESET with the
+// reset instant on the schedule. When the instant arrives it is RESUMING, and a
+// successful handoff leaves it RESUMED until the next limit is noticed, which
+// starts the loop again. Everything outside that loop is a verdict that stops
+// it, and there are only three.
 const (
-	StateDiscovered         State = "DISCOVERED"
-	StateRunning            State = "RUNNING"
-	StateUsageLimitDetected State = "USAGE_LIMIT_DETECTED"
-	StateWaitingForReset    State = "WAITING_FOR_RESET"
-	StateResetTimeReached   State = "RESET_TIME_REACHED"
-	StateCheckingSession    State = "CHECKING_SESSION"
-	StateCheckingLimit      State = "CHECKING_LIMIT"
-	StateResuming           State = "RESUMING"
-	StateResumed            State = "RESUMED"
-	StateRetryWait          State = "RETRY_WAIT"
-	StateCompleted          State = "COMPLETED"
-	StateUserTerminated     State = "USER_TERMINATED"
-	StateDisabled           State = "DISABLED"
-	StateUnrecoverable      State = "UNRECOVERABLE"
-	// StateWaitingForInput is a session the supervisor reports as `blocked`:
-	// it needs a permission, a sandbox decision, an answer or an expired login
-	// cleared before it can continue, and nothing ccresu can do unblocks it.
-	//
-	// It is its own state rather than a reason on RETRY_WAIT because the two
-	// have different remedies: a retry is ccresu's to make, and this is the
-	// operator's. Handing a continuation to a blocked session would queue it
-	// behind a prompt nobody is there to answer.
-	StateWaitingForInput State = "WAITING_FOR_INPUT"
-	// StateSpendCapReached is a session whose recorded spend reached a
-	// configured cap (PRD 5 R5, R6). It is a budget verdict, not a fact about
-	// the conversation, so it is not terminal and not settled: an operator who
-	// raises the cap, or who asks for one more attempt, can move it on.
-	StateSpendCapReached State = "SPEND_CAP_REACHED"
+	// StateDiscovered is a known session with nothing pending: the scan reads its
+	// transcript, and a usage limit found there parks it on the reset.
+	StateDiscovered State = "DISCOVERED"
+	// StateWaitingForReset is a session parked until its reset time (or its next
+	// poll, when the banner named no reset). The schedule holds the instant; this
+	// state records that a wait is what the session is doing.
+	StateWaitingForReset State = "WAITING_FOR_RESET"
+	// StateResuming is a resume in flight: the limit has cleared and the session
+	// is being handed the continuation.
+	StateResuming State = "RESUMING"
+	// StateResumed is a session that was resumed and is alive. It is a resting
+	// state, not a terminal one, and it exists for one reason: a just-resumed
+	// session must not be resumed again while the banner that parked it is still
+	// inside the transcript tail the detector reads.
+	StateResumed State = "RESUMED"
+	// StateCompleted is a session that finished its last turn: there is nothing
+	// to continue, and handing it a continuation would be a mistake.
+	StateCompleted State = "COMPLETED"
+	// StateDisabled is the loop's off switch: the operator turned the session
+	// off, or a verdict parked it with no way forward.
+	StateDisabled State = "DISABLED"
+	// StateUnrecoverable is a session ccresu has positively established it has no
+	// verified way to resume.
+	StateUnrecoverable State = "UNRECOVERABLE"
 )
 
 // allStates is the closed set of states accepted by the database. Validation in
 // the repository layer uses it so a typo cannot persist an unreachable state.
 var allStates = map[State]struct{}{
-	StateDiscovered:         {},
-	StateRunning:            {},
-	StateUsageLimitDetected: {},
-	StateWaitingForReset:    {},
-	StateResetTimeReached:   {},
-	StateCheckingSession:    {},
-	StateCheckingLimit:      {},
-	StateResuming:           {},
-	StateResumed:            {},
-	StateRetryWait:          {},
-	StateCompleted:          {},
-	StateUserTerminated:     {},
-	StateDisabled:           {},
-	StateUnrecoverable:      {},
-	StateWaitingForInput:    {},
-	StateSpendCapReached:    {},
+	StateDiscovered:      {},
+	StateWaitingForReset: {},
+	StateResuming:        {},
+	StateResumed:         {},
+	StateCompleted:       {},
+	StateDisabled:        {},
+	StateUnrecoverable:   {},
 }
 
 // Valid reports whether s is a known state.
@@ -136,10 +136,11 @@ func (s NotificationStatus) Valid() bool {
 
 // NotificationEvent names every message class ccresu can deliver.
 //
-// The set is the six documented events plus session completion and — since PRD 4
-// — needs_input, which is the only class two producers reach: the recovery pass
-// and `ccresu hook`. Adding a value here is never a local change: PRD 4's RC3
-// lists the twelve sites that enumerate the set.
+// The set is the six documented events plus session completion. Adding a value
+// here is never a local change: it has to reach telegram.Events(), the templates
+// and the API's event filter as well, and
+// TestModelValidationHelpers holds the storage list and the notifier's
+// enumeration equal in both directions so an omission fails a test.
 type NotificationEvent string
 
 // The notification events ccresu can deliver.
@@ -151,19 +152,13 @@ const (
 	EventRecoveryFailure  NotificationEvent = "recovery_failure"
 	EventPermanentFailure NotificationEvent = "permanent_failure"
 	EventSessionCompleted NotificationEvent = "session_completed"
-	// EventNeedsInput means a session is waiting for a human: a permission
-	// prompt, a sandbox decision, an answer, or an expired login only the
-	// operator can clear (PRD 4). It is its own event rather than a reuse of one
-	// of the seven because none of them means this, and because its dedupe key
-	// is episode-scoped: a session that asks five questions is five messages.
-	EventNeedsInput NotificationEvent = "needs_input"
 )
 
 // notificationEvents is the one list of events ccresu can deliver. Valid reads
 // it, and NotificationEvents returns a copy, so the database's notion of a valid
 // event is a list rather than a switch that a new constant can be forgotten
-// from: `needs_input` was added to the switch and to telegram.Events() but not
-// to the storage test's hand-typed slice, and nothing failed.
+// from: an event once reached the switch and telegram.Events() but not the
+// storage test's hand-typed slice, and nothing failed.
 var notificationEvents = []NotificationEvent{
 	EventLimitDetected,
 	EventWaiting,
@@ -172,7 +167,6 @@ var notificationEvents = []NotificationEvent{
 	EventRecoveryFailure,
 	EventPermanentFailure,
 	EventSessionCompleted,
-	EventNeedsInput,
 }
 
 // NotificationEvents returns every event ccresu can deliver, in the documented
@@ -234,12 +228,14 @@ type Session struct {
 	// session was last seen, so a later resume can prove the conversation grew.
 	TranscriptSize  int64
 	TranscriptLines int64
-	// RetryAt is the instant the wait ends for a session in RETRY_WAIT: the
-	// backoff ccresu computed when the attempt failed, written down rather than
-	// re-derived. Leaving RETRY_WAIT clears it, so a stale wait is never reported
-	// for a session that moved on. A WAITING_FOR_RESET session's instant lives on
-	// its Schedule row instead, and nil here means exactly "no retry pending" —
-	// it is a pointer so that "no retry" cannot be mistaken for a real instant.
+	// RetryAt is the instant a failed attempt's backoff ends: the delay ccresu
+	// computed when the resume did not take, written down rather than re-derived
+	// so a restart waits the same time instead of retrying at once. It is a
+	// schedule, not a state — no state owns it and every transition clears it, so
+	// a stale wait is never reported for a session that moved on. A parked
+	// session's instant lives on its Schedule row instead. Nil means exactly "no
+	// retry pending": it is a pointer so that "no retry" cannot be mistaken for a
+	// real instant.
 	RetryAt      *time.Time `json:"retry_at,omitempty"`
 	DiscoveredAt time.Time
 	LastSeenAt   time.Time

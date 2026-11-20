@@ -78,20 +78,32 @@ func (c Class) Retryable() bool { return c == ClassRetryable }
 // failure state, because a resume that failed is not evidence that the
 // conversation is gone.
 //
-// The exception is a limit refusal, which parks the session in
-// WAITING_FOR_RESET: the conversation is fine and the reset is known, so
-// rediscovery would only re-ask a question that has already been answered.
+// Two classes are exceptions, and both are parks rather than verdicts:
+//
+//   - A limit refusal parks the session in WAITING_FOR_RESET: the conversation
+//     is fine and the reset is known, so rediscovery would only re-ask a question
+//     that has already been answered.
+//   - A retryable failure parks it there too. "Parked until an instant" is what
+//     that state means, and the instant here is the backoff: the session stays
+//     where it is, keeps accumulating attempt budget, and is tried again. Sending
+//     it to DISCOVERED instead would reset the budget on every failure, because
+//     the budget counts the attempts spent since the session last entered
+//     DISCOVERED — so a flaky network could spend an unlimited number of
+//     attempts.
+//
+// A spend stop is neither: it is a decision that nothing more may be spent until
+// an operator acts, which is DISABLED.
 func (c Class) State() State {
 	switch c {
 	case ClassUnrecoverable:
 		return StateUnrecoverable
-	case ClassLimitInForce:
+	case ClassLimitInForce, ClassRetryable, ClassCanceled:
+		// A wait, not a verdict: the session is parked and tried again.
 		return StateWaitingForReset
 	case ClassSpendCapReached:
-		return StateSpendCapReached
-	case ClassRetryable, ClassCanceled:
-		// Worth another attempt on the current schedule, so it waits.
-		return StateRetryWait
+		// Nothing may be spent until an operator decides, which is what DISABLED
+		// means. `ccresu enable` is the way back.
+		return StateDisabled
 	default:
 		// Permanent: repeating on this schedule cannot help. The session is
 		// rediscovered rather than abandoned, and the next cycle starts a fresh

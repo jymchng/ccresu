@@ -127,7 +127,13 @@ func TestDaemonDetectsAUsageLimitOnce(t *testing.T) {
 	}
 
 	// Re-reading the same banner must record nothing: detection is idempotent by
-	// fingerprint, not by the session's state.
+	// fingerprint, not by the session's state. The row is re-read first because
+	// the pass has already parked it, and passing the stale pre-pass value would
+	// be testing a session that no longer exists.
+	session, err = h.store.GetSession(context.Background(), canonicalSessionID)
+	if err != nil {
+		t.Fatalf("re-read session: %v", err)
+	}
 	if err := daemon.detectIn(context.Background(), session); err != nil {
 		t.Fatalf("second detection: %v", err)
 	}
@@ -297,14 +303,27 @@ func TestDaemonAdvancesAFutureScheduleWithoutRecovering(t *testing.T) {
 
 func TestDaemonRecoversPendingSessions(t *testing.T) {
 	h := newHarness(t)
-	// WAITING_FOR_RESET belongs to the scheduler and must be left alone here.
+	// A session parked on a usage-limit reset belongs to the scheduler: it has no
+	// retry instant, so this stage must leave it alone.
 	h.seedSession(t, canonicalSessionID, func(s *storage.Session) {
 		s.State = storage.StateWaitingForReset
 	})
+	// A session parked by a failed attempt carries the backoff instant instead,
+	// and nothing else reads it, so this stage is what retries it.
 	const retryID = "44444444-4444-4444-8444-444444444444"
 	h.seedSession(t, retryID, func(s *storage.Session) {
-		s.State = storage.StateRetryWait
+		s.State = storage.StateWaitingForReset
 		s.TranscriptLines = 1
+		due := h.rt.Clock.Now().UTC().Add(-time.Minute)
+		s.RetryAt = &due
+	})
+	// A retry that is not due yet must not be woken early.
+	const laterID = "55555555-5555-4555-8555-555555555555"
+	h.seedSession(t, laterID, func(s *storage.Session) {
+		s.State = storage.StateWaitingForReset
+		s.TranscriptLines = 1
+		later := h.rt.Clock.Now().UTC().Add(time.Hour)
+		s.RetryAt = &later
 	})
 	h.provider.Statuses[retryID] = claude.SessionStatus{
 		Session:    claude.Session{ID: retryID, Recoverable: true},
@@ -341,7 +360,14 @@ func TestDaemonRecoversPendingSessions(t *testing.T) {
 		t.Fatalf("attempts: %v", err)
 	}
 	if len(retried) != 1 {
-		t.Errorf("attempts for the retry-wait session = %d, want 1", len(retried))
+		t.Errorf("attempts for the due retry = %d, want 1: a failed attempt must be retried when its backoff ends", len(retried))
+	}
+	early, err := h.store.ListAttempts(context.Background(), laterID, 0)
+	if err != nil {
+		t.Fatalf("attempts: %v", err)
+	}
+	if len(early) != 0 {
+		t.Errorf("attempts for a retry that is not due yet = %d, want 0", len(early))
 	}
 }
 
@@ -726,9 +752,10 @@ func TestDaemonAdvancesThePollWhenTheLimitHasNotCleared(t *testing.T) {
 	}
 }
 
-// TestScannedStatesFollowsTheRescanSwitch pins the filter itself: the two states
-// a usage limit is expected in are read always, and the three the switch adds are
-// added in lifecycle order so a log line naming them reads naturally.
+// TestScannedStatesFollowsTheRescanSwitch pins the filter itself: DISCOVERED is
+// read always, and RESUMED — the state a limit can also land in, and the one the
+// switch adds — is appended after it in lifecycle order so a log line naming the
+// two reads naturally.
 func TestScannedStatesFollowsTheRescanSwitch(t *testing.T) {
 	h := newHarness(t)
 	daemon := NewDaemon(h.rt, time.Minute)
@@ -741,20 +768,19 @@ func TestScannedStatesFollowsTheRescanSwitch(t *testing.T) {
 	}
 
 	h.cfg.Monitoring.RescanResumed = false
-	if got, want := names(daemon.scannedStates()), "DISCOVERED,RUNNING"; got != want {
+	if got, want := names(daemon.scannedStates()), "DISCOVERED"; got != want {
 		t.Errorf("scannedStates with the rescan off = %q, want %q", got, want)
 	}
 
 	h.cfg.Monitoring.RescanResumed = true
-	if got, want := names(daemon.scannedStates()),
-		"DISCOVERED,RUNNING,RESUMED,RETRY_WAIT,WAITING_FOR_INPUT"; got != want {
+	if got, want := names(daemon.scannedStates()), "DISCOVERED,RESUMED"; got != want {
 		t.Errorf("scannedStates with the rescan on = %q, want %q", got, want)
 	}
 
 	// A daemon with no runtime still answers: the filter is read before the stage
 	// has anything to look at, and a nil dereference there would take the whole
 	// pass down.
-	if got, want := names((&Daemon{}).scannedStates()), "DISCOVERED,RUNNING"; got != want {
+	if got, want := names((&Daemon{}).scannedStates()), "DISCOVERED"; got != want {
 		t.Errorf("scannedStates with no runtime = %q, want %q", got, want)
 	}
 }
@@ -762,23 +788,23 @@ func TestScannedStatesFollowsTheRescanSwitch(t *testing.T) {
 // TestDetectRescanScope is the scope of the automatic rescan, end to end through
 // the stage rather than through the filter alone.
 //
-// With monitoring.rescan_resumed on, a limit that lands in a RESUMED, RETRY_WAIT
-// or WAITING_FOR_INPUT transcript parks the session in WAITING_FOR_RESET. With it
-// off those three are never read — which is exactly the defect `ccresu
-// search-limit` worked around by hand — while DISCOVERED and RUNNING are still
-// read, because they are the states a limit is expected in.
+// With monitoring.rescan_resumed on, a limit that lands in a RESUMED transcript
+// parks the session in WAITING_FOR_RESET. With it off that state is never read
+// — which is exactly the defect `ccresu search-limit` worked around by hand —
+// while DISCOVERED is still read, because it is the state a limit is expected in.
+//
+// The collapse shrank this test's cast without changing its claim: RETRY_WAIT and
+// WAITING_FOR_INPUT became DISCOVERED, which the scan reads unconditionally, and
+// RUNNING became RESUMED, which is what the switch adds. The four rows it used to
+// seed were therefore two situations, and they are spelled as two now.
 func TestDetectRescanScope(t *testing.T) {
 	const (
-		resumedID = "22222222-2222-4222-8222-222222222222"
-		retryID   = "33333333-3333-4333-8333-333333333333"
-		blockedID = "44444444-4444-4444-8444-444444444444"
-		runningID = "55555555-5555-4555-8555-555555555555"
+		discoveredID = "22222222-2222-4222-8222-222222222222"
+		resumedID    = "33333333-3333-4333-8333-333333333333"
 	)
 	seeded := map[string]storage.State{
-		resumedID: storage.StateResumed,
-		retryID:   storage.StateRetryWait,
-		blockedID: storage.StateWaitingForInput,
-		runningID: storage.StateRunning,
+		discoveredID: storage.StateDiscovered,
+		resumedID:    storage.StateResumed,
 	}
 
 	run := func(t *testing.T, rescan bool) *harness {
@@ -819,25 +845,21 @@ func TestDetectRescanScope(t *testing.T) {
 
 	t.Run("off", func(t *testing.T) {
 		h := run(t, false)
-		// The unconditional half of the filter is unchanged: RUNNING is read.
-		if _, err := h.store.LatestUsageLimit(context.Background(), runningID); err != nil {
-			t.Errorf("RUNNING was not scanned with the rescan off: %v", err)
+		// The unconditional half of the filter is unchanged: DISCOVERED is read.
+		if _, err := h.store.LatestUsageLimit(context.Background(), discoveredID); err != nil {
+			t.Errorf("DISCOVERED was not scanned with the rescan off: %v", err)
 		}
-		// The three the switch adds are not read, and nothing about them moves.
-		for id, state := range seeded {
-			if id == runningID {
-				continue
-			}
-			if _, err := h.store.LatestUsageLimit(context.Background(), id); !errors.Is(err, storage.ErrNotFound) {
-				t.Errorf("%s was scanned with the rescan off: %v", id, err)
-			}
-			stored, err := h.store.GetSession(context.Background(), id)
-			if err != nil {
-				t.Fatalf("%s: read session: %v", id, err)
-			}
-			if stored.State != state {
-				t.Errorf("%s: state = %s, want it unchanged at %s", id, stored.State, state)
-			}
+		// RESUMED is what the switch adds: it is not read, and nothing about it
+		// moves.
+		if _, err := h.store.LatestUsageLimit(context.Background(), resumedID); !errors.Is(err, storage.ErrNotFound) {
+			t.Errorf("RESUMED was scanned with the rescan off: %v", err)
+		}
+		stored, err := h.store.GetSession(context.Background(), resumedID)
+		if err != nil {
+			t.Fatalf("read session: %v", err)
+		}
+		if stored.State != storage.StateResumed {
+			t.Errorf("state = %s, want it unchanged at %s", stored.State, storage.StateResumed)
 		}
 	})
 }

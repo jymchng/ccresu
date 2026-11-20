@@ -24,7 +24,7 @@ const observedSessionID = "44444444-4444-4444-8444-444444444444"
 func TestInspectRendersTheObservedState(t *testing.T) {
 	h := newHarness(t)
 	h.seedSession(t, observedSessionID, func(s *storage.Session) {
-		s.State = storage.StateWaitingForInput
+		s.State = storage.StateDiscovered
 	})
 
 	attempt, err := h.store.StartAttempt(context.Background(), observedSessionID, 0, "claude --bg --resume "+observedSessionID)
@@ -33,7 +33,7 @@ func TestInspectRendersTheObservedState(t *testing.T) {
 	}
 	listed := true
 	if _, err := h.store.FinishAttempt(context.Background(), attempt.ID, storage.AttemptResult{
-		State:   storage.StateWaitingForInput,
+		State:   storage.StateDiscovered,
 		Success: storage.BoolPtr(false),
 		Error:   "the session is blocked",
 		Observation: storage.ObservationRecord{
@@ -77,7 +77,7 @@ func TestInspectRendersTheObservedState(t *testing.T) {
 func TestInspectRendersNotRecordedForAnAttemptWithNoObservation(t *testing.T) {
 	h := newHarness(t)
 	h.seedSession(t, observedSessionID, func(s *storage.Session) {
-		s.State = storage.StateRetryWait
+		s.State = storage.StateDiscovered
 	})
 
 	// An attempt from before the observation columns existed: it carries the
@@ -88,7 +88,7 @@ func TestInspectRendersNotRecordedForAnAttemptWithNoObservation(t *testing.T) {
 		t.Fatalf("StartAttempt: %v", err)
 	}
 	if _, err := h.store.FinishAttempt(context.Background(), attempt.ID, storage.AttemptResult{
-		State:   storage.StateRetryWait,
+		State:   storage.StateDiscovered,
 		Success: storage.BoolPtr(false),
 		Error:   "the transcript check failed",
 	}); err != nil {

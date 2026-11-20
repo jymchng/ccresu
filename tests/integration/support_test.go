@@ -340,7 +340,7 @@ func (f *fixture) seedSession(t *testing.T, id string, mutate func(*storage.Sess
 		TranscriptPath:  "/home/dev/.claude/projects/-home-dev-src-widget/" + id + ".jsonl",
 		Provider:        "claude",
 		Type:            storage.SessionTypeInteractive,
-		State:           storage.StateRunning,
+		State:           storage.StateResumed,
 		Enabled:         true,
 		Recoverable:     true,
 		TranscriptSize:  2048,

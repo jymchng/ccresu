@@ -440,7 +440,6 @@ func (s *Server) handleTelegram(w http.ResponseWriter, r *http.Request, _ params
 		storage.EventLimitDetected, storage.EventWaiting, storage.EventRecoveryStarted,
 		storage.EventRecoverySuccess, storage.EventRecoveryFailure,
 		storage.EventPermanentFailure, storage.EventSessionCompleted,
-		storage.EventNeedsInput,
 	} {
 		enabled := false
 		if s.cfg.Notifier != nil {

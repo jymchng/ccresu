@@ -93,12 +93,15 @@ func TestSessionsBrowserSearchesTheSelectedSessionOnL(t *testing.T) {
 			t.Fatalf("list transitions: %v", err)
 		}
 		if len(transitions) != 2 {
-			t.Fatalf("transitions = %d, want 2 (USAGE_LIMIT_DETECTED then WAITING_FOR_RESET): %+v",
+			t.Fatalf("transitions = %d, want 2 (DISCOVERED then WAITING_FOR_RESET): %+v",
 				len(transitions), transitions)
 		}
-		if transitions[0].ToState != storage.StateUsageLimitDetected {
-			t.Errorf("first transition goes to %s, want %s: the observation must be recorded",
-				transitions[0].ToState, storage.StateUsageLimitDetected)
+		// A RESUMED session goes back through DISCOVERED rather than straight to
+		// the park, because the machine has no RESUMED -> WAITING_FOR_RESET edge:
+		// the operator's search is the re-observation that earns the park.
+		if transitions[0].ToState != storage.StateDiscovered {
+			t.Errorf("first transition goes to %s, want %s: the re-observation must be recorded",
+				transitions[0].ToState, storage.StateDiscovered)
 		}
 		if transitions[1].ToState != storage.StateWaitingForReset {
 			t.Errorf("second transition goes to %s, want %s",

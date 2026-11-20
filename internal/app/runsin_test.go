@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/jymchng/ccresu/internal/storage"
-	"github.com/jymchng/ccresu/internal/telegram"
 )
 
 // TestSessionsShowsTheRunDirectoryDistinctly covers PRD 6 R12: where a session
@@ -130,52 +129,5 @@ func TestSessionsBrowserShowsTheRunDirectoryColumn(t *testing.T) {
 	}
 	if got := strings.Count(screen, checkout); got != 1 {
 		t.Errorf("the project path appears %d times, want once (a dash when the two agree):\n%s", got, screen)
-	}
-}
-
-// TestHookCarriesTheRunDirectory covers PRD 6 R12 on the hook's payload: the
-// notification the hook enqueues names where the session runs, so the operator
-// who is asked to unblock it can see the worktree rather than the checkout it was
-// dispatched from.
-func TestHookCarriesTheRunDirectory(t *testing.T) {
-	const (
-		project  = "/work/hooked"
-		worktree = "/work/hooked/.claude/worktrees/fix-auth"
-	)
-
-	h := newHarness(t)
-	h.seedSession(t, hookSession, func(s *storage.Session) {
-		s.ProjectPath = project
-		s.RunsInPath = worktree
-	})
-	publishBlocked(t, h, hookSession, "permission to edit .env")
-	h.stdin = hookJSON(hookNeedsInputType, hookSession)
-
-	if code, stdout, stderr := h.exec(t, "hook"); code != ExitOK || stdout != "" || stderr != "" {
-		t.Fatalf("hook = exit %d, stdout %q, stderr %q", code, stdout, stderr)
-	}
-	requests := h.notifier.queued()
-	if len(requests) != 1 {
-		t.Fatalf("queued %d notification(s), want exactly one", len(requests))
-	}
-	data := requests[0].Data
-	if data.RunsInPath != worktree {
-		t.Errorf("payload run directory = %q, want %q", data.RunsInPath, worktree)
-	}
-	if data.ProjectPath != project {
-		t.Errorf("payload project = %q, want %q: the two are separate facts", data.ProjectPath, project)
-	}
-
-	// The queued payload is what gets rendered, so the rendered message has to
-	// show both directories and not just the one the payload happened to keep.
-	body, err := telegram.Render(requests[0].Event, data)
-	if err != nil {
-		t.Fatalf("Render: %v", err)
-	}
-	if !strings.Contains(body, "Runs in:") || !strings.Contains(body, worktree) {
-		t.Errorf("message does not name the run directory %q:\n%s", worktree, body)
-	}
-	if !strings.Contains(body, project) {
-		t.Errorf("message does not name the project directory %q:\n%s", project, body)
 	}
 }

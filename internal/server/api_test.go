@@ -80,7 +80,7 @@ func TestVersionWithAProbe(t *testing.T) {
 // counts.
 func TestStatus(t *testing.T) {
 	h := newHarness(t)
-	h.seedSession(sessionID, func(s *storage.Session) { s.State = storage.StateRunning })
+	h.seedSession(sessionID, func(s *storage.Session) { s.State = storage.StateResumed })
 	h.seedSession(otherSessionID, func(s *storage.Session) {
 		s.State = storage.StateWaitingForReset
 		s.Enabled = false
@@ -108,7 +108,7 @@ func TestStatus(t *testing.T) {
 	if body.Sessions != 2 || body.EnabledSessions != 1 {
 		t.Errorf("sessions = %d enabled = %d", body.Sessions, body.EnabledSessions)
 	}
-	if body.States[string(storage.StateRunning)] != 1 || body.States[string(storage.StateWaitingForReset)] != 1 {
+	if body.States[string(storage.StateResumed)] != 1 || body.States[string(storage.StateWaitingForReset)] != 1 {
 		t.Errorf("states = %+v", body.States)
 	}
 	if body.Schedules != 1 {
@@ -145,7 +145,7 @@ func TestStatus(t *testing.T) {
 func TestSessionsListAndFilters(t *testing.T) {
 	h := newHarness(t)
 	h.seedSession(sessionID, func(s *storage.Session) {
-		s.State = storage.StateRunning
+		s.State = storage.StateResumed
 		s.Enabled = true
 		s.Recoverable = true
 	})
@@ -244,7 +244,7 @@ func TestSessionDetail(t *testing.T) {
 func TestHistory(t *testing.T) {
 	h := newHarness(t)
 	h.seedSession(sessionID, nil)
-	if _, err := h.store.TransitionSession(t.Context(), sessionID, storage.StateUsageLimitDetected, "limit found", 0); err != nil {
+	if _, err := h.store.TransitionSession(t.Context(), sessionID, storage.StateWaitingForReset, "limit found", 0); err != nil {
 		t.Fatalf("transition: %v", err)
 	}
 
@@ -258,13 +258,13 @@ func TestHistory(t *testing.T) {
 	if body.SessionID != sessionID {
 		t.Errorf("session id = %q", body.SessionID)
 	}
-	if body.State != string(storage.StateUsageLimitDetected) {
+	if body.State != string(storage.StateWaitingForReset) {
 		t.Errorf("state = %q", body.State)
 	}
 	if len(body.Transitions) != 1 {
 		t.Errorf("transitions = %+v, want the recorded limit", body.Transitions)
 	}
-	if body.Transitions[len(body.Transitions)-1].ToState != string(storage.StateUsageLimitDetected) {
+	if body.Transitions[len(body.Transitions)-1].ToState != string(storage.StateWaitingForReset) {
 		t.Errorf("last transition = %+v", body.Transitions[len(body.Transitions)-1])
 	}
 
@@ -450,7 +450,7 @@ func TestEnableAndDisable(t *testing.T) {
 func TestRecoveries(t *testing.T) {
 	h := newHarness(t)
 	h.seedSession(sessionID, func(s *storage.Session) { s.State = storage.StateWaitingForReset })
-	h.seedSession(otherSessionID, func(s *storage.Session) { s.State = storage.StateRunning })
+	h.seedSession(otherSessionID, func(s *storage.Session) { s.State = storage.StateResumed })
 
 	var body struct {
 		Count       int          `json:"count"`
@@ -563,7 +563,6 @@ func TestTelegramStatus(t *testing.T) {
 		storage.EventLimitDetected, storage.EventWaiting, storage.EventRecoveryStarted,
 		storage.EventRecoverySuccess, storage.EventRecoveryFailure,
 		storage.EventPermanentFailure, storage.EventSessionCompleted,
-		storage.EventNeedsInput,
 	}
 	if len(body.Events) != len(want) {
 		t.Errorf("events = %d entries, want %d: every event the notifier has must be reported",
@@ -778,7 +777,7 @@ func TestNextDue(t *testing.T) {
 // includes anything unexpected.
 func TestSortedStatesKeepsTheDocumentedOrder(t *testing.T) {
 	sorted := sortedStates(map[string]int{
-		string(storage.StateRunning):    2,
+		string(storage.StateResumed):    2,
 		string(storage.StateDiscovered): 1,
 		"FUTURE_STATE":                  3,
 	})

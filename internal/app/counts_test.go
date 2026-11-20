@@ -24,16 +24,19 @@ func seedMixedSessions(t *testing.T, h *harness) {
 		recoverable bool
 	}
 	seeds := []seed{
-		{"aaaaaaaa-0000-4000-8000-000000000001", storage.StateRunning, true, true},
+		{"aaaaaaaa-0000-4000-8000-000000000001", storage.StateResumed, true, true},
 		{"aaaaaaaa-0000-4000-8000-000000000002", storage.StateWaitingForReset, true, true},
-		{"aaaaaaaa-0000-4000-8000-000000000003", storage.StateRetryWait, true, true},
+		{"aaaaaaaa-0000-4000-8000-000000000003", storage.StateDiscovered, true, true},
 		{"aaaaaaaa-0000-4000-8000-000000000004", storage.StateDisabled, false, true},
-		{"aaaaaaaa-0000-4000-8000-000000000005", storage.StateUsageLimitDetected, true, false},
-		{"aaaaaaaa-0000-4000-8000-000000000006", storage.StateCheckingLimit, true, false},
+		{"aaaaaaaa-0000-4000-8000-000000000005", storage.StateWaitingForReset, true, false},
+		{"aaaaaaaa-0000-4000-8000-000000000006", storage.StateResuming, true, false},
 		{"aaaaaaaa-0000-4000-8000-000000000007", storage.StateResumed, true, false},
 		{"aaaaaaaa-0000-4000-8000-000000000008", storage.StateCompleted, false, false},
 		{"aaaaaaaa-0000-4000-8000-000000000009", storage.StateUnrecoverable, false, false},
-		{"aaaaaaaa-0000-4000-8000-00000000000a", storage.StateUserTerminated, false, false},
+		// One row per retired state was the point when the machine had sixteen;
+		// with seven, the tenth row is here to keep the disabled total at exactly
+		// one, so `--state DISABLED` still has a single expected match.
+		{"aaaaaaaa-0000-4000-8000-00000000000a", storage.StateUnrecoverable, false, false},
 	}
 	for _, s := range seeds {
 		session := s

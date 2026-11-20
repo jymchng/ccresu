@@ -85,8 +85,8 @@ func TestSessionCapRefusesBeforeSpending(t *testing.T) {
 	if class := Classify(recoverErr); class != ClassSpendCapReached {
 		t.Errorf("class = %s, want %s", class, ClassSpendCapReached)
 	}
-	if outcome.State != StateSpendCapReached {
-		t.Errorf("outcome state = %s, want %s", outcome.State, StateSpendCapReached)
+	if outcome.State != StateDisabled {
+		t.Errorf("outcome state = %s, want %s", outcome.State, StateDisabled)
 	}
 
 	// R5: a refusal spends nothing, so no attempt row was created.
@@ -113,8 +113,8 @@ func TestSessionCapRefusesBeforeSpending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get session: %v", err)
 	}
-	if stored.State != StateSpendCapReached {
-		t.Errorf("persisted state = %s, want %s", stored.State, StateSpendCapReached)
+	if stored.State != StateDisabled {
+		t.Errorf("persisted state = %s, want %s", stored.State, StateDisabled)
 	}
 }
 
@@ -142,8 +142,8 @@ func TestAttemptCapStopsRecoveryAfterTheAttempt(t *testing.T) {
 	if class := Classify(err); class != ClassSpendCapReached {
 		t.Errorf("class = %s, want %s", class, ClassSpendCapReached)
 	}
-	if outcome.State != StateSpendCapReached {
-		t.Errorf("outcome state = %s, want %s", outcome.State, StateSpendCapReached)
+	if outcome.State != StateDisabled {
+		t.Errorf("outcome state = %s, want %s", outcome.State, StateDisabled)
 	}
 	for _, want := range []string{"max_cost_usd_per_attempt", "$0.1", "$0.42"} {
 		if !strings.Contains(err.Error(), want) {
@@ -191,12 +191,17 @@ func TestUnknownCostDoesNotBlockResume(t *testing.T) {
 	}
 }
 
-// TestSpendStopIsNotRediscovered is R8: the parked state is outside
-// PendingStates, so no reconcile pass resumes it.
+// TestSpendStopIsNotRediscovered is R8: a spend stop leaves the session in a
+// state outside PendingStates, so no reconcile pass resumes it.
+//
+// The stop is DISABLED rather than a state of its own: "nothing may be spent
+// until a human decides" is what DISABLED means, and `ccresu enable` is the way
+// back — one command, and no daemon stage that could resume a session whose cap
+// it just refused.
 func TestSpendStopIsNotRediscovered(t *testing.T) {
 	store := newTestStore(t)
 	session := recoverableSession(sessionA)
-	session.State = StateSpendCapReached
+	session.State = StateDisabled
 	seedSession(t, store, session)
 
 	manager := testManager(t, store, growthProvider(10, 12), func(cfg *Config) {
@@ -204,7 +209,7 @@ func TestSpendStopIsNotRediscovered(t *testing.T) {
 	})
 
 	for _, state := range PendingStates() {
-		if state == StateSpendCapReached {
+		if state == StateDisabled {
 			t.Fatalf("PendingStates() contains %s, so a pass would resume a session at its cap", state)
 		}
 	}
@@ -216,61 +221,6 @@ func TestSpendStopIsNotRediscovered(t *testing.T) {
 		if candidate.ID == sessionA {
 			t.Errorf("Pending() returned %s, want it left parked at the cap", sessionA)
 		}
-	}
-}
-
-// TestRaisingTheCapReleasesAParkedSession is PRD 5's failure-mode table: a
-// session in SPEND_CAP_REACHED with room under the cap returns to DISCOVERED
-// without a restart, and never straight to a resume.
-func TestRaisingTheCapReleasesAParkedSession(t *testing.T) {
-	store := newTestStore(t)
-	session := recoverableSession(sessionA)
-	session.State = StateSpendCapReached
-	seedSession(t, store, session)
-	seedSpentAttempt(t, store, sessionA, 0.5)
-
-	manager := testManager(t, store, growthProvider(10, 12), func(cfg *Config) {
-		cfg.Limits = SpendLimits{PerSession: 1}
-	})
-
-	released, err := manager.UnparkAffordable(context.Background())
-	if err != nil {
-		t.Fatalf("UnparkAffordable: %v", err)
-	}
-	if released != 1 {
-		t.Errorf("released = %d, want 1", released)
-	}
-
-	stored, err := store.GetSession(context.Background(), sessionA)
-	if err != nil {
-		t.Fatalf("get session: %v", err)
-	}
-	if stored.State != StateDiscovered {
-		t.Errorf("state = %s, want %s: raising the cap must return the session to discovery", stored.State, StateDiscovered)
-	}
-
-	history, err := manager.History(context.Background(), sessionA)
-	if err != nil {
-		t.Fatalf("History: %v", err)
-	}
-	last := history.Transitions[len(history.Transitions)-1]
-	if !strings.Contains(last.Reason, "$1") || !strings.Contains(last.Reason, "$0.5") {
-		t.Errorf("reason = %q, want it to name the raised cap and the recorded spend", last.Reason)
-	}
-
-	// A session still over the cap stays parked.
-	if _, err := store.TransitionSession(context.Background(), sessionA, StateSpendCapReached, "parked again", 0); err != nil {
-		t.Fatalf("park again: %v", err)
-	}
-	manager = testManager(t, store, growthProvider(10, 12), func(cfg *Config) {
-		cfg.Limits = SpendLimits{PerSession: 0.5}
-	})
-	released, err = manager.UnparkAffordable(context.Background())
-	if err != nil {
-		t.Fatalf("UnparkAffordable: %v", err)
-	}
-	if released != 0 {
-		t.Errorf("released = %d, want 0: spend at the cap leaves the session parked", released)
 	}
 }
 

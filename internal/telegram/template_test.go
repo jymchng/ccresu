@@ -2,7 +2,6 @@ package telegram
 
 import (
 	"errors"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -37,10 +36,9 @@ func fullEventData() EventData {
 func TestEventsCoversEveryNotification(t *testing.T) {
 	events := Events()
 	// The count is exact on purpose: adding a message class is a decision, and
-	// this line is where the decision has to be restated (PRD 4 adds needs_input,
-	// the eighth).
-	if len(events) != 8 {
-		t.Fatalf("Events() = %d events, want 8", len(events))
+	// this line is where the decision has to be restated.
+	if len(events) != 7 {
+		t.Fatalf("Events() = %d events, want 7", len(events))
 	}
 	seen := map[storage.NotificationEvent]bool{}
 	for _, event := range events {
@@ -251,23 +249,8 @@ func TestDedupeKeyIdentifiesOneLogicalEvent(t *testing.T) {
 		t.Error("a limit id must change the key")
 	}
 
-	// needs_input is keyed on the attention episode, not on the message and not
-	// on who observed it: the hook and the daemon's pass must compute one key for
-	// one block, and a later block must compute a different one (PRD 4 6.3).
-	episode := time.Date(2026, 1, 5, 12, 0, 0, 0, time.UTC)
-	blocked := EventData{SessionID: session, AttentionStart: episode}
-	key := DedupeKey(storage.EventNeedsInput, blocked)
-	if want := string(storage.EventNeedsInput) + ":" + session + ":" + strconv.FormatInt(episode.Unix(), 10); key != want {
-		t.Errorf("needs_input key = %q, want the episode key %q", key, want)
-	}
-	if again := DedupeKey(storage.EventNeedsInput, blocked); again != key {
-		t.Errorf("needs_input key = %q and %q, want the key to be stable", key, again)
-	}
-	if later := DedupeKey(storage.EventNeedsInput, EventData{SessionID: session, AttentionStart: episode.Add(time.Minute)}); later == key {
-		t.Error("a second attention episode must not reuse the first episode's key")
-	}
-	if key == DedupeKey(storage.EventSessionCompleted, EventData{SessionID: session}) {
-		t.Error("needs_input must not share a session_completed key")
+	if key := DedupeKey(storage.EventSessionCompleted, EventData{SessionID: session}); key == DedupeKey(storage.EventLimitDetected, limit) {
+		t.Error("session_completed must not share a limit_detected key")
 	}
 }
 
@@ -286,9 +269,9 @@ func TestSubjectOfUnknownEvent(t *testing.T) {
 // The last two must not print a second line, because repeating one path under two
 // labels is noise and an unobserved directory is not the project directory.
 func TestRenderShowsTheTwoDirectoriesDistinctly(t *testing.T) {
-	// EventNeedsInput is one of the three messages that carries the directories
-	// (the others are limit_detected and session_completed).
-	const event = storage.EventNeedsInput
+	// EventLimitDetected is one of the two messages that picks up the
+	// directories from the payload (the other is session_completed).
+	const event = storage.EventLimitDetected
 
 	moved := fullEventData()
 	body, err := Render(event, moved)

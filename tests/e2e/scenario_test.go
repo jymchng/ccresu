@@ -59,7 +59,7 @@ func TestFullScenarioReplaysTheRealInterruption(t *testing.T) {
 
 	// --- Discovery and detection -------------------------------------------
 
-	support.SeedSession(t, store, support.SessionID, storage.StateRunning)
+	support.SeedSession(t, store, support.SessionID, storage.StateDiscovered)
 	before, err := store.GetSession(ctx, support.SessionID)
 	if err != nil {
 		t.Fatalf("read session: %v", err)
@@ -140,12 +140,8 @@ func TestFullScenarioReplaysTheRealInterruption(t *testing.T) {
 
 	// (4) The session is now waiting for the reset, and the state change is
 	// persisted rather than merely held in memory.
-	if _, err := store.TransitionSession(ctx, support.SessionID, storage.StateUsageLimitDetected,
-		"usage limit banner detected", 0); err != nil {
-		t.Fatalf("transition to USAGE_LIMIT_DETECTED: %v", err)
-	}
 	if _, err := store.TransitionSession(ctx, support.SessionID, storage.StateWaitingForReset,
-		"waiting for 12:00 Europe/Berlin", 0); err != nil {
+		"usage limit banner detected; waiting for 12:00 Europe/Berlin", 0); err != nil {
 		t.Fatalf("transition to WAITING_FOR_RESET: %v", err)
 	}
 	waiting, err := store.GetSession(ctx, support.SessionID)
@@ -170,10 +166,6 @@ func TestFullScenarioReplaysTheRealInterruption(t *testing.T) {
 	// --- Time passes, then the resume happens ------------------------------
 
 	clk.Set(schedule.DueAt().Add(time.Minute))
-	if _, err := store.TransitionSession(ctx, support.SessionID, storage.StateResetTimeReached,
-		"the reset time was reached", 0); err != nil {
-		t.Fatalf("transition to RESET_TIME_REACHED: %v", err)
-	}
 
 	outcome, err := manager.Recover(ctx, support.SessionID)
 	if err != nil {
@@ -345,11 +337,7 @@ func TestFullScenarioReplaysTheRealInterruption(t *testing.T) {
 	// The whole run leaves a readable audit trail: every state the documentation
 	// promises appears in the transition history, in order.
 	assertTransitionOrder(t, store, []storage.State{
-		storage.StateUsageLimitDetected,
 		storage.StateWaitingForReset,
-		storage.StateResetTimeReached,
-		storage.StateCheckingSession,
-		storage.StateCheckingLimit,
 		storage.StateResuming,
 		storage.StateResumed,
 	})
@@ -364,7 +352,7 @@ func TestScenarioSurvivesRestartMidWait(t *testing.T) {
 	clk := clock.NewFake(support.BaseTime)
 	store := support.OpenStoreAt(t, dbPath)
 
-	support.SeedSession(t, store, support.SessionID, storage.StateRunning)
+	support.SeedSession(t, store, support.SessionID, storage.StateDiscovered)
 	event, limit := support.DetectAndRecord(t, store, support.SessionID, support.LimitBanner)
 	resolved := scheduler.Resolve(event.Reset, clk.Now(), scheduler.DefaultOptions())
 	if _, err := store.SaveSchedule(ctx, storage.Schedule{
@@ -375,9 +363,6 @@ func TestScenarioSurvivesRestartMidWait(t *testing.T) {
 		ResetRaw:      resolved.Phrase,
 	}); err != nil {
 		t.Fatalf("save schedule: %v", err)
-	}
-	if _, err := store.TransitionSession(ctx, support.SessionID, storage.StateUsageLimitDetected, "detected", 0); err != nil {
-		t.Fatalf("transition: %v", err)
 	}
 	if _, err := store.TransitionSession(ctx, support.SessionID, storage.StateWaitingForReset, "waiting", 0); err != nil {
 		t.Fatalf("transition: %v", err)
@@ -411,9 +396,6 @@ func TestScenarioSurvivesRestartMidWait(t *testing.T) {
 
 	// And the wait still completes correctly in the new process.
 	clk.Set(resolved.At.Add(time.Minute))
-	if _, err := reopened.TransitionSession(ctx, support.SessionID, storage.StateResetTimeReached, "reset reached", 0); err != nil {
-		t.Fatalf("transition after restart: %v", err)
-	}
 	provider := support.NewGrowingProvider(support.SessionID, 12, 20)
 	manager := support.NewManager(t, reopened, provider, clk, 10)
 	outcome, err := manager.Recover(ctx, support.SessionID)
@@ -437,7 +419,7 @@ func TestScenarioRefusesWhenTheLimitIsStillInForce(t *testing.T) {
 	store := support.OpenStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 
-	support.SeedSession(t, store, support.SessionID, storage.StateResetTimeReached)
+	support.SeedSession(t, store, support.SessionID, storage.StateWaitingForReset)
 	provider := support.NewGrowingProvider(support.SessionID, 12, 20)
 
 	manager, err := recovery.New(recovery.Config{

@@ -58,10 +58,6 @@ type Decision struct {
 	// is missing from the listing (R8). It is its own outcome so it can be
 	// retried and reported without ever being read as a failure or a success.
 	HandoffUnobserved bool
-	// NeedsInput reports that a human must act before the session can continue
-	// (R4, R12). It is raised from a `blocked` observation whether or not a
-	// reason came with it.
-	NeedsInput bool
 	// WaitingFor is the verbatim published reason, empty when none was
 	// reported.
 	WaitingFor string
@@ -96,16 +92,28 @@ func (d Decision) Transition() bool { return d.State != "" }
 //
 //	working  | no handoff: RESUMED (it continued by itself)
 //	         | handoff:    no transition; the attempt stays open
-//	blocked  | either:     WAITING_FOR_INPUT, and a needs-input milestone
+//	blocked  | handoff:    RESUMED; the continuation landed and the session is
+//	         |             waiting for a human to answer it
+//	         | no handoff: no transition; the pass resumes it anyway
 //	done     | no handoff: COMPLETED (nothing to continue)
 //	         | handoff:    RESUMED
-//	failed   | either:     RETRY_WAIT
-//	stopped  | either:     RETRY_WAIT, or USER_TERMINATED when ccresu stopped it
+//	failed   | either:     WAITING_FOR_RESET (parked and retried)
+//	stopped  | either:     WAITING_FOR_RESET, or DISABLED when ccresu stopped it
 //	absent, in the listing     | no handoff: no transition (state is for
 //	                           |   background sessions only)
-//	                           | handoff: HandoffUnobserved, RETRY_WAIT
+//	                           | handoff: HandoffUnobserved, WAITING_FOR_RESET
 //	absent, not in the listing | same, and recorded as a missing session
-//	anything else              | RETRY_WAIT with the raw value recorded
+//	anything else              | WAITING_FOR_RESET with the raw value recorded
+//
+// `blocked` is the row that changed. It used to park the session in a
+// waiting-for-input state and refuse to hand it a continuation, on the theory
+// that a continuation queued behind an unanswered prompt is waste. It is not
+// waste: the prompt is the operator's to answer whenever they get to it, the
+// conversation is intact, and refusing to continue meant a blocked session was
+// never resumed at all. ccresu's job is to keep the loop turning, so a blocked
+// session is handed its continuation like any other. What the supervisor said is
+// still recorded verbatim, in the attempt's observation and in the transition
+// reason; it is simply no longer a reason to stop.
 //
 // The absent-without-a-handoff row is the one place the mapping deliberately
 // does not settle anything: a session that has never been a background session
@@ -124,7 +132,7 @@ func Observe(obs StateObservation, handoffOutstanding, stopIssuedByCCRESU bool) 
 			decision.Reason = "the supervisor published no state for this session, and no handoff is outstanding"
 			return decision
 		}
-		decision.State = storage.StateRetryWait
+		decision.State = storage.StateWaitingForReset
 		decision.HandoffUnobserved = true
 		if obs.InListing {
 			decision.Reason = "the supervisor listed the session but published no state for it"
@@ -144,11 +152,21 @@ func Observe(obs StateObservation, handoffOutstanding, stopIssuedByCCRESU bool) 
 		decision.Reason = "the session is working, so it continued on its own once the window reset"
 		return decision
 	case "blocked":
-		decision.State = storage.StateWaitingForInput
-		decision.NeedsInput = true
-		decision.Reason = "the session is blocked and needs the operator before it can continue"
+		// A blocked session is alive, and the reason it is waiting is a human's
+		// to answer, not ccresu's to wait on. With a handoff outstanding the
+		// continuation landed and the session is RESUMED; without one the pass
+		// falls through and hands it a continuation like any other session.
+		if handoffOutstanding {
+			decision.State = storage.StateResumed
+			decision.Reason = "the handed-off session is blocked, so the continuation landed and is waiting for a human"
+			if decision.WaitingForReported {
+				decision.Reason = fmt.Sprintf("the handed-off session is blocked on %s, so the continuation landed", decision.WaitingFor)
+			}
+			return decision
+		}
+		decision.Reason = "the session is blocked, which is a human's to answer; resuming it anyway"
 		if decision.WaitingForReported {
-			decision.Reason = fmt.Sprintf("the session is blocked on %s and needs the operator", decision.WaitingFor)
+			decision.Reason = fmt.Sprintf("the session is blocked on %s, which is a human's to answer; resuming it anyway", decision.WaitingFor)
 		}
 		return decision
 	case "done":
@@ -161,22 +179,22 @@ func Observe(obs StateObservation, handoffOutstanding, stopIssuedByCCRESU bool) 
 		decision.Reason = "the session had already finished its last turn, so there was nothing to continue"
 		return decision
 	case "failed":
-		decision.State = storage.StateRetryWait
-		decision.Reason = "the supervisor reports the session's task ended with an error"
+		decision.State = storage.StateWaitingForReset
+		decision.Reason = "the supervisor reports the session's task ended with an error, so it is parked and retried"
 		return decision
 	case "stopped":
 		if stopIssuedByCCRESU {
-			decision.State = storage.StateUserTerminated
+			decision.State = storage.StateDisabled
 			decision.Reason = "ccresu stopped the session, so it was the operator's decision"
 			return decision
 		}
-		decision.State = storage.StateRetryWait
+		decision.State = storage.StateWaitingForReset
 		decision.Reason = "the session was stopped outside ccresu, which the supervisor also reports when the service was off"
 		return decision
 	case "":
 		return missing()
 	default:
-		decision.State = storage.StateRetryWait
+		decision.State = storage.StateWaitingForReset
 		decision.Reason = fmt.Sprintf("the supervisor published an unrecognised state %q, which is retried rather than guessed", obs.State)
 		return decision
 	}

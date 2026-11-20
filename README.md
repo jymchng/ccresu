@@ -159,7 +159,6 @@ Commands:
   doctor        check the environment ccresu runs in
   enable        allow ccresu to recover a session
   history       show the attempts and state transitions of a session
-  hook          consume a Claude Code Notification hook payload (always exits 0)
   inspect       show everything known about one session (same as 'sessions status')
   recover       resume one session now
   retry         retry a session whose attempt budget is spent
@@ -364,9 +363,9 @@ e60a3100  DISCOVERED  none (no usage limit detect...  yes      yes          /roo
 
 - `SESSION` is the first eight characters of the session ID; commands need the
   **full** ID (see step 6 for the one-liner that copies it).
-- `STATE` is the state-machine position — `DISCOVERED`, `DISABLED`,
-  `WAITING_FOR_RESET`, `RESUMING`, `RESUMED`, `RETRY_WAIT`, `DISCOVERED`
-  and so on. [docs/recovery.md](docs/recovery.md) has the full diagram.
+- `STATE` is the state-machine position — `DISCOVERED`, `WAITING_FOR_RESET`,
+  `RESUMING`, `RESUMED`, `COMPLETED`, `DISABLED`, `UNRECOVERABLE`.
+  [docs/recovery.md](docs/recovery.md) has the full diagram.
 - `NEXT ATTEMPT` is the answer to "when will ccresu touch this one, and why":
   `in 2h14m` while a wait is pending, `none (<reason>)` when nothing is
   scheduled and the reason is the whole story. It comes from the stored schedule
@@ -454,9 +453,8 @@ polls:         0
 phrase:        7:29pm (UTC)
 
 Recent transitions
-WHEN                     TRANSITION                                 REASON
-2026-11-05 03:28:16 +08  DISCOVERED -> USAGE_LIMIT_DETECTED         usage limit detected in the transcript
-2026-11-05 03:28:16 +08  USAGE_LIMIT_DETECTED -> WAITING_FOR_RESET  waiting until 2026-11-04T19:29:00Z
+WHEN                     TRANSITION                                REASON
+2026-11-05 03:28:16 +08  DISCOVERED -> WAITING_FOR_RESET           waiting until 2026-11-04T19:29:00Z
 ```
 
 The ID must be complete. A typo or a truncated UUID is a `not found` with exit
@@ -526,14 +524,10 @@ state:         RESUMED
 #  STATE    STARTED                  FINISHED                 RESULT     ERROR
 1  RESUMED  2026-11-05 03:29:03 +08  2026-11-05 03:29:03 +08  succeeded
 
-WHEN                     TRANSITION                                 REASON
-2026-11-05 03:28:16 +08  DISCOVERED -> USAGE_LIMIT_DETECTED         usage limit detected in the transcript
-2026-11-05 03:28:16 +08  USAGE_LIMIT_DETECTED -> WAITING_FOR_RESET  waiting until 2026-11-04T19:29:00Z
-2026-11-05 03:29:03 +08  WAITING_FOR_RESET -> RESET_TIME_REACHED    the scheduled reset time has arrived
-2026-11-05 03:29:03 +08  RESET_TIME_REACHED -> CHECKING_SESSION     checking the session before resuming
-2026-11-05 03:29:03 +08  CHECKING_SESSION -> CHECKING_LIMIT         checking the usage limit has cleared
-2026-11-05 03:29:03 +08  CHECKING_LIMIT -> RESUMING                 resuming the original session
-2026-11-05 03:29:03 +08  RESUMING -> RESUMED                        the supervisor accepted the continuation as 3f9d1c07 (ccresu-3f9d1c07)
+WHEN                     TRANSITION                                REASON
+2026-11-05 03:28:16 +08  DISCOVERED -> WAITING_FOR_RESET           waiting until 2026-11-04T19:29:00Z
+2026-11-05 03:29:03 +08  WAITING_FOR_RESET -> RESUMING             resuming the original session
+2026-11-05 03:29:03 +08  RESUMING -> RESUMED                       the supervisor accepted the continuation as 3f9d1c07 (ccresu-3f9d1c07)
 ```
 
 `--limit N` caps the number of transitions shown (default 50; the newest are
@@ -566,7 +560,7 @@ says which states were legal:
 
 ```console
 $ ccresu recover 3f9d1c07-1111-4222-8333-444455556666
-ccresu: recover 3f9d1c07-1111-4222-8333-444455556666: recovery: session is not eligible for recovery: session 3f9d1c07-1111-4222-8333-444455556666 is RESUMED and cannot become CHECKING_SESSION
+ccresu: recover 3f9d1c07-1111-4222-8333-444455556666: recovery: session is not eligible for recovery: session 3f9d1c07-1111-4222-8333-444455556666 is RESUMED and cannot become RESUMING
 $ echo $?
 4
 ```
@@ -577,7 +571,7 @@ nothing to recover:
 
 ```console
 $ ccresu recover e60a3100-123a-4deb-b146-54705ff80268
-ccresu: recover e60a3100-123a-4deb-b146-54705ff80268: recovery: invalid state transition: RESUMED -> CHECKING_SESSION (legal targets: COMPLETED, DISABLED, RUNNING, USER_TERMINATED)
+ccresu: recover e60a3100-123a-4deb-b146-54705ff80268: recovery: invalid state transition: RESUMED -> RESUMING (legal targets: COMPLETED, DISABLED, DISCOVERED, UNRECOVERABLE)
 ```
 
 ### Step 11 — When the resume fails
@@ -586,22 +580,24 @@ Failures are retried with exponential backoff, and every attempt is numbered
 against `recovery.max_attempts`. The transitions show the budget being spent:
 
 ```console
-2026-11-05 03:27:03 +08  RESUMING -> RETRY_WAIT  attempt 1/10 failed (retryable); next attempt in 28.99625...
-2026-11-05 03:27:03 +08  RESUMING -> RETRY_WAIT  attempt 2/10 failed (retryable); next attempt in 1m4.2447...
-2026-11-05 03:27:08 +08  RESUMING -> RETRY_WAIT  attempt 3/10 failed (retryable); next attempt in 2m14.063...
-2026-11-05 03:27:08 +08  RESUMING -> RETRY_WAIT  attempt 4/10 failed (retryable); next attempt in 4m3.5004...
-2026-11-05 03:27:13 +08  RESUMING -> RETRY_WAIT  attempt 5/10 failed (retryable); next attempt in 7m5.4121...
+2026-11-05 03:27:03 +08  RESUMING -> WAITING_FOR_RESET  attempt 1/10 failed (retryable); next attempt in 28.99625...
+2026-11-05 03:27:03 +08  RESUMING -> WAITING_FOR_RESET  attempt 2/10 failed (retryable); next attempt in 1m4.2447...
+2026-11-05 03:27:08 +08  RESUMING -> WAITING_FOR_RESET  attempt 3/10 failed (retryable); next attempt in 2m14.063...
+2026-11-05 03:27:08 +08  RESUMING -> WAITING_FOR_RESET  attempt 4/10 failed (retryable); next attempt in 4m3.5004...
+2026-11-05 03:27:13 +08  RESUMING -> WAITING_FOR_RESET  attempt 5/10 failed (retryable); next attempt in 7m5.4121...
 ```
 
 The delays come from `recovery.initial_delay` (30s), `recovery.multiplier` (2.0),
 `recovery.max_delay` (15m) and `recovery.jitter` (0.15), which is why the values
-are not exactly 30s, 60s, 2m. Between attempts the session sits in `RETRY_WAIT`
-and the wait is a stored instant, not just prose:
+are not exactly 30s, 60s, 2m. Between attempts the session is parked in
+`WAITING_FOR_RESET` with a `retry_at` instant — the state says "waiting until an
+instant", and the column says which kind of wait it is — so the wait is a stored
+instant, not just prose:
 
 ```console
 $ ccresu sessions
-SESSION   STATE       NEXT ATTEMPT  ENABLED  RECOVERABLE  PROJECT  LAST SEEN                NOTE
-3f9d1c07  RETRY_WAIT  in 58s        yes      yes                   2026-11-05 03:45:04 +08  resume session 3f9d1c07-1111-4222-833...
+SESSION   STATE              NEXT ATTEMPT  ENABLED  RECOVERABLE  PROJECT  LAST SEEN                NOTE
+3f9d1c07  WAITING_FOR_RESET  in 58s        yes      yes                   2026-11-05 03:45:04 +08  resume session 3f9d1c07-1111-4222-833...
 ```
 
 ```console
@@ -670,51 +666,9 @@ ok      telegram        chat -1001234567890, token ********abcd
 Each event is a separate switch (`notify_limit_detected`,
 `notify_recovery_started`, `notify_recovery_success`,
 `notify_recovery_failure`, `notify_permanent_failure`,
-`notify_session_completed`, plus `notify_waiting` and `notify_needs_input`, both
-of which default to `false`).
+`notify_session_completed`, plus `notify_waiting`, which defaults to `false`).
 Delivery is queued in SQLite by a sender goroutine, so a slow Telegram cannot
 delay a resume. Full details: [docs/telegram.md](docs/telegram.md).
-
-#### Hear about a blocked session immediately (optional)
-
-The daemon notices a `blocked` session at its next pass. A Claude Code
-`Notification` hook notices the moment the CLI announces it, and that is what
-`ccresu hook` is for: one observation, no state change, at most one message.
-
-ccresu never edits your Claude Code configuration — installing the hook is
-documented, never performed. Add it to the `hooks` object of
-`~/.claude/settings.json` yourself:
-
-```json
-{
-  "hooks": {
-    "Notification": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "ccresu hook",
-            "timeout": 15
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-Set the explicit `timeout`. A command hook's default is 600 seconds, and a hook
-that can hold a session for ten minutes is worse than no hook: `ccresu hook`
-bounds itself to a few seconds of stdin, one `claude agents --json --all` read
-and one database write, so 15 seconds is generous and the default is not.
-
-No `matcher` is given on purpose: the hook fires for every notification type and
-ignores all but `agent_needs_input` and `agent_completed`. It always exits 0 and
-prints nothing, it never creates, discovers, enables or recovers a session, and
-it cannot double up with the daemon — both producers compute the same
-attention-episode dedupe key, so the message arrives sooner, not twice.
-Requires `notify_needs_input: true`; the hook is an optimisation over the poll,
-so removing it changes nothing else.
 
 ### Step 13 — Script it: the REST and SSE API
 
@@ -799,19 +753,19 @@ recovery:
 The session cap sums the costs the CLI reported across this session's attempts
 before an attempt starts, so a refusal spends nothing. The per-attempt cap is the
 guard the session cap cannot see: one very expensive turn. Either way the outcome
-is named rather than generic — the session is parked in `SPEND_CAP_REACHED`, and
-the `permanent_failure` message says which knob, which cap and what was spent:
+is named rather than generic — the session is disabled, and the
+`permanent_failure` message says which knob, which cap and what was spent:
 
 ```console
 $ ccresu sessions --all
-SESSION   STATE              NEXT ATTEMPT  ENABLED  RECOVERABLE  PROJECT  LAST SEEN                NOTE
-4a7e0c11  SPEND_CAP_REACHED  none          yes      yes                   2026-11-05 04:02:11 +08  recovery: spend cap reached: recovery.guardrails.max_cost_usd_per_session is $5 and the session has recorded $5.4 across 2 attempt(s)
+SESSION   STATE     NEXT ATTEMPT  ENABLED  RECOVERABLE  PROJECT  LAST SEEN                NOTE
+4a7e0c11  DISABLED  none          no       yes                   2026-11-05 04:02:11 +08  recovery: spend cap reached: recovery.guardrails.max_cost_usd_per_session is $5 and the session has recorded $5.4 across 2 attempt(s)
 ```
 
-No reconcile pass resumes a session in `SPEND_CAP_REACHED`, so the cap cannot be
-defeated by rediscovery. It leaves that state when you raise the cap (the next
-pass returns it to `DISCOVERED` without a restart), run `ccresu recover <id>`, or
-reset it. The caps bind automatic recovery only: `ccresu recover` and
+No reconcile pass resumes a disabled session, so the cap cannot be defeated by
+rediscovery. A spend stop and an operator's `ccresu disable` are the same state:
+turn it back on with `ccresu enable <id>` once the cap is raised or you have
+decided to spend. The caps bind automatic recovery only: `ccresu recover` and
 `ccresu retry` are human acts and are allowed past them, though the cost is still
 recorded and the override is logged.
 
@@ -855,7 +809,7 @@ ccresu sessions — 3 shown (all)
   SESSION   STATE              NEXT ATTEMPT                    ENABLED  PROJECT                  LAST SEEN                NOTE
 > 88dfd995  DISABLED           none (session is not enabled)   no       /home/you/projects/site  2026-11-13 09:34:43 +08  -
   3f9d1c07  WAITING_FOR_RESET  in 12m40s                       yes      /home/you/projects/demo  2026-11-13 09:34:43 +08  -
-  4d1f9c2a  RUNNING            none (no usage limit detect...  yes      /home/you/projects/api   2026-11-13 09:34:43 +08  -
+  4d1f9c2a  RESUMED            none (no usage limit detect...  yes      /home/you/projects/api   2026-11-13 09:34:43 +08  -
 
 enter detail  n new  x delete  R resume  e enable  d disable  r retry  / filter  a all  ? help  q quit
 ```

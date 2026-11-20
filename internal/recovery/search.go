@@ -57,13 +57,15 @@ var ErrNoParker = errors.New("recovery: no limit parker is installed")
 // is an operator act. `ccresu search-limit` is that act, and it is the only
 // caller.
 //
-// The walk is RESUMED -> USAGE_LIMIT_DETECTED -> WAITING_FOR_RESET, which is the
-// same pair of edges a transcript detection by the daemon takes, so the audit
-// trail cannot tell the two apart. A search that finds nothing writes nothing:
-// no attempt, no transition, no schedule. A search on a session that is not
-// idle is refused, because every other state either already has a pending pass
-// that will read the transcript (DISCOVERED, RUNNING, RETRY_WAIT, ...) or is a
-// decision ccresu must not walk back (DISABLED, COMPLETED, UNRECOVERABLE).
+// The walk is RESUMED -> DISCOVERED -> WAITING_FOR_RESET, or DISCOVERED ->
+// WAITING_FOR_RESET for a session that is already there: the return to discovery
+// is the re-observation the machine requires before a settled session may be
+// parked again, and the second edge is the one the daemon takes when its own scan
+// parses a banner. A search that finds nothing writes nothing: no attempt, no
+// transition, no schedule. A search on a session that is not idle is refused,
+// because every other state either already has a pending pass that will read the
+// transcript (RESUMING) or is a decision ccresu must not walk back (DISABLED,
+// COMPLETED, UNRECOVERABLE).
 func (m *Manager) SearchLimit(ctx context.Context, sessionID string, scan LimitScan) (LimitSearch, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
@@ -100,7 +102,7 @@ func (m *Manager) SearchLimit(ctx context.Context, sessionID string, scan LimitS
 	}
 	if !searchable(session.State) {
 		return out, fmt.Errorf("%w: session %s is %s, and only an idle session (%s or %s) can be searched",
-			ErrNotEligible, sessionID, session.State, StateResumed, StateRunning)
+			ErrNotEligible, sessionID, session.State, StateDiscovered, StateResumed)
 	}
 
 	banner, found, err := scan(ctx, sessionID)
@@ -131,9 +133,19 @@ func (m *Manager) SearchLimit(ctx context.Context, sessionID string, scan LimitS
 	out.Wait = wait
 
 	state := &stateWalker{ctx: ctx, store: m.store, sessionID: sessionID, current: session.State}
-	if err := state.move(StateUsageLimitDetected,
-		"a usage limit was found in the transcript of an idle session", 0); err != nil {
-		return out, err
+	// A resumed session goes back through DISCOVERED rather than straight to the
+	// park. The machine has no RESUMED -> WAITING_FOR_RESET edge on purpose (see
+	// state.go): a session that was just resumed must be observed again before it
+	// is parked again, or the stale banner in its tail would drive a park per
+	// pass. The search is that re-observation — the operator ran the scan and
+	// found the banner — so it records the return to discovery, and DISCOVERED ->
+	// WAITING_FOR_RESET is then the same edge the daemon takes when its own scan
+	// parses a limit.
+	if state.current == StateResumed {
+		if err := state.move(StateDiscovered,
+			"an operator searched an idle session for a usage limit", 0); err != nil {
+			return out, err
+		}
 	}
 	reason := "waiting for the reset time"
 	if wait.Known && !wait.At.IsZero() {
@@ -152,15 +164,17 @@ func (m *Manager) SearchLimit(ctx context.Context, sessionID string, scan LimitS
 
 // searchable reports whether a search may start from s.
 //
-// RESUMED is the state this exists for: it is Settled, so no pass reads its
-// transcript. RUNNING is accepted because the operator's assertion ("this is
-// idle now") is the authority on whether it is, and because refusing the state
-// whose transcript the daemon is also reading would make the command's
-// behaviour depend on the daemon's timing. Every other state is refused, and
-// state.go's edge table refuses the move even if this list ever drifted.
+// RESUMED is the state this exists for: it is Settled, so no daemon pass would
+// otherwise re-read its transcript, and the operator is asserting the session has
+// gone idle. DISCOVERED is accepted because it is the same situation one beat
+// earlier — the session is known, alive and not parked. Every other state is
+// refused: WAITING_FOR_RESET and RESUMING already have a pending pass that will
+// read the transcript, and a search that parked a session which is already parked
+// would rewrite a wait that is already correct; DISABLED, COMPLETED and
+// UNRECOVERABLE are decisions ccresu must not walk back.
 func searchable(s State) bool {
 	switch s {
-	case StateResumed, StateRunning:
+	case StateDiscovered, StateResumed:
 		return true
 	default:
 		return false

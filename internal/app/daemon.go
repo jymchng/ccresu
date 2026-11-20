@@ -136,10 +136,8 @@ func (d *Daemon) Step(ctx context.Context) error {
 		{"discover", d.discover},
 		{"detect", d.detect},
 		{"schedule", d.actOnSchedules},
-		{"unpark", d.unparkAffordable},
 		{"recover", d.recoverPending},
 		{"complete", d.notifyCompleted},
-		{"attention", d.pruneAttention},
 		{"deliver", d.deliver},
 	} {
 		if err := stage.run(ctx); err != nil {
@@ -221,18 +219,20 @@ func storageSession(session claude.Session) storage.Session {
 // records nothing and sends nothing.
 //
 // Which sessions are read is the whole question this stage answers. DISCOVERED
-// and RUNNING are read always: they are the states a limit is expected in. Three
-// more are read when monitoring.rescan_resumed is on, because nothing else ever
-// would: RESUMED is Settled (no pass revisits it), RETRY_WAIT is counting down a
-// backoff that would retry into the refusal, and WAITING_FOR_INPUT is parked on a
-// human. A session in one of those three that hits a new limit is otherwise
-// invisible for ever, which is the defect `ccresu search-limit` was added to work
-// around by hand.
+// is read always: it is where a session with nothing pending sits, and therefore
+// where a limit is expected to appear. RESUMED is read only when
+// monitoring.rescan_resumed is on, because nothing else ever would: RESUMED is
+// Settled, so no pass revisits it, and a session that hits a new limit after a
+// resume is otherwise invisible for ever — which is the defect
+// `ccresu search-limit` was added to work around by hand. WAITING_FOR_RESET is
+// not read: it is already parked on the instant its banner named, and the pass
+// that acts on that instant reads the transcript itself.
 //
-// Reading one of them can only ever park it: the two writes below are
-// USAGE_LIMIT_DETECTED and WAITING_FOR_RESET, and the state machine defines no
-// edge from any of the three to RESUMING. So a rescan cannot spend, and cannot
-// undo a recovery by resuming something twice.
+// Reading a resumed session can only ever park it: the write below is
+// WAITING_FOR_RESET, reached through DISCOVERED because the machine has no
+// RESUMED -> WAITING_FOR_RESET edge, and it defines no edge from either beat to
+// RESUMING. So a rescan cannot spend, and cannot undo a recovery by resuming
+// something twice.
 func (d *Daemon) detect(ctx context.Context) error {
 	rt := d.runtime
 	if rt.Detector == nil || rt.Transcripts == nil || rt.Store == nil || rt.Scheduler == nil {
@@ -262,20 +262,16 @@ func (d *Daemon) detect(ctx context.Context) error {
 
 // scannedStates is the state filter the detect stage reads.
 //
-// The first two are unconditional. The rest are added by
-// monitoring.rescan_resumed, and the order is the lifecycle order so a log line
-// that names them reads naturally.
+// DISCOVERED is unconditional. RESUMED is added by monitoring.rescan_resumed,
+// and it comes second because that is the lifecycle order: a log line that names
+// the states reads naturally.
 func (d *Daemon) scannedStates() []storage.State {
-	states := []storage.State{storage.StateDiscovered, storage.StateRunning}
+	states := []storage.State{storage.StateDiscovered}
 	rescan := d.runtime != nil && d.runtime.Config != nil && d.runtime.Config.Monitoring.RescanResumed
 	if !rescan {
 		return states
 	}
-	return append(states,
-		storage.StateResumed,
-		storage.StateRetryWait,
-		storage.StateWaitingForInput,
-	)
+	return append(states, storage.StateResumed)
 }
 
 // detectIn inspects one session transcript.
@@ -334,9 +330,18 @@ func (d *Daemon) detectIn(ctx context.Context, session storage.Session) error {
 	if _, err := rt.Scheduler.Save(ctx, sched); err != nil {
 		return fmt.Errorf("save schedule for %s: %w", session.ID, err)
 	}
-	if _, err := rt.Store.TransitionSession(ctx, session.ID, storage.StateUsageLimitDetected,
-		"usage limit detected in the transcript", 0); err != nil {
-		return fmt.Errorf("record the usage-limit state of %s: %w", session.ID, err)
+	// A resumed session goes back through DISCOVERED before it is parked. The
+	// machine has no RESUMED -> WAITING_FOR_RESET edge on purpose (see
+	// recovery/state.go): a session that was just resumed must be observed again
+	// before it is parked again, or the stale banner in its tail would drive a
+	// park per pass. This rescan *is* that re-observation — the tail was read and
+	// a new banner was found in it — so the return to discovery is recorded and
+	// DISCOVERED -> WAITING_FOR_RESET is then the ordinary park.
+	if session.State == storage.StateResumed {
+		if _, err := rt.Store.TransitionSession(ctx, session.ID, storage.StateDiscovered,
+			"a rescan found a new usage limit in a resumed session", 0); err != nil {
+			return fmt.Errorf("record the re-observation of %s: %w", session.ID, err)
+		}
 	}
 	waitingFor := "waiting for the reset time"
 	if resolution.Known {
@@ -419,7 +424,9 @@ func (d *Daemon) actOnSchedules(ctx context.Context) error {
 		if !sched.Due(now) {
 			continue
 		}
-		d.markResetReached(ctx, sched.SessionID)
+		// The pass below reads the transcript and acts on the state it finds, so
+		// there is no "the reset time arrived" state to record first: the state
+		// machine has no such beat any more.
 		outcome, recoverErr := rt.Recovery.RecoverRequest(ctx, recovery.Request{
 			SessionID:    sched.SessionID,
 			UsageLimitID: sched.UsageLimitID,
@@ -459,52 +466,33 @@ func (d *Daemon) actOnSchedules(ctx context.Context) error {
 	return nil
 }
 
-// markResetReached records that a waiting session's reset time has arrived.
+// There is no markResetReached step any more.
 //
-// It is a separate step because the recovery state machine only offers
-// RESET_TIME_REACHED -> CHECKING_SESSION: without this edge a due schedule would
-// be rejected as an invalid transition, and the wait would never end.
-func (d *Daemon) markResetReached(ctx context.Context, sessionID string) {
-	rt := d.runtime
-	session, err := rt.Store.GetSession(ctx, sessionID)
-	if err != nil {
-		rt.Log.Debug("read session for a due schedule", "session", sessionID, "error", err)
-		return
-	}
-	if session.State != storage.StateWaitingForReset {
-		return
-	}
-	if _, err := rt.Store.TransitionSession(ctx, sessionID, storage.StateResetTimeReached,
-		"the scheduled reset time has arrived", 0); err != nil {
-		rt.Log.Warn("record the reset for a due schedule", "session", sessionID, "error", err)
-	}
-}
+// It existed to move a waiting session to RESET_TIME_REACHED, because the old
+// machine only offered RESET_TIME_REACHED -> CHECKING_SESSION and a due schedule
+// would otherwise have been rejected. With seven states a due schedule is handled
+// in whatever state the session is in: WAITING_FOR_RESET -> RESUMING is the edge
+// the pass takes, so there is no intermediate beat to record.
 
-// unparkAffordable releases sessions parked at a spend cap once the cap no
-// longer binds them (PRD 5's "cap raised while a session is parked" case).
+// There is no unpark stage any more.
 //
-// It is a stage of its own because it is neither a discovery nor a recovery: no
-// resume is issued here, and the session is moved no further than DISCOVERED,
-// where the ordinary cycle decides what happens next. R8 keeps SPEND_CAP_REACHED
-// out of PendingStates precisely so that no pass can resume it; releasing it is
-// the one thing a pass may do, and only because the operator changed the number
-// that parked it.
-func (d *Daemon) unparkAffordable(ctx context.Context) error {
-	rt := d.runtime
-	if rt.Recovery == nil {
-		return nil
-	}
-	released, err := rt.Recovery.UnparkAffordable(ctx)
-	if err != nil {
-		return err
-	}
-	if released > 0 {
-		rt.Log.Info("released sessions parked at a spend cap", "sessions", released)
-	}
-	return nil
-}
+// It existed to release sessions parked in SPEND_CAP_REACHED after the operator
+// raised a spend cap. With seven states a spend stop is DISABLED (see
+// recovery.Class.State): the way back is `ccresu enable`, which is a human act
+// and therefore cannot be a daemon stage.
 
-// recoverPending recovers sessions that are waiting to be retried.
+// recoverPending wakes the sessions whose retry instant has arrived.
+//
+// It is the stage that makes a failed attempt's backoff real. There is no
+// RETRY_WAIT state any more, so a retry is a WAITING_FOR_RESET session carrying
+// a retry_at instant (see recovery.Manager.fail), and this pass is the only
+// thing that reads it.
+//
+// WAITING_FOR_RESET is therefore not skipped wholesale: a session parked on a
+// usage-limit reset has no retry instant and belongs to the scheduler above,
+// which wakes it from the schedule the banner named; a session parked by a
+// failure has a retry instant, and nothing but this stage would ever look at it.
+// Skipping those is what would silently end the retry loop the backoff promises.
 func (d *Daemon) recoverPending(ctx context.Context) error {
 	rt := d.runtime
 	if rt.Recovery == nil {
@@ -514,12 +502,18 @@ func (d *Daemon) recoverPending(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list pending sessions: %w", err)
 	}
+	now := rt.Clock.Now().UTC()
 	for _, session := range pending {
-		// WAITING_FOR_RESET belongs to the scheduler, and a session already being
-		// recovered holds its own lock; skipping both keeps this stage from
-		// fighting the one above it.
 		switch session.State {
-		case storage.StateWaitingForReset, storage.StateResuming, storage.StateCheckingSession, storage.StateCheckingLimit:
+		case storage.StateWaitingForReset:
+			// A reset wait is the scheduler's; only a due retry is this
+			// stage's.
+			if session.RetryAt == nil || session.RetryAt.After(now) {
+				continue
+			}
+		case storage.StateResuming:
+			// A resume already in flight holds its own lock, and fighting the
+			// pass that started it is the one thing this stage must not do.
 			continue
 		}
 		if _, err := rt.Recovery.Recover(ctx, session.ID); err != nil &&
@@ -572,34 +566,6 @@ func (d *Daemon) notifyCompleted(ctx context.Context) error {
 		}); err != nil && !errors.Is(err, telegram.ErrDisabled) {
 			rt.Log.Warn("queue session_completed notification", "session", session.ID, "error", err)
 		}
-	}
-	return nil
-}
-
-// pruneAttention closes the attention episodes of sessions that are no longer
-// waiting for a human (PRD 4 §6.3).
-//
-// An episode is the identity of one needs_input message. Closing it when the
-// session leaves WAITING_FOR_INPUT is what makes the session's next block a
-// *new* episode, and therefore a new dedupe key and a new message. Without this
-// stage a session that asks five questions would be announced once.
-//
-// It is one statement against the persisted state rather than a hook on the
-// transition writer: every path that changes the state — a recovery, an
-// operator's `disable`, a discovery pass — already writes it, so reading the end
-// of an episode from that same state keeps the two from disagreeing. A failure
-// is logged, never fatal: the next pass prunes again.
-func (d *Daemon) pruneAttention(ctx context.Context) error {
-	rt := d.runtime
-	if rt.Store == nil {
-		return nil
-	}
-	closed, err := rt.Store.PruneAttentionEpisodes(ctx)
-	if err != nil {
-		return fmt.Errorf("prune attention episodes: %w", err)
-	}
-	if closed > 0 {
-		rt.Log.Debug("closed attention episodes", "episodes", closed)
 	}
 	return nil
 }

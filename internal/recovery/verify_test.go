@@ -111,13 +111,19 @@ func TestVerificationProvenByPublishedState(t *testing.T) {
 		t.Errorf("decision = %+v, want COMPLETED for a done session with no handoff", decision)
 	}
 
-	// A blocked session is never a recovered one.
+	// A blocked session is a landed continuation.
+	//
+	// The supervisor took the handoff and the conversation is now waiting for a
+	// human to answer a prompt, which is the operator's business and not
+	// evidence that the resume failed. Excluding it is what used to make a
+	// blocked session unresumable, so it must be proven here and its published
+	// value kept verbatim.
 	blocked := StateObservation{SessionID: sessionA, State: "blocked", WaitingFor: "permission prompt",
 		ObservedAt: time.Unix(1, 0).UTC(), InListing: true}
 	verification = Verification{SessionIDPreserved: true}
 	verification.ObservePublished(blocked, Observe(blocked, true, false))
-	if verification.Proven {
-		t.Fatal("Proven = true for a blocked session, want false")
+	if !verification.Proven {
+		t.Fatal("Proven = false for a blocked session with a handoff outstanding, want true")
 	}
 	if verification.PublishedState != "blocked" {
 		t.Errorf("PublishedState = %q, want the raw value", verification.PublishedState)

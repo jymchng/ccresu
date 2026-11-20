@@ -4,33 +4,26 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"time"
 
 	"github.com/jymchng/ccresu/internal/recovery"
 	"github.com/jymchng/ccresu/internal/storage"
 	"github.com/jymchng/ccresu/internal/telegram"
 )
 
-// AttentionEpisodes is the notification bookkeeping a needs_input message is
-// keyed on. *storage.Store satisfies it.
-//
-// It is a one-method interface rather than the whole store because the observer
-// needs exactly one fact from it: when the episode two producers are describing
-// began. Passing the store would let this code write session state, which the
-// hook path may not do (PRD 4 R11) and the recovery path has no reason to.
-type AttentionEpisodes interface {
-	// BeginAttentionEpisode records that the session is waiting and returns the
-	// instant the episode began, which is the first observer's.
-	BeginAttentionEpisode(ctx context.Context, sessionID, reason string, at time.Time) (time.Time, error)
-}
-
 // notificationObserver maps recovery milestones onto the notification queue.
 //
-// It is the producer for five of the eight events the templates render:
-// recovery_started, recovery_success, recovery_failure, permanent_failure and —
-// since PRD 4 — needs_input. The other three are produced elsewhere:
-// session_completed by the daemon (a settled session never enters the engine) and
-// limit_detected/waiting_for_reset by the limit path.
+// It is the producer for four of the events the templates render:
+// recovery_started, recovery_success, recovery_failure and permanent_failure.
+// The others are produced elsewhere: session_completed by the daemon (a settled
+// session never enters the engine) and limit_detected/waiting_for_reset by the
+// limit path.
+//
+// There is deliberately no needs_input producer. A `blocked` observation is
+// handed a continuation like any other (see recovery.Observe), so "this session
+// needs you" is not a fact ccresu can report: the session it would be about is
+// one ccresu is already resuming. The milestone kind, the hook that raised it,
+// the event it queued and the attention-episode bookkeeping that keyed it are
+// all gone together, which is why this function takes nothing but the notifier.
 //
 // The observer runs on the recovery goroutine, so it does the cheapest thing that
 // is still durable: render, insert a row, wake the sender. Notify never touches
@@ -42,7 +35,7 @@ type AttentionEpisodes interface {
 // A nil notifier yields a nil observer, which is what makes "notifications are
 // off" cost nothing: the manager then skips the hook entirely rather than calling
 // a function that discards its argument.
-func notificationObserver(notifier Notifier, episodes AttentionEpisodes, log *slog.Logger) recovery.Observer {
+func notificationObserver(notifier Notifier, log *slog.Logger) recovery.Observer {
 	if notifier == nil {
 		return nil
 	}
@@ -63,30 +56,11 @@ func notificationObserver(notifier Notifier, episodes AttentionEpisodes, log *sl
 		if !notifier.Enabled(event) {
 			return
 		}
-		data := milestoneData(milestone)
-		if event == storage.EventNeedsInput {
-			// Both producers of this event must compute the same dedupe key, and
-			// the only fact they can agree on is the persisted episode instant.
-			// Without it the message has no identity, so no message is queued.
-			if episodes == nil {
-				log.Warn("cannot announce a blocked session without attention episodes",
-					"session", milestone.Outcome.SessionID)
-				return
-			}
-			reason, _ := milestone.NeedsInputReason()
-			start, err := episodes.BeginAttentionEpisode(ctx, milestone.Outcome.SessionID, reason, time.Time{})
-			if err != nil {
-				log.Warn("record the attention episode",
-					"session", milestone.Outcome.SessionID, "error", err)
-				return
-			}
-			data.AttentionStart = start
-		}
 		_, _, err := notifier.Notify(ctx, telegram.Request{
 			Event:     event,
 			SessionID: milestone.Outcome.SessionID,
 			AttemptID: milestone.Outcome.Attempt.ID,
-			Data:      data,
+			Data:      milestoneData(milestone),
 		})
 		if err != nil && !errors.Is(err, telegram.ErrDisabled) {
 			log.Warn("queue recovery notification",
@@ -115,8 +89,6 @@ func notificationEvent(kind recovery.MilestoneKind) (storage.NotificationEvent, 
 		return storage.EventRecoveryFailure, true
 	case recovery.MilestonePermanent:
 		return storage.EventPermanentFailure, true
-	case recovery.MilestoneNeedsInput:
-		return storage.EventNeedsInput, true
 	default:
 		return "", false
 	}
@@ -142,14 +114,6 @@ func milestoneData(milestone recovery.Milestone) telegram.EventData {
 	}
 	if milestone.Cause != nil {
 		data.Reason = milestone.Cause.Error()
-	}
-	// A needs_input milestone carries the reason the supervisor published, and
-	// nothing else: a blocked session has no failure to report, and the template
-	// states the absence of a reason rather than inventing one.
-	if milestone.Kind == recovery.MilestoneNeedsInput {
-		if reason, reported := milestone.NeedsInputReason(); reported {
-			data.Reason = reason
-		}
 	}
 	// A finished attempt knows how long the resume took, which is the only
 	// duration a message can honestly report. An unfinished or absent row leaves

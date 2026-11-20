@@ -51,11 +51,11 @@ func TestSessionErrorWrapsSessionID(t *testing.T) {
 }
 
 func TestStateErrorIsNotEligible(t *testing.T) {
-	err := stateError("abc", storage.StateCompleted, storage.StateCheckingSession)
+	err := stateError("abc", storage.StateCompleted, storage.StateResuming)
 	if !errors.Is(err, ErrNotEligible) {
 		t.Fatalf("error = %v, want ErrNotEligible", err)
 	}
-	for _, want := range []string{"abc", string(storage.StateCompleted), string(storage.StateCheckingSession)} {
+	for _, want := range []string{"abc", string(storage.StateCompleted), string(storage.StateResuming)} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q is missing %q", err, want)
 		}

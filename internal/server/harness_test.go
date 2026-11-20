@@ -151,7 +151,7 @@ func (h *harness) seedSession(id string, mutate func(*storage.Session)) storage.
 		TranscriptPath:  "/home/u/.claude/projects/-work-project/" + id + ".jsonl",
 		Provider:        "claude",
 		Type:            storage.SessionTypeInteractive,
-		State:           storage.StateRunning,
+		State:           storage.StateResumed,
 		Enabled:         true,
 		Recoverable:     true,
 		TranscriptSize:  1024,
@@ -171,12 +171,12 @@ func (h *harness) seedSession(id string, mutate func(*storage.Session)) storage.
 }
 
 // makeRecoverable turns a seeded session into one the state machine will resume:
-// the reset time is reached and the provider reports a transcript that grows when
-// the resume runs.
+// it is parked on a reset that has arrived, and the provider reports a transcript
+// that grows when the resume runs.
 func (h *harness) makeRecoverable(id string) {
 	h.t.Helper()
 	h.seedSession(id, func(s *storage.Session) {
-		s.State = storage.StateResetTimeReached
+		s.State = storage.StateWaitingForReset
 		s.TranscriptSize = 10
 		s.TranscriptLines = 1
 	})

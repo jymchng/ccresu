@@ -170,8 +170,8 @@ func TestCLIReadsAndWritesThePersistedState(t *testing.T) {
 		t.Fatalf("status reports %d sessions (%d enabled), want 1 (1)",
 			report.Sessions, report.EnabledSessions)
 	}
-	if report.States[string(storage.StateRunning)] != 1 {
-		t.Fatalf("state histogram = %v, want one RUNNING session", report.States)
+	if report.States[string(storage.StateResumed)] != 1 {
+		t.Fatalf("state histogram = %v, want one RESUMED session", report.States)
 	}
 	if !report.RecoveryEnabled || report.MaxAttempts != 10 {
 		t.Fatalf("recovery configuration = %t / %d attempts, want true / 10",
@@ -188,7 +188,7 @@ func TestCLIReadsAndWritesThePersistedState(t *testing.T) {
 	}
 
 	inspect := f.mustRun(0, "inspect", seededSessionID, "--config", f.ConfigPath)
-	for _, want := range []string{seededSessionID, string(storage.StateRunning), "/home/dev/src/widget"} {
+	for _, want := range []string{seededSessionID, string(storage.StateResumed), "/home/dev/src/widget"} {
 		if !strings.Contains(inspect.stdout, want) {
 			t.Fatalf("inspect stdout %q does not contain %q", inspect.stdout, want)
 		}

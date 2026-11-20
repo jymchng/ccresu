@@ -37,7 +37,7 @@ resets), `130` interrupted.
 | `inspect` | `inspect <session-id>` | Everything known about one session. The same code as `sessions status`. |
 | `recover` | `recover <session-id> [--message TEXT] [--force]` | Resumes one session now, optionally with a different continuation message. `--force` tries even when the attempt budget is spent. |
 | `retry` | `retry <session-id>` | Retries a session whose attempt budget is spent. |
-| `search-limit` | `search-limit <session-id> [--tail N]` | Reads the newest `--tail` transcript lines (default 25 — the same window the daemon's detect stage reads) and asks the detector whether one of them is a usage-limit banner. When one is, the session parks on the reset the banner names: `RESUMED → USAGE_LIMIT_DETECTED → WAITING_FOR_RESET`, the same two edges a daemon detection takes, so the audit trail cannot tell an operator's search from a pass. The command exists because `RESUMED` is settled: no pass reads that transcript again, so a limit that lands after a resume would otherwise leave the session stuck for ever. Only an idle session can be searched — `RESUMED`, or `RUNNING`, because the operator's assertion that it has gone idle is the authority, and refusing the state the daemon is also reading would make the command's behaviour depend on the daemon's timing; anything else exits 4. Nothing is resumed and nothing is spent — the state machine gives the search no edge to `RESUMING` — and a search that finds nothing writes nothing (no attempt, no transition, no schedule) and still exits 0, because an answer is not a failure. `--json` reports `session_id`, `found`, `state`, `banner`, `known_reset`, `reset_at`, `wait`, `usage_limit_id` and `reason`. |
+| `search-limit` | `search-limit <session-id> [--tail N]` | Reads the newest `--tail` transcript lines (default 25 — the same window the daemon's detect stage reads) and asks the detector whether one of them is a usage-limit banner. When one is, the session parks on the reset the banner names: `RESUMED → DISCOVERED → WAITING_FOR_RESET`, the same two edges a daemon detection takes — the machine has no `RESUMED → WAITING_FOR_RESET` edge, because a session that was just resumed must be observed again before it is parked again, and an operator's search *is* that re-observation — so the audit trail cannot tell an operator's search from a pass. The command exists because `RESUMED` is settled: no pass reads that transcript again, so a limit that lands after a resume would otherwise leave the session stuck for ever. Only an idle session can be searched — `RESUMED`, or `DISCOVERED`, because the operator's assertion that it has gone idle is the authority, and refusing the state the daemon is also reading would make the command's behaviour depend on the daemon's timing; anything else exits 4. Nothing is resumed and nothing is spent — the state machine gives the search no edge to `RESUMING` — and a search that finds nothing writes nothing (no attempt, no transition, no schedule) and still exits 0, because an answer is not a failure. `--json` reports `session_id`, `found`, `state`, `banner`, `known_reset`, `reset_at`, `wait`, `usage_limit_id` and `reason`. |
 | `sessions search-limit` | `sessions search-limit <session-id> [--tail N]` | The `sessions`-namespaced spelling of `search-limit`. Same handler, same flags, same output. |
 | `enable` | `enable <session-id>` | Allows ccresu to recover a session. It is also the undo for `sessions delete`: a deleted session is restored (tombstone removed, row re-created in `DISCOVERED`) before it is enabled. |
 | `disable` | `disable <session-id>` | Stops ccresu from recovering a session. |
@@ -45,7 +45,6 @@ resets), `130` interrupted.
 | `config` | `config init [PATH] [--force]` / `config validate [PATH]` / `config show` | Creates the configuration from the shipped example, validates a file, or prints the effective one. |
 | `doctor` | `doctor` | Checks the environment ccresu runs in. |
 | `serve` | `serve [--addr HOST:PORT]` | Runs the local REST/SSE API (default `server.host:server.port`). |
-| `hook` | `hook < payload.json` | Consumes one Claude Code `Notification` payload from stdin: one bounded observation, at most one `needs_input` notification, nothing else. **Always exits 0 and prints nothing** — its exit code is not a verdict, so a bad payload, a broken configuration, a locked database and an unknown session id are silent no-ops and the poll remains the fallback. See [telegram.md](telegram.md#hearing-about-a-session-that-needs-you) for the settings snippet. |
 | `version` | `version` | Prints version and build metadata. |
 
 `ccresu --version` and `ccresu --help` work without a subcommand.
@@ -65,7 +64,7 @@ ccresu sessions — 3 shown (all)
   SESSION   STATE              NEXT ATTEMPT                    ENABLED  PROJECT                  RUNS IN                            LAST SEEN                NOTE
 > 88dfd995  DISABLED           none (session is not enabled)   no       /home/you/projects/site  -                                  2026-11-13 09:34:43 +08  -
   3f9d1c07  WAITING_FOR_RESET  in 12m40s                       yes      /home/you/projects/demo  -                                  2026-11-13 09:34:43 +08  -
-  4d1f9c2a  RUNNING            none (no usage limit detect...  yes      /home/you/projects/api   /home/you/projects/api/.claude/worktrees/fix-auth  2026-11-13 09:34:43 +08  -
+  4d1f9c2a  RESUMED            none (no usage limit detect...  yes      /home/you/projects/api   /home/you/projects/api/.claude/worktrees/fix-auth  2026-11-13 09:34:43 +08  -
 
 enter detail  n new  x delete  R resume  e enable  d disable  r retry  / filter  a all  ? help  q quit
 ```
@@ -253,7 +252,7 @@ until you bring it back:
 ```console
 $ ccresu sessions delete 3f9d1c07-1111-4222-8333-444455556666
 session:                3f9d1c07-1111-4222-8333-444455556666
-state at deletion:      RETRY_WAIT
+state at deletion:      WAITING_FOR_RESET
 project:                /home/you/projects/demo
 transcript:             /home/you/.claude/projects/-home-you-projects-demo/3f9d1c07-...jsonl
 attempts removed:       3
@@ -352,8 +351,10 @@ A session waiting on a reset shows the instant it was given, with `why:` either
 `waiting for the usage limit to reset` — the reset the CLI named — or
 `polling until the usage limit clears` when the banner carried no time, which is
 why the instant is a poll rather than the reset you read in the message. A
-session in `RETRY_WAIT` shows its stored instant with
-`why: retrying after a failed attempt`.
+session parked by a failed attempt shows its stored instant with
+`why: retrying after a failed attempt` — it is `WAITING_FOR_RESET` like a session
+waiting on a reset, and the column that tells them apart is the instant's origin:
+`retry_at` for a backoff, the stored schedule for a reset.
 
 Above that block are the session's own columns (`state`, `enabled`,
 `recoverable`, `reason`, `last error`, `project`, `transcript`, `type`,

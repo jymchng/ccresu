@@ -381,7 +381,7 @@ func TestVerifyStoreIsUsableFromManyGoroutinesWithoutCorruption(t *testing.T) {
 			}); err != nil {
 				return err
 			}
-			if _, err := store.TransitionSession(ctx, "multi-parent", storage.StateRunning, "step", 0); err != nil {
+			if _, err := store.TransitionSession(ctx, "multi-parent", storage.StateWaitingForReset, "step", 0); err != nil {
 				return err
 			}
 			if _, _, err := store.EnqueueNotification(ctx, storage.Notification{

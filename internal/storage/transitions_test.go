@@ -34,9 +34,9 @@ func TestListTransitionsSinceFollowsTheFeed(t *testing.T) {
 		id    string
 		state storage.State
 	}{
-		{"feed-a", storage.StateRunning},
-		{"feed-b", storage.StateRunning},
-		{"feed-a", storage.StateUsageLimitDetected},
+		{"feed-a", storage.StateResumed},
+		{"feed-b", storage.StateResumed},
+		{"feed-a", storage.StateDiscovered},
 	} {
 		if _, err := store.TransitionSession(ctx, step.id, step.state, "seed", 0); err != nil {
 			t.Fatalf("transition %s -> %s: %v", step.id, step.state, err)
@@ -64,7 +64,7 @@ func TestListTransitionsSinceFollowsTheFeed(t *testing.T) {
 	if len(tail) != 2 {
 		t.Fatalf("got %d trailing transitions, want 2", len(tail))
 	}
-	if tail[0].SessionID != "feed-b" || tail[1].ToState != storage.StateUsageLimitDetected {
+	if tail[0].SessionID != "feed-b" || tail[1].ToState != storage.StateDiscovered {
 		t.Fatalf("unexpected tail: %+v", tail)
 	}
 	if tail[0].FromState != storage.StateDiscovered {

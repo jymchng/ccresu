@@ -71,20 +71,20 @@ func TestSearchLimitParksAResumedSessionUntilTheReset(t *testing.T) {
 		t.Errorf("persisted state = %s, want %s", stored.State, StateWaitingForReset)
 	}
 
-	// The audit trail must show the observation that produced the wait, not a
+	// The audit trail must show the re-observation that produced the wait, not a
 	// jump straight from RESUMED to WAITING_FOR_RESET.
 	transitions, err := store.ListTransitions(context.Background(), sessionA, 0)
 	if err != nil {
 		t.Fatalf("list transitions: %v", err)
 	}
-	var sawDetected bool
+	var sawObserved bool
 	for _, transition := range transitions {
-		if transition.FromState == StateResumed && transition.ToState == StateUsageLimitDetected {
-			sawDetected = true
+		if transition.FromState == StateResumed && transition.ToState == StateDiscovered {
+			sawObserved = true
 		}
 	}
-	if !sawDetected {
-		t.Errorf("no RESUMED -> USAGE_LIMIT_DETECTED transition; got %+v", transitions)
+	if !sawObserved {
+		t.Errorf("no RESUMED -> DISCOVERED transition; got %+v", transitions)
 	}
 	if !strings.Contains(result.Reason, reset.Format(time.RFC3339)) {
 		t.Errorf("reason = %q, want it to name the reset instant", result.Reason)
@@ -137,7 +137,7 @@ func TestSearchLimitWritesNothingWhenNoLimitIsFound(t *testing.T) {
 func TestSearchLimitRefusesASessionThatIsNotIdle(t *testing.T) {
 	for _, state := range []State{
 		StateCompleted, StateDisabled, StateUnrecoverable, StateWaitingForReset,
-		StateSpendCapReached, StateUserTerminated,
+		StateResuming,
 	} {
 		t.Run(string(state), func(t *testing.T) {
 			store := newTestStore(t)
@@ -171,14 +171,15 @@ func TestSearchLimitRefusesASessionThatIsNotIdle(t *testing.T) {
 	}
 }
 
-func TestSearchLimitOnARunningSessionIsAccepted(t *testing.T) {
-	// RUNNING is not settled, so a search is allowed there too: the operator's
-	// assertion that the session is idle is the authority, and refusing the state
-	// the daemon also reads would make the command depend on the daemon's timing.
+func TestSearchLimitOnADiscoveredSessionIsAccepted(t *testing.T) {
+	// DISCOVERED is not settled either, so a search is allowed there too: the
+	// operator's assertion that the session is idle is the authority, and
+	// refusing the state the daemon also reads would make the command depend on
+	// the daemon's timing.
 	store := newTestStore(t)
 	seedSession(t, store, storage.Session{
 		ID:          sessionA,
-		State:       StateRunning,
+		State:       StateDiscovered,
 		Enabled:     true,
 		Recoverable: true,
 	})
@@ -233,32 +234,30 @@ func TestSearchLimitRejectsAnUnknownSession(t *testing.T) {
 
 // TestARescanCanNeverResume is the invariant the automatic rescan rests on.
 //
-// Every state a scan reads has an edge to USAGE_LIMIT_DETECTED, and that state
-// has the one edge on to WAITING_FOR_RESET, so a scan can park a session and the
-// session cannot then be stuck. From RESUMED the walk is deliberately two edges
-// rather than one — a resumed session may not reach WAITING_FOR_RESET directly —
-// so the audit trail always records the observation that produced the wait.
-// No state the scan reads has an edge to RESUMING, so finding a limit can never
-// spend. RETRY_WAIT keeps its own pre-existing direct edge to WAITING_FOR_RESET:
-// a backoff that retries into a refusal parks on the reset the refusal named,
-// which is a different path from a transcript scan and is asserted elsewhere.
-func TestARescanCanNeverResume(t *testing.T) {
-	read := []State{StateResumed, StateRetryWait, StateWaitingForInput}
-	for _, from := range read {
-		if !CanTransition(from, StateUsageLimitDetected) {
-			t.Errorf("%s -> USAGE_LIMIT_DETECTED is not legal, so a rescan could not park it", from)
-		}
-		if !CanTransition(StateUsageLimitDetected, StateWaitingForReset) {
-			t.Errorf("USAGE_LIMIT_DETECTED -> WAITING_FOR_RESET is not legal, so %s would be stuck once parked", from)
-		}
-		if CanTransition(from, StateResuming) {
-			t.Errorf("%s -> RESUMING is legal, so a rescan could spend", from)
-		}
+// TestARescanParksOnlyAfterObserving pins the machine's scan contract: a scan
+// that parses a banner parks the session on the reset, and a resumed session is
+// re-observed before it may be parked again.
+//
+// The second half is what keeps a stale banner from driving a park per pass: the
+// banner that parked a session is still inside the transcript tail the detector
+// reads, so RESUMED must reach the park only through DISCOVERED.
+func TestARescanParksOnlyAfterObserving(t *testing.T) {
+	if !CanTransition(StateDiscovered, StateWaitingForReset) {
+		t.Error("DISCOVERED -> WAITING_FOR_RESET is not legal, so a scan could not park a session")
 	}
-	// A settled session has no pass that reads its transcript, so the observation
-	// is the whole point: the shortcut would leave no audit row saying what was
-	// found.
 	if CanTransition(StateResumed, StateWaitingForReset) {
 		t.Error("RESUMED -> WAITING_FOR_RESET is legal, so the observation behind the wait could be skipped")
+	}
+	if !CanTransition(StateResumed, StateDiscovered) {
+		t.Error("RESUMED -> DISCOVERED is not legal, so a resumed session could never be re-observed")
+	}
+	// A scan never hands a continuation over. The only other edge into RESUMING
+	// is DISCOVERED -> RESUMING, and that one is the operator's (`ccresu
+	// recover`, `ccresu retry`), never a transcript read.
+	if CanTransition(StateResumed, StateResuming) {
+		t.Error("RESUMED -> RESUMING is legal, so a settled session could be resumed again")
+	}
+	if !CanTransition(StateWaitingForReset, StateResuming) {
+		t.Error("WAITING_FOR_RESET -> RESUMING is not legal, so a parked session could never be resumed")
 	}
 }

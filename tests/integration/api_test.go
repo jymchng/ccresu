@@ -69,8 +69,8 @@ func TestServeServesTheLiveAPIUntilInterrupted(t *testing.T) {
 	if first["id"] != seededSessionID {
 		t.Fatalf("session id = %v, want %q", first["id"], seededSessionID)
 	}
-	if first["state"] != string(storage.StateRunning) {
-		t.Fatalf("session state = %v, want RUNNING", first["state"])
+	if first["state"] != string(storage.StateResumed) {
+		t.Fatalf("session state = %v, want RESUMED", first["state"])
 	}
 
 	single := getJSON(t, client, base+apiPrefix+"/sessions/"+seededSessionID, nil)

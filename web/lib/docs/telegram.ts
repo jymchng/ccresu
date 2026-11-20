@@ -25,7 +25,7 @@ export const telegramDoc: DocPage = {
     {
       kind: "code",
       label: "Prefer the environment for the token",
-      code: `export CCRESU_TELEGRAM__BOT_TOKEN="123456:ABC-DEF..."\n\n# ~/.config/ccresu/config.yaml\ntelegram:\n  enabled: true\n  chat_id: "123456789"\n  parse_mode: HTML\n  notify_limit_detected: true\n  notify_waiting: false\n  notify_recovery_started: true\n  notify_recovery_success: true\n  notify_recovery_failure: true\n  notify_permanent_failure: true\n  notify_session_completed: true\n  notify_needs_input: false`,
+      code: `export CCRESU_TELEGRAM__BOT_TOKEN="123456:ABC-DEF..."\n\n# ~/.config/ccresu/config.yaml\ntelegram:\n  enabled: true\n  chat_id: "123456789"\n  parse_mode: HTML\n  notify_limit_detected: true\n  notify_waiting: false\n  notify_recovery_started: true\n  notify_recovery_success: true\n  notify_recovery_failure: true\n  notify_permanent_failure: true\n  notify_session_completed: true`,
     },
     {
       kind: "p",
@@ -46,7 +46,6 @@ export const telegramDoc: DocPage = {
         ["recovery failure", "An attempt failed and another one is scheduled."],
         ["permanent failure", "The attempt budget is spent or the error is not retryable."],
         ["session completed", "The session finished normally, so no recovery is needed."],
-        ["needs input", "A session is blocked on a human (a permission prompt, a sandbox decision, an answer, an expired login). Off by default; an installed `ccresu hook` makes it arrive in seconds instead of at the next poll."],
       ],
     },
     {

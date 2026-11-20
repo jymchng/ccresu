@@ -188,11 +188,9 @@ type statusReport struct {
 // stateOrder is the stable order states are listed in, so a report does not
 // reshuffle between calls.
 var stateOrder = []storage.State{
-	storage.StateDiscovered, storage.StateRunning, storage.StateUsageLimitDetected,
-	storage.StateWaitingForReset, storage.StateResetTimeReached, storage.StateCheckingSession,
-	storage.StateCheckingLimit, storage.StateResuming, storage.StateResumed,
-	storage.StateRetryWait, storage.StateCompleted,
-	storage.StateUserTerminated, storage.StateDisabled, storage.StateUnrecoverable,
+	storage.StateDiscovered, storage.StateWaitingForReset,
+	storage.StateResuming, storage.StateResumed,
+	storage.StateCompleted, storage.StateDisabled, storage.StateUnrecoverable,
 }
 
 // sortedStates renders the state histogram in the documented order.

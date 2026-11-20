@@ -205,7 +205,7 @@ func TestRecoverRefusesToPretendAStorageFailureSucceeded(t *testing.T) {
 		},
 		{
 			name:    "an exhausted budget cannot be recorded",
-			session: func() storage.Session { s := recoverableSession(sessionA); s.State = StateRetryWait; return s }(),
+			session: func() storage.Session { s := recoverableSession(sessionA); s.State = StateWaitingForReset; return s }(),
 			fault:   [2]any{"TransitionSession", 1},
 			prepare: budgetSpent,
 			mutate:  func(cfg *Config) { cfg.MaxAttempts = 1 },
@@ -213,27 +213,26 @@ func TestRecoverRefusesToPretendAStorageFailureSucceeded(t *testing.T) {
 		},
 		{
 			name:    "the interrupted attempt cannot be read",
-			session: func() storage.Session { s := recoverableSession(sessionA); s.State = StateRetryWait; return s }(),
+			session: func() storage.Session { s := recoverableSession(sessionA); s.State = StateWaitingForReset; return s }(),
 			fault:   [2]any{"LatestAttempt", 0},
 			prepare: staleAttempt,
 			wantErr: "injected storage failure",
 		},
 		{
-			name:    "the first transition cannot be written",
+			// The pre-flight checks all run in the state the pass found the
+			// session in, so the first transition a resume writes is RESUMING.
+			name:    "the RESUMING transition cannot be written",
 			session: recoverableSession(sessionA),
 			fault:   [2]any{"TransitionSession", 1},
 			wantErr: "injected storage failure",
 		},
 		{
-			name:    "the limit recheck transition cannot be written",
+			// RESUMING is spent immediately before the continuation is handed
+			// over, so the RESUMED the resume is recorded as is the second
+			// transition.
+			name:    "the RESUMED transition cannot be written",
 			session: recoverableSession(sessionA),
 			fault:   [2]any{"TransitionSession", 2},
-			wantErr: "injected storage failure",
-		},
-		{
-			name:    "the resume transition cannot be written",
-			session: recoverableSession(sessionA),
-			fault:   [2]any{"TransitionSession", 3},
 			wantErr: "injected storage failure",
 		},
 		{
@@ -249,15 +248,9 @@ func TestRecoverRefusesToPretendAStorageFailureSucceeded(t *testing.T) {
 			wantErr: "finish attempt",
 		},
 		{
-			name:    "the RESUMED transition cannot be written",
-			session: recoverableSession(sessionA),
-			fault:   [2]any{"TransitionSession", 4},
-			wantErr: "injected storage failure",
-		},
-		{
 			name:    "the retry wait cannot be written",
 			session: recoverableSession(sessionA),
-			fault:   [2]any{"TransitionSession", 4},
+			fault:   [2]any{"TransitionSession", 2},
 			resume: func(id, _ string) (claude.ResumeResult, error) {
 				return claude.ResumeResult{}, errors.New("connection reset by peer")
 			},
@@ -266,7 +259,7 @@ func TestRecoverRefusesToPretendAStorageFailureSucceeded(t *testing.T) {
 		{
 			name:    "the permanent failure cannot be written",
 			session: recoverableSession(sessionA),
-			fault:   [2]any{"TransitionSession", 4},
+			fault:   [2]any{"TransitionSession", 2},
 			resume: func(string, string) (claude.ResumeResult, error) {
 				return claude.ResumeResult{}, claude.ErrCLIUnavailable
 			},
@@ -297,7 +290,7 @@ func TestRecoverRefusesToPretendAStorageFailureSucceeded(t *testing.T) {
 		},
 		{
 			name:    "an interrupted attempt that cannot be closed",
-			session: func() storage.Session { s := recoverableSession(sessionA); s.State = StateRetryWait; return s }(),
+			session: func() storage.Session { s := recoverableSession(sessionA); s.State = StateWaitingForReset; return s }(),
 			fault:   [2]any{"FinishAttempt", 0},
 			prepare: staleAttempt,
 			wantErr: "close interrupted attempt",
@@ -307,7 +300,7 @@ func TestRecoverRefusesToPretendAStorageFailureSucceeded(t *testing.T) {
 			// TransitionSession — the one that persists the new state and its history
 			// together — not the bare RecordTransition beside it.
 			name:    "an interrupted attempt whose transition cannot be written",
-			session: func() storage.Session { s := recoverableSession(sessionA); s.State = StateRetryWait; return s }(),
+			session: func() storage.Session { s := recoverableSession(sessionA); s.State = StateWaitingForReset; return s }(),
 			fault:   [2]any{"TransitionSession", 0},
 			prepare: staleAttempt,
 			wantErr: "record interrupted attempt",
@@ -449,8 +442,10 @@ func TestRecoverRecognisesAnAlreadyResumedSessionEvenIfBookkeepingFails(t *testi
 func TestRecoverRefusesToClaimAnAlreadyResumedSessionItCannotRecord(t *testing.T) {
 	inner := newTestStore(t)
 	seedSession(t, inner, recoverableSession(sessionA))
-	// 1 = CHECKING_SESSION, 2 = RESUMED on the already-resumed shortcut.
-	faulty := newFaultStore(inner, "TransitionSession", 2)
+	// 1 = RESUMED. The machine has no "checking" beat any more: the pass reads
+	// the status and the listing in the state it found the session in, so the
+	// shortcut writes exactly one transition.
+	faulty := newFaultStore(inner, "TransitionSession", 1)
 	provider := &providerStub{statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
 		status := statusFor(sessionID, 14, 280)
 		status.Running = true
@@ -470,15 +465,22 @@ func TestRecoverRefusesToClaimAnAlreadyResumedSessionItCannotRecord(t *testing.T
 	}
 }
 
-// TestRecoverRefusesToClaimAWaitItCannotRecord covers the sibling case one step
+// TestRecoverRefusesToClaimAWaitItCannotRecord covers the sibling case a step
 // later: a limit that has not cleared must end in WAITING_FOR_RESET, and when
 // that transition cannot be written the caller must be told rather than be
 // handed a state the database does not hold.
+//
+// The session is seeded in DISCOVERED on purpose: the park is then a real state
+// change, written through TransitionSession, and the assertion below can tell a
+// claimed wait apart from the state the session was already in.
 func TestRecoverRefusesToClaimAWaitItCannotRecord(t *testing.T) {
 	inner := newTestStore(t)
-	seedSession(t, inner, recoverableSession(sessionA))
-	// 1 = CHECKING_SESSION, 2 = CHECKING_LIMIT, 3 = WAITING_FOR_RESET.
-	faulty := newFaultStore(inner, "TransitionSession", 3)
+	discovered := recoverableSession(sessionA)
+	discovered.State = StateDiscovered
+	seedSession(t, inner, discovered)
+	// The limit check runs before RESUMING is entered, so the park is the only
+	// transition the pass writes.
+	faulty := newFaultStore(inner, "TransitionSession", 1)
 	manager := testManager(t, faulty, growthProvider(10, 12), func(cfg *Config) {
 		cfg.LimitRecheck = func(context.Context, string) (bool, error) { return false, nil }
 	})
@@ -588,12 +590,12 @@ func TestStateWalkerReportsAPersistenceFailure(t *testing.T) {
 	seedSession(t, inner, recoverableSession(sessionA))
 	walker := &stateWalker{
 		ctx: context.Background(), store: newFaultStore(inner, "TransitionSession", 0),
-		sessionID: sessionA, current: StateResetTimeReached,
+		sessionID: sessionA, current: StateWaitingForReset,
 	}
-	if err := walker.move(StateCheckingSession, "checking", 0); !errors.Is(err, errInjected) {
+	if err := walker.move(StateResuming, "resuming", 0); !errors.Is(err, errInjected) {
 		t.Fatalf("move = %v, want the injected failure", err)
 	}
-	if walker.current != StateResetTimeReached {
+	if walker.current != StateWaitingForReset {
 		t.Errorf("walker state = %s, want it unchanged when the write failed", walker.current)
 	}
 
@@ -700,13 +702,13 @@ func TestFaultStoreOnlyFailsTheRequestedCall(t *testing.T) {
 	faulty := newFaultStore(inner, "TransitionSession", 2)
 	ctx := context.Background()
 
-	if _, err := faulty.TransitionSession(ctx, sessionA, StateCheckingSession, "first", 0); err != nil {
+	if _, err := faulty.TransitionSession(ctx, sessionA, StateWaitingForReset, "first", 0); err != nil {
 		t.Fatalf("first call = %v, want it to succeed", err)
 	}
-	if _, err := faulty.TransitionSession(ctx, sessionA, StateCheckingLimit, "second", 0); !errors.Is(err, errInjected) {
+	if _, err := faulty.TransitionSession(ctx, sessionA, StateResuming, "second", 0); !errors.Is(err, errInjected) {
 		t.Fatalf("second call = %v, want the injected failure", err)
 	}
-	if _, err := faulty.TransitionSession(ctx, sessionA, StateResuming, "third", 0); err != nil {
+	if _, err := faulty.TransitionSession(ctx, sessionA, StateResumed, "third", 0); err != nil {
 		t.Fatalf("third call = %v, want it to succeed again", err)
 	}
 	if got := faulty.count("TransitionSession"); got != 3 {

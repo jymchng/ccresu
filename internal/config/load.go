@@ -94,7 +94,13 @@ func parse(data []byte, lookup func(string) (string, bool)) (*Config, error) {
 func parseWithin(data []byte, lookup func(string) (string, bool), sourcePath string) (*Config, error) {
 	cfg := Defaults()
 
-	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	// A key an older release documented is dropped before the strict decode, so
+	// an upgrade does not leave a configuration file unloadable. Every other
+	// unknown key still fails below.
+	pruned, retired := pruneRetiredKeys(data)
+	cfg.retired = retired
+
+	decoder := yaml.NewDecoder(bytes.NewReader(pruned))
 	// Unknown keys are rejected rather than silently ignored, so a typo such as
 	// `max_attempt` cannot quietly leave the default in place.
 	decoder.KnownFields(true)
@@ -114,6 +120,103 @@ func parseWithin(data []byte, lookup func(string) (string, bool), sourcePath str
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// retiredKeys names configuration keys that a previous release documented and
+// this one no longer has, addressed by their path in the document.
+//
+// A file written against the older release still carries them, and the strict
+// decode would then refuse it with `field notify_needs_input not found in type
+// config.Telegram` — so a plain upgrade would leave ccresu unable to start, over
+// a key that no longer means anything. Dropping exactly these keys keeps the
+// upgrade working while every other unknown key (including a typo of a retired
+// one) is still rejected: a key that never existed must not silently leave a
+// default in place.
+//
+// Entries are permanent. A key listed here was withdrawn in a released version,
+// so removing the entry would break the upgrade it exists to smooth.
+var retiredKeys = [][]string{
+	// 0.9.0: a `blocked` session is resumed rather than announced, so no
+	// needs-input message exists and nothing reads its switch.
+	{"telegram", "notify_needs_input"},
+}
+
+// pruneRetiredKeys returns data without the retiredKeys it carries, and the
+// dotted paths it removed, in document order.
+//
+// A document that does not parse, or whose shape never reaches a retired key, is
+// returned unchanged: the strict decode that follows owns malformed YAML and
+// unknown-key reporting, and this pass may only take a key away, never add one
+// or change a value it keeps.
+func pruneRetiredKeys(data []byte) ([]byte, []string) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return data, nil
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return data, nil
+	}
+	var removed []string
+	for _, path := range retiredKeys {
+		if dropKeyPath(doc.Content[0], path) {
+			removed = append(removed, strings.Join(path, "."))
+		}
+	}
+	if len(removed) == 0 {
+		return data, nil
+	}
+	pruned, err := yaml.Marshal(&doc)
+	if err != nil {
+		// The document parsed, so this is unreachable; keeping the original bytes
+		// means the strict decode still reports something true about the file.
+		return data, nil
+	}
+	return pruned, removed
+}
+
+// dropKeyPath deletes every key named path[0] from the mapping node, recursing
+// for the rest of path, and reports whether it found one.
+//
+// Only mappings are followed and only an exact key name matches at each step, so
+// `telegram.notify_needs_inputt` and a top-level `notify_needs_input` are left
+// for the strict decode to reject.
+func dropKeyPath(node *yaml.Node, path []string) bool {
+	if node == nil || len(path) == 0 || node.Kind != yaml.MappingNode {
+		return false
+	}
+	found := false
+	kept := node.Content[:0]
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key, value := node.Content[i], node.Content[i+1]
+		if key.Value == path[0] {
+			if len(path) == 1 {
+				found = true
+				continue
+			}
+			if dropKeyPath(value, path[1:]) {
+				found = true
+			}
+		}
+		kept = append(kept, key, value)
+	}
+	node.Content = kept
+	return found
+}
+
+// RetiredKeys reports the configuration keys the loaded document carried that
+// this release no longer has, as dotted paths such as
+// `telegram.notify_needs_input`. They were ignored; Warnings explains that once
+// so an operator does not wonder why a setting stopped working.
+//
+// It is empty for a file that carries none, and for a configuration built in
+// code.
+func (c Config) RetiredKeys() []string {
+	if len(c.retired) == 0 {
+		return nil
+	}
+	out := make([]string, len(c.retired))
+	copy(out, c.retired)
+	return out
 }
 
 // ResolvePath determines which file Load should read.

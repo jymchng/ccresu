@@ -183,10 +183,6 @@ type harness struct {
 	terminal   bool
 	keys       string
 	keysReader io.Reader
-	// stdin is the payload `ccresu hook` reads. It is a string rather than a
-	// reader because deps() is called once per invocation and a consumed reader
-	// would make the second call read nothing.
-	stdin string
 
 	buildErr  error
 	loadErr   error
@@ -257,7 +253,7 @@ func newHarnessWith(t *testing.T, limits recovery.SpendLimits) *harness {
 		// The observer logs its own failures instead of returning them, so it gets
 		// the same discarded logger the runtime carries: a test that deliberately
 		// breaks the notifier should not print to the suite's output.
-		Observer: notificationObserver(notifier, store, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		Observer: notificationObserver(notifier, slog.New(slog.NewTextHandler(io.Discard, nil))),
 	})
 	if err != nil {
 		t.Fatalf("recovery manager: %v", err)
@@ -333,7 +329,6 @@ func (h *harness) deps() Deps {
 		// are reachable without a terminal.
 		IsTerminal: func(io.Writer) bool { return h.terminal },
 		TUIInput:   h.tuiInput(),
-		Stdin:      stringReader(h.stdin),
 	}
 }
 
@@ -492,9 +487,15 @@ func (h *harness) seedSession(t *testing.T, id string, mutate func(*storage.Sess
 		ProjectPath:    "/work/project",
 		TranscriptPath: "/home/u/.claude/projects/-work-project/" + id + ".jsonl",
 		Type:           storage.SessionTypeInteractive,
-		State:          storage.StateRunning,
-		Enabled:        true,
-		Recoverable:    true,
+		// DISCOVERED is the ordinary shape a test starts from: a known session
+		// whose transcript the scan reads and which no pass has parked yet.
+		//
+		// RUNNING, which this seed used to be, was retired by the collapse and is
+		// migrated into RESUMED, but RESUMED is Settled: seeding it here would
+		// quietly turn every recovery test into a test of the settled shortcut.
+		State:       storage.StateDiscovered,
+		Enabled:     true,
+		Recoverable: true,
 	}
 	if mutate != nil {
 		mutate(&session)

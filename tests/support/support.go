@@ -111,14 +111,13 @@ func SeedSession(t testing.TB, store *storage.Store, id string, state storage.St
 	if _, err := store.UpsertSession(ctx, session); err != nil {
 		t.Fatalf("upsert %s: %v", id, err)
 	}
-	// DISCOVERED -> RUNNING -> USAGE_LIMIT_DETECTED -> WAITING_FOR_RESET ->
-	// RESET_TIME_REACHED. Stopping early is fine; the earlier states are only
-	// visited to keep the persisted history truthful.
+	// DISCOVERED -> WAITING_FOR_RESET -> RESUMING -> RESUMED. Stopping early is
+	// fine; the earlier beats are only visited to keep the persisted history
+	// truthful, and this is the only path the seven-state machine defines.
 	for _, next := range []storage.State{
-		storage.StateRunning,
-		storage.StateUsageLimitDetected,
 		storage.StateWaitingForReset,
-		storage.StateResetTimeReached,
+		storage.StateResuming,
+		storage.StateResumed,
 	} {
 		if session.State == state {
 			break

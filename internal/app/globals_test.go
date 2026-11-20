@@ -39,11 +39,11 @@ func globalFlagForms(configPath string) []struct {
 // requires that neither position is rejected as a usage error.
 func TestEveryCommandAcceptsTheGlobalFlagsInEitherPosition(t *testing.T) {
 	h := newHarness(t)
-	// A session in RESET_TIME_REACHED is the state a command is written for, so
+	// A session in WAITING_FOR_RESET is the state a command is written for, so
 	// the commands that need an id get past their argument checks and the exit
 	// code reflects the command, not the missing argument.
 	const id = "11111111-1111-4111-8111-111111111111"
-	h.seedSession(t, id, func(s *storage.Session) { s.State = storage.StateResetTimeReached })
+	h.seedSession(t, id, func(s *storage.Session) { s.State = storage.StateWaitingForReset })
 
 	commands := []struct {
 		name string
@@ -66,7 +66,6 @@ func TestEveryCommandAcceptsTheGlobalFlagsInEitherPosition(t *testing.T) {
 		{"config show", []string{"config", "show"}},
 		{"doctor", []string{"doctor"}},
 		{"serve", []string{"serve"}},
-		{"hook", []string{"hook"}},
 		{"version", []string{"version"}},
 	}
 	assertCommandsCovered(t, commands)

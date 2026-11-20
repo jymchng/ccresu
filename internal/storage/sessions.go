@@ -230,18 +230,11 @@ func (s *Store) SetSessionEnabled(ctx context.Context, id string, enabled bool) 
 			target = StateDisabled
 		}
 		now := timeToDB(s.now().UTC())
-		// A pending retry belongs to RETRY_WAIT, so disabling a waiting session
-		// has to drop the instant with the state. Nothing here can move a
-		// session *into* RETRY_WAIT, so any target other than RETRY_WAIT leaves
-		// no wait behind; keeping the column would let a disabled session carry
-		// a retry instant that nothing will ever act on.
-		clearRetry := target != StateRetryWait
-		retryAt := "retry_at"
-		if clearRetry {
-			retryAt = "NULL"
-		}
+		// No state owns a retry instant any more, so a state change always drops
+		// it: a disabled session that kept one would carry a wait nothing will
+		// ever act on, and `ccresu next` would report it as scheduled.
 		result, err := tx.ExecContext(ctx,
-			`UPDATE sessions SET enabled = ?, state = ?, retry_at = `+retryAt+`, updated_at = ? WHERE id = ?`,
+			`UPDATE sessions SET enabled = ?, state = ?, retry_at = NULL, updated_at = ? WHERE id = ?`,
 			boolToInt(enabled), string(target), now, id)
 		if err != nil {
 			return fmt.Errorf("set session %s enabled=%t: %w", id, enabled, err)
@@ -278,9 +271,10 @@ func enabledReason(enabled bool) string {
 // SetSessionRetryAt records the instant a retrying session will be tried again:
 // the backoff ccresu computed for it, written down rather than re-derived.
 //
-// Only RETRY_WAIT uses it: every other state either has a Schedule row or is not
-// waiting at all. A zero instant clears the column, which is what TransitionSession
-// does whenever a session leaves RETRY_WAIT.
+// It is a schedule, not a state: a session waiting out a failed resume keeps its
+// ordinary state and carries this instant beside it, so `ccresu next` can report
+// when it will be looked at again. A zero instant clears the column, which is
+// what TransitionSession does on every move.
 func (s *Store) SetSessionRetryAt(ctx context.Context, id string, at time.Time) error {
 	if s == nil || s.db == nil {
 		return ErrClosed
@@ -335,15 +329,11 @@ func (s *Store) TransitionSession(ctx context.Context, id string, to State, reas
 		if affected == 0 {
 			return fmt.Errorf("%w: session %s", ErrNotFound, id)
 		}
-		// The retry wait belongs to RETRY_WAIT and to nothing else: leaving that
-		// state means the wait is over, so the column is cleared here rather
-		// than left to be stale. Entering RETRY_WAIT leaves it alone, because
-		// the caller writes the instant it computed immediately afterwards.
-		if to != StateRetryWait {
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE sessions SET retry_at = NULL WHERE id = ?`, id); err != nil {
-				return fmt.Errorf("clear session %s retry instant: %w", id, err)
-			}
+		// No state owns a retry instant any more, so every transition clears it:
+		// a stale value would otherwise outlive the park that set it.
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE sessions SET retry_at = NULL WHERE id = ?`, id); err != nil {
+			return fmt.Errorf("clear session %s retry instant: %w", id, err)
 		}
 		transition = Transition{
 			SessionID:  id,
