@@ -55,7 +55,7 @@ downloads `ccresu_<version>_windows_<arch>.zip` plus `checksums.txt`, verifies t
 sha256 before extracting, installs `ccresu.exe` into the prefix, adds the prefix
 to the user `PATH`, and writes `%APPDATA%\ccresu\config.yaml` mode-inherited from
 your profile (the directory is yours alone). It takes `-Version`, `-Prefix`,
-`-BaseUrl`, `-Force`, `-DryRun` and `-NoPathUpdate`, and the piped one-liner takes
+`-BaseUrl`, `-Force` and `-NoPathUpdate`, and the piped one-liner takes
 no arguments, so set `CCRESU_VERSION`, `CCRESU_PREFIX` or `CCRESU_BASE_URL` in the
 environment first.
 
@@ -66,21 +66,11 @@ environment first.
 | `--version 0.1.0` | Install a specific release instead of the newest one. |
 | `--prefix DIR` | Install the binary somewhere other than `~/.local/bin`. Must be absolute. |
 | `--systemd` | Also install and enable `~/.config/systemd/user/ccresu.service`. |
-| `--dry-run` | Print every action (including the resolved version and download URLs) and change nothing. |
 | `--force` | Reinstall even if the installed binary already reports that version. |
 
 Environment equivalents: `CCRESU_VERSION`, `CCRESU_PREFIX`, and
 `CCRESU_BASE_URL` (point the downloads at a mirror or a local stand-in;
 `CCRESU_ALLOW_ROOT=1` overrides the root refusal, which you should not need).
-
-### Check before you commit
-
-```bash
-bash install.sh --dry-run --version 0.1.0
-```
-
-The dry run performs platform detection and version resolution, prints the
-exact URLs it would fetch and every file it would create, and touches nothing.
 
 ---
 
@@ -301,7 +291,7 @@ silently would destroy your recovery history. `--purge` removes
 `~/.config/ccresu`, `~/.local/share/ccresu` and `~/.local/state/ccresu`.
 
 `--keep-service` leaves the systemd unit in place (useful when you are only
-changing the binary), and `--dry-run` prints the plan without doing anything.
+changing the binary).
 
 ---
 

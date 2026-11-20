@@ -20,14 +20,7 @@ Goal paused · usage limit reached · send a message after it resets
 
 ## Install
 
-One line, on Linux or macOS (`amd64`/`arm64`). Preview it first — `--dry-run`
-prints every action and downloads nothing:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/jymchng/ccresu/main/scripts/install.sh | bash -s -- --dry-run
-```
-
-Then, when the plan looks right, the install itself:
+One line, on Linux or macOS (`amd64`/`arm64`):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jymchng/ccresu/main/scripts/install.sh | bash
@@ -46,11 +39,10 @@ The Windows installer does the same work: it resolves the release, downloads
 adds that directory to your user `PATH`, and writes `%APPDATA%\ccresu\config.yaml`
 from the example shipped in the archive. A piped script has no arguments, so
 `CCRESU_VERSION` (pin a release), `CCRESU_PREFIX` and `CCRESU_BASE_URL` (a mirror)
-are read from the environment. From a checkout the script takes flags — preview
-with `-DryRun`, which changes nothing either:
+are read from the environment. From a checkout the script takes flags:
 
 ```powershell
-pwsh -File scripts/install.ps1 -Version 0.1.0 -DryRun
+pwsh -File scripts/install.ps1 -Version 0.1.0
 ```
 
 Reinstall a version you already have with `-Force`:
@@ -74,14 +66,13 @@ Flags go after `-s --`, for example
 | `--version VER` | Install a specific release (e.g. `0.1.0` or `v0.1.0`). Default: the newest published release. |
 | `--prefix DIR` | Install the binary here. Default: `$HOME/.local/bin`. |
 | `--systemd` | Also install and enable the user-level systemd unit. |
-| `--dry-run` | Print the actions without downloading or changing anything. |
 | `--force` | Reinstall even when the same version is already present. |
 | `-h`, `--help` | Show the help. |
 
 It also reads `CCRESU_VERSION`, `CCRESU_PREFIX`, `CCRESU_BASE_URL` (a mirror or
 an air-gapped test) and `CCRESU_ALLOW_ROOT`. The Windows script reads
 `CCRESU_VERSION`, `CCRESU_PREFIX` and `CCRESU_BASE_URL` for the same reasons, and
-`-Version`, `-Prefix`, `-BaseUrl`, `-Force`, `-DryRun`, `-NoPathUpdate` from a
+`-Version`, `-Prefix`, `-BaseUrl`, `-Force`, `-NoPathUpdate` from a
 checkout.
 
 Read the scripts before running them, if you prefer: they are

@@ -4,6 +4,29 @@ All notable changes to ccresu are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2] - 2026-11-20
+
+A documentation release. The installation guides no longer walk a reader through
+a preview; they state the one line that installs, and that is the whole of it.
+No binary, schema, configuration key, command or flag changed, and both
+installers still accept a dry run for anyone who reaches for it.
+
+### Changed
+
+- **The installation guides document the install, not a rehearsal.** The README,
+  `docs/deployment.md`, `docs/releases.md`, `docs/upgrade.md`,
+  `docs/delivery-report.md` and the website's Installation page each carried a
+  dry-run step — `bash -s -- --dry-run`, `install.sh --dry-run`, `-DryRun` —
+  that printed the plan before the real command. All of them are gone, with the
+  `--dry-run` rows that documented them in the install flag tables. What is left
+  is one line per platform, pinned or newest.
+- **The site stops publishing a preview snippet.** `unixPreview` left
+  `web/lib/install-commands.json`, so the rendered Installation page has no
+  dry-run block and `web/tests/install-commands.test.tsx` no longer asserts one.
+  The workflow job that executed that snippet is now the "Pinned one-liner" job:
+  it still proves the pinned command installs the version it names, which is the
+  only one-liner it runs.
+
 ## [0.9.1] - 2026-11-20
 
 A patch release for one refusal that should never have existed. `ccresu

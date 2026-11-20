@@ -88,8 +88,8 @@ jobs:
           test -f "$HOME/.config/ccresu/config.yaml"
           printf 'installed: %s\n' "$binary"
 
-  linux-pinned-and-preview:
-    name: Pinned and dry-run one-liners
+  linux-pinned:
+    name: Pinned one-liner
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -97,22 +97,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-
-      - name: The dry run downloads nothing and installs nothing
-        shell: bash
-        run: |
-          set -euo pipefail
-          command="$(node scripts/install-one-liner.mjs unixPreview)"
-          printf 'running: %s\n' "$command"
-          # A throwaway HOME: if the preview writes, this notices.
-          export HOME
-          HOME="$(mktemp -d)"
-          output="$(bash -c "$command")"
-          printf '%s\n' "$output"
-          # Same trap as the version step: match the captured text instead of
-          # piping into a reader that may close the pipe early.
-          grep -q "dry-run" <<<"$output"
-          test ! -e "$HOME/.local/bin/ccresu"
 
       - name: The pinned one-liner installs the version it names
         shell: bash

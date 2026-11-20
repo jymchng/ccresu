@@ -67,8 +67,6 @@ describe("install commands", () => {
     expect(renderInstallCommand("unixPinned", "1.2.3")).toBe(
       `curl -fsSL ${installScripts.unix} | CCRESU_VERSION=1.2.3 bash`,
     );
-    // The dry run changes nothing and is still one line.
-    expect(renderInstallCommand("unixPreview")).toContain("--dry-run");
 
     expect(renderInstallCommand("windows")).toBe(
       `irm ${installScripts.windows} | iex`,
@@ -165,7 +163,6 @@ describe("install commands", () => {
 
     // The documented commands are the rendered commands, not parallel copies.
     expect(blocks).toContain(renderInstallCommand("unix", version));
-    expect(blocks).toContain(renderInstallCommand("unixPreview", version));
     expect(blocks).toContain(renderInstallCommand("unixPinned", version));
     expect(blocks).toContain(renderInstallCommand("windows", version));
     expect(blocks).toContain(renderInstallCommand("windowsPinned", version));

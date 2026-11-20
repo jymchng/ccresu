@@ -80,7 +80,6 @@ That ordering is the reason a release can be downloaded over a hostile network
 without handing it code execution.
 
 ```bash
-./scripts/install.sh --dry-run --version 0.1.0   # prints URLs and actions only
 ./scripts/install.sh --version 0.1.0             # pinned install
 ./scripts/install.sh                             # newest release
 ```

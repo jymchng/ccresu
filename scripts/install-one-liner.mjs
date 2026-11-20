@@ -13,7 +13,7 @@
 //   node scripts/install-one-liner.mjs <name> [--version X]
 //   node scripts/install-one-liner.mjs --list
 //
-// Names: unix, unixPreview, unixPinned, windows, windowsPinned, go, source.
+// Names: unix, unixPinned, windows, windowsPinned, go, source.
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,7 +23,7 @@ const specPath = join(here, "..", "web", "lib", "install-commands.json");
 const spec = JSON.parse(readFileSync(specPath, "utf8"));
 
 /** The fallback release; the site passes the version it resolved instead. */
-const FALLBACK_VERSION = "0.9.1";
+const FALLBACK_VERSION = "0.9.2";
 
 function fail(message) {
   process.stderr.write(`install-one-liner: ${message}\n`);

@@ -50,15 +50,6 @@ export function createInstallationDoc(
     },
     {
       kind: "p",
-      text: "Preview it first if you prefer: the dry run prints every action and downloads nothing.",
-    },
-    {
-      kind: "code",
-      label: "Preview, changes nothing",
-      code: renderInstallCommand("unixPreview"),
-    },
-    {
-      kind: "p",
       text: `Pin a release by putting the version in the same line. The one on this page is \`${version}\`, the newest published release when the page was built.`,
     },
     {

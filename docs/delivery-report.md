@@ -186,8 +186,3 @@ go test -race ./...
 make cover-check
 cd web && npm ci && npm run lint && npx tsc --noEmit && npm run test && npm run build
 ```
-
-```bash
-# a real installation, without touching your config until you say so
-./scripts/install.sh --dry-run --version 0.1.0
-```

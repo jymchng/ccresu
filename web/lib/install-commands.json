@@ -17,7 +17,6 @@
   },
   "commands": {
     "unix": "curl -fsSL {installScript} | bash",
-    "unixPreview": "curl -fsSL {installScript} | bash -s -- --dry-run",
     "unixPinned": "curl -fsSL {installScript} | CCRESU_VERSION={version} bash",
     "windows": "irm {installScriptPs1} | iex",
     "windowsPinned": "$env:CCRESU_VERSION = '{version}'; irm {installScriptPs1} | iex",
