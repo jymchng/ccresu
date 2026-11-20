@@ -23,6 +23,8 @@ func allStates() []State {
 		StateUserTerminated,
 		StateDisabled,
 		StateUnrecoverable,
+		StateWaitingForInput,
+		StateSpendCapReached,
 	}
 }
 
@@ -243,5 +245,71 @@ func TestPendingStatesAreAllPending(t *testing.T) {
 				t.Errorf("Pending(%s) is true but the state is not in PendingStates", state)
 			}
 		}
+	}
+}
+
+// TestRescanEdgesParkTheSession pins the edges the automatic rescan and
+// `ccresu search-limit` rely on.
+//
+// A scan reads a transcript and, when it recognises a banner, parks the session on
+// the wait the banner names. It never resumes and never spends, so the machine
+// needs one edge into USAGE_LIMIT_DETECTED from every state a scan starts from,
+// the existing edge on to WAITING_FOR_RESET, and no path to RESUMING.
+func TestRescanEdgesParkTheSession(t *testing.T) {
+	// The three states the scan was extended to: RESUMED is Settled (no pass reads
+	// it), RETRY_WAIT is counting down a backoff, and WAITING_FOR_INPUT is parked on
+	// a human. A limit landing in any of them must be recordable.
+	sources := []State{StateResumed, StateRetryWait, StateWaitingForInput}
+	for _, from := range sources {
+		if !CanTransition(from, StateUsageLimitDetected) {
+			t.Errorf("%s has no edge to USAGE_LIMIT_DETECTED: a limit found in its transcript could not be recorded", from)
+			continue
+		}
+		if err := ValidateTransition(from, StateUsageLimitDetected); err != nil {
+			t.Errorf("ValidateTransition(%s, USAGE_LIMIT_DETECTED) = %v, want nil", from, err)
+		}
+		// The observation has to be written before the wait: the audit trail is what
+		// explains why a session that was already settled is parked again.
+		if !CanTransition(StateUsageLimitDetected, StateWaitingForReset) {
+			t.Errorf("USAGE_LIMIT_DETECTED has no edge to WAITING_FOR_RESET: %s would be stranded after the scan", from)
+		}
+		if err := ValidateTransition(StateUsageLimitDetected, StateWaitingForReset); err != nil {
+			t.Errorf("ValidateTransition(USAGE_LIMIT_DETECTED, WAITING_FOR_RESET) = %v, want nil", err)
+		}
+		// A scan may never spend: no edge from a scanned state to RESUMING, and none
+		// from the state the scan writes either.
+		if CanTransition(from, StateResuming) {
+			t.Errorf("%s -> RESUMING is legal; a scan must never spend", from)
+		}
+		if CanTransition(StateUsageLimitDetected, StateResuming) {
+			t.Error("USAGE_LIMIT_DETECTED -> RESUMING is legal; a scan must never spend")
+		}
+	}
+
+	// RESUMED must not reach the wait directly. The edge exists so the audit trail
+	// records the observation; skipping it would hide why the session moved.
+	if CanTransition(StateResumed, StateWaitingForReset) {
+		t.Error("RESUMED -> WAITING_FOR_RESET is legal; the observation USAGE_LIMIT_DETECTED must be recorded first")
+	}
+	if err := ValidateTransition(StateResumed, StateWaitingForReset); !errors.Is(err, ErrInvalidTransition) {
+		t.Errorf("ValidateTransition(RESUMED, WAITING_FOR_RESET) = %v, want ErrInvalidTransition", err)
+	}
+
+	// The path a search actually walks, end to end.
+	chain := []State{StateResumed, StateUsageLimitDetected, StateWaitingForReset}
+	for i := 0; i+1 < len(chain); i++ {
+		if err := ValidateTransition(chain[i], chain[i+1]); err != nil {
+			t.Errorf("the search's path is broken at %s -> %s: %v", chain[i], chain[i+1], err)
+		}
+	}
+
+	// RESUMED stays Settled: that is the reason the rescan exists. No daemon pass
+	// re-observes it, so without the scan a limit landing in its transcript is
+	// invisible for ever.
+	if !Settled(StateResumed) {
+		t.Error("RESUMED is no longer Settled; a daemon pass would re-observe a finished conversation")
+	}
+	if Pending(StateResumed) {
+		t.Error("RESUMED is Pending; the rescan would be unnecessary and every pass would re-read a finished conversation")
 	}
 }

@@ -31,6 +31,14 @@ monitoring:
   enabled: true
   detect_usage_limits: true
   detect_session_completion: true
+  # Also scan the sessions the daemon would otherwise never read again, so a new
+  # usage limit is found instead of being missed: RESUMED (Settled, so no pass
+  # revisits it), RETRY_WAIT (a backoff that would retry into the refusal) and
+  # WAITING_FOR_INPUT (parked on a human). A limit found in one of them parks the
+  # session in WAITING_FOR_RESET. The scan can only park a session, never resume
+  # one. Default true; set false to restore the pre-0.8.0 behaviour.
+  # Override with CCRESU_MONITORING__RESCAN_RESUMED.
+  rescan_resumed: true
 
 detector:
   # Minimum confidence, in (0, 1], for a detection to count. The built-in

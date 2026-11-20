@@ -117,6 +117,7 @@ rather than handed to a command line.
 | `enabled` | `true` | Master switch for the watchdog. |
 | `detect_usage_limits` | `true` | Recognise usage-limit interruptions. |
 | `detect_session_completion` | `true` | Recognise normal completion so a finished session is not resumed. |
+| `rescan_resumed` | `true` | Extends the transcript scan to the three states no other pass reads again: `RESUMED` (Settled, so nothing revisits it), `RETRY_WAIT` (a backoff that would retry into the same refusal) and `WAITING_FOR_INPUT` (parked on a human). A limit found in one of them parks the session in `WAITING_FOR_RESET` on the reset the banner names. The scan can only ever park a session — the state machine gives it no edge to `RESUMING` — so a rescan cannot spend, and cannot resume a finished conversation twice. `DISCOVERED` and `RUNNING` are scanned regardless. Set it to `false` (or `CCRESU_MONITORING__RESCAN_RESUMED=false`) to restore the pre-0.8.0 behaviour, in which a limit that landed after a resume was only ever found by an operator running `ccresu search-limit`. |
 
 ### `detector`
 

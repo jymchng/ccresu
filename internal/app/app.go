@@ -468,6 +468,12 @@ func (a *App) commands() []commandSpec {
 			run:     (*App).cmdRetry,
 		},
 		{
+			name:    "search-limit",
+			summary: "search an idle session's transcript for a usage limit and park it until the reset",
+			usage:   "search-limit <session-id> [--tail N]",
+			run:     (*App).cmdSearchLimit,
+		},
+		{
 			name:    "enable",
 			summary: "allow ccresu to recover a session",
 			usage:   "enable <session-id>",

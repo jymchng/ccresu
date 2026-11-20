@@ -53,6 +53,42 @@ func TestParseEmptyDocumentYieldsDefaults(t *testing.T) {
 	}
 }
 
+// TestRescanResumedDefaultsOnAndCanBeTurnedOff pins the upgrade behaviour of
+// monitoring.rescan_resumed.
+//
+// RESUMED is Settled, so no daemon pass reads a resumed session's transcript
+// again: a usage limit that lands there after the resume is invisible unless the
+// scan is widened to it. The switch is therefore on by default, and turning it
+// off restores the pre-0.8.0 behaviour, where only an operator running
+// `ccresu search-limit` found such a limit.
+func TestRescanResumedDefaultsOnAndCanBeTurnedOff(t *testing.T) {
+	t.Parallel()
+
+	if !Defaults().Monitoring.RescanResumed {
+		t.Error("Defaults().Monitoring.RescanResumed = false, want true: a resumed session that hits a limit would never be parked")
+	}
+	// A document that says nothing keeps the default, which is what makes the
+	// upgrade do the right thing without editing the file.
+	if !mustParse(t, "", noEnv).Monitoring.RescanResumed {
+		t.Error("an empty document turned the rescan off, want the default of true")
+	}
+	// An explicit false is honoured: the file is the operator's decision.
+	if mustParse(t, "monitoring:\n  rescan_resumed: false\n", noEnv).Monitoring.RescanResumed {
+		t.Error("monitoring.rescan_resumed: false was ignored")
+	}
+	// The environment wins over the file, like every other override.
+	overridden := mustParse(t, "monitoring:\n  rescan_resumed: false\n",
+		envFrom(map[string]string{"CCRESU_MONITORING__RESCAN_RESUMED": "true"}))
+	if !overridden.Monitoring.RescanResumed {
+		t.Error("CCRESU_MONITORING__RESCAN_RESUMED=true did not override the file")
+	}
+	// And it can be turned off from the environment alone.
+	envOff := mustParse(t, "", envFrom(map[string]string{"CCRESU_MONITORING__RESCAN_RESUMED": "false"}))
+	if envOff.Monitoring.RescanResumed {
+		t.Error("CCRESU_MONITORING__RESCAN_RESUMED=false was ignored")
+	}
+}
+
 func TestParseAppliesDefaultsBeforeOverrides(t *testing.T) {
 	t.Parallel()
 

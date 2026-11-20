@@ -212,7 +212,16 @@ fails a named test rather than passing quietly.
    as `unsupported session type "..." reported by claude agents --json`. ccresu
    never invents a command for a session it does not understand.
 3. The daemon tails the newest 25 transcript lines per session
-   (`defaultTranscriptTail`), joins them, and hands the text to the detector.
+   (`defaultTranscriptTail`), joins them, and hands the text to the detector. It
+   reads `DISCOVERED` and `RUNNING` sessions always, and — when
+   `monitoring.rescan_resumed` is on, which is the default — also `RESUMED`,
+   `RETRY_WAIT` and `WAITING_FOR_INPUT`: the three states no other pass revisits,
+   so a limit landing in one of them would otherwise never be seen. A rescan can
+   only park the session in `WAITING_FOR_RESET`; it can never resume or spend (see
+   [the state machine](#the-state-machine)). An operator who knows a `RESUMED`
+   session has gone idle asks for the same read with
+   `ccresu search-limit <session-id>`, which takes the identical walk
+   `RESUMED → USAGE_LIMIT_DETECTED → WAITING_FOR_RESET` and writes the same rows.
 4. The text is normalised, then scored against the built-in patterns and any
    `detector.custom_patterns`, with guards and negatives deciding what counts
    (below).
@@ -453,7 +462,7 @@ transcript again and schedules the next reset.
 
 Legal edges are declared once, in `internal/recovery/state.go`, and any other
 edge is rejected with `ErrInvalidTransition`. The map is the authoritative table:
-15 states, and only the edges written there are legal.
+16 states, and only the edges written there are legal.
 
 | From | Allowed |
 | --- | --- |
@@ -462,13 +471,13 @@ edge is rejected with `ErrInvalidTransition`. The map is the authoritative table
 | `USAGE_LIMIT_DETECTED` | `WAITING_FOR_RESET`, `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED`, `DISCOVERED` |
 | `WAITING_FOR_RESET` | itself (unknown-reset re-poll or a restart), `RESET_TIME_REACHED`, `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED`, `DISCOVERED` |
 | `RESET_TIME_REACHED` | `CHECKING_SESSION`, `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED`, `DISCOVERED` |
-| `CHECKING_SESSION` | `CHECKING_LIMIT`, `RESUMED` (the supervisor published `working` without a handoff), `WAITING_FOR_INPUT` (it published `blocked`), `RETRY_WAIT` (the status check itself failed, or an unrecognised state was published), `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED`, `DISCOVERED` |
+| `CHECKING_SESSION` | `CHECKING_LIMIT`, `RESUMED` (the supervisor published `working` without a handoff), `COMPLETED` (it had already finished its last turn), `WAITING_FOR_INPUT` (it published `blocked`), `RETRY_WAIT` (the status check itself failed, or an unrecognised state was published), `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED`, `DISCOVERED` |
 | `CHECKING_LIMIT` | `RESUMING`, `SPEND_CAP_REACHED` (the pre-attempt spend check refused the resume), `RETRY_WAIT`, `WAITING_FOR_RESET` (the limit is still in force), `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED`, `DISCOVERED` |
 | `RESUMING` | `RESUMED`, `SPEND_CAP_REACHED` (one attempt cost more than the per-attempt cap allows), `RETRY_WAIT`, `WAITING_FOR_INPUT` (the session is blocked, so the continuation is withheld), `WAITING_FOR_RESET` (the resume was refused because the limit is still in force), `DISCOVERED`, `UNRECOVERABLE`, `USER_TERMINATED`, `DISABLED` |
-| `SPEND_CAP_REACHED` | `CHECKING_SESSION` (an explicit `ccresu recover`), `DISCOVERED` (the cap was raised, or a reset), `USER_TERMINATED` — never straight to `RESUMING`, because nothing in this state may spend by itself |
-| `WAITING_FOR_INPUT` | `RUNNING`, `RESUMED`, `RETRY_WAIT`, `USER_TERMINATED`, `DISABLED`, `UNRECOVERABLE`, `DISCOVERED`, itself |
-| `RETRY_WAIT` | `CHECKING_SESSION`, `WAITING_FOR_RESET`, `DISCOVERED`, `USER_TERMINATED`, `DISABLED` |
-| `RESUMED` | `RUNNING`, `COMPLETED`, `USER_TERMINATED`, `DISABLED` — never straight back to `RESUMING` |
+| `SPEND_CAP_REACHED` | `CHECKING_SESSION` (an explicit `ccresu recover`), `DISCOVERED` (the cap was raised, or a reset), `USER_TERMINATED`, `DISABLED` — never straight to `RESUMING`, because nothing in this state may spend by itself |
+| `WAITING_FOR_INPUT` | `RUNNING`, `RESUMED`, `RETRY_WAIT`, `USAGE_LIMIT_DETECTED` (the rescan found a limit while the prompt was open), `USER_TERMINATED`, `DISABLED`, `UNRECOVERABLE`, `DISCOVERED`, itself |
+| `RETRY_WAIT` | `CHECKING_SESSION`, `WAITING_FOR_RESET`, `USAGE_LIMIT_DETECTED` (the rescan found a limit during the backoff), `DISCOVERED`, `USER_TERMINATED`, `DISABLED` |
+| `RESUMED` | `RUNNING`, `COMPLETED`, `USAGE_LIMIT_DETECTED` (`ccresu search-limit`, or the rescan), `USER_TERMINATED`, `DISABLED` — never straight back to `RESUMING` |
 | `COMPLETED` | — (terminal) |
 | `USER_TERMINATED` | — (terminal) |
 | `DISABLED` | `RUNNING`, `DISCOVERED`, `USER_TERMINATED` |
@@ -479,8 +488,12 @@ unknown-reset session re-enters the waiting state after every poll and a restart
 re-observes the wait; moving to the state it is already in still writes the audit
 row, because "the limit was checked again and was still in force" is worth
 keeping. `RESUMED` is not strictly terminal — a resumed session can hit its limit
-again — but a second recovery is only legal after the session has been observed
-running and hit a new limit, never straight from `RESUMED`.
+again — but nothing resumes it from there. The only way out towards a wait is
+`USAGE_LIMIT_DETECTED`, reached when the rescan or `ccresu search-limit` reads the
+transcript and finds a banner. The edge goes through that observation rather than
+straight to `WAITING_FOR_RESET`, so the audit trail records what produced the
+wait, and there is no edge to `RESUMING` at all: finding a limit parks a session,
+it never spends on one.
 
 ### Which states are terminal, settled and pending
 

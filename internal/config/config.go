@@ -53,6 +53,28 @@ type Monitoring struct {
 	Enabled                 bool `yaml:"enabled"`
 	DetectUsageLimits       bool `yaml:"detect_usage_limits"`
 	DetectSessionCompletion bool `yaml:"detect_session_completion"`
+	// RescanResumed extends the transcript scan to the states the daemon would
+	// otherwise never read again.
+	//
+	// The scan is normally limited to DISCOVERED and RUNNING, because every other
+	// state either has a pending pass that will read the transcript anyway or is a
+	// decision ccresu must not walk back. Three states fall between those two
+	// cases, and a session in one of them that hits a new usage limit is invisible
+	// for ever: RESUMED (Settled, so no pass revisits it), RETRY_WAIT (waiting on a
+	// backoff that will retry into the refusal) and WAITING_FOR_INPUT (parked on a
+	// human). With this on, all three are scanned too, and a limit found there
+	// parks the session in WAITING_FOR_RESET instead of being missed.
+	//
+	// The name says RESUMED because that is the state that motivated the switch
+	// and the one an operator will recognise; the full set is the three above.
+	// The scan can only ever *park* a session, never resume one: it writes
+	// USAGE_LIMIT_DETECTED then WAITING_FOR_RESET, and the state machine has no
+	// edge from any of these states to RESUMING.
+	//
+	// Default true. Turning it off restores the pre-0.8.0 behaviour, in which a
+	// limit that landed in a resumed session's transcript was only ever found by
+	// an operator running `ccresu search-limit`.
+	RescanResumed bool `yaml:"rescan_resumed"`
 }
 
 // Detector holds usage-limit detection tuning.

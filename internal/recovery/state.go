@@ -166,9 +166,13 @@ var transitions = map[State]map[State]struct{}{
 	StateRetryWait: {
 		StateCheckingSession: {},
 		StateWaitingForReset: {},
-		StateDiscovered:      {},
-		StateUserTerminated:  {},
-		StateDisabled:        {},
+		// A backoff that would retry into a refusal is not a wait worth having:
+		// a usage limit found in the transcript parks the session on the reset
+		// the banner names instead (`monitoring.rescan_resumed`).
+		StateUsageLimitDetected: {},
+		StateDiscovered:         {},
+		StateUserTerminated:     {},
+		StateDisabled:           {},
 	},
 	// WAITING_FOR_INPUT is a park, not a verdict: the supervisor published
 	// `blocked`, so ccresu cannot act, but the conversation is not finished. The
@@ -187,6 +191,12 @@ var transitions = map[State]map[State]struct{}{
 		StateUnrecoverable:   {},
 		StateDiscovered:      {},
 		StateWaitingForInput: {},
+		// A blocked session can also hit a usage limit. The limit is the nearer
+		// fact — the conversation cannot continue until the window resets, and a
+		// human answering the prompt changes nothing until then — so the session
+		// parks on the reset and is re-observed afterwards, which re-derives
+		// WAITING_FOR_INPUT from the supervisor if the prompt is still open.
+		StateUsageLimitDetected: {},
 	},
 	// SPEND_CAP_REACHED is a park with a budget reason. It offers CHECKING_SESSION
 	// so an explicit `ccresu recover` can walk back into the normal path — R11
@@ -203,11 +213,21 @@ var transitions = map[State]map[State]struct{}{
 	// RESUMED is not strictly terminal — a resumed session can hit its limit
 	// again — but a second recovery is only legal after the session has been
 	// observed running and hit a new limit, never straight from RESUMED.
+	//
+	// USAGE_LIMIT_DETECTED is that observation, and `ccresu search-limit` is the
+	// only thing that produces it from here. RESUMED is Settled, so no daemon
+	// pass reads the session's transcript; an operator who knows the session has
+	// gone idle asks for the read instead. The edge goes through
+	// USAGE_LIMIT_DETECTED rather than straight to WAITING_FOR_RESET so the
+	// audit trail records the observation that produced the wait. There is still
+	// no edge to RESUMING: finding a limit parks a session, it never spends on
+	// one.
 	StateResumed: {
-		StateRunning:        {},
-		StateCompleted:      {},
-		StateUserTerminated: {},
-		StateDisabled:       {},
+		StateUsageLimitDetected: {},
+		StateRunning:            {},
+		StateCompleted:          {},
+		StateUserTerminated:     {},
+		StateDisabled:           {},
 	},
 	StateCompleted:      {},
 	StateUserTerminated: {},

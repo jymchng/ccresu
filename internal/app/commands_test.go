@@ -109,6 +109,10 @@ func helpRows(t *testing.T) []helpRow {
 		{command: "inspect", prose: helpRowProse},
 		{command: "recover", prose: helpRowProse},
 		{command: "retry", prose: helpRowProse},
+		// search-limit's summary describes the command ("search ... and park it
+		// until the reset"); the session id and --tail are arguments, not
+		// sub-actions, so there is no action table to pin.
+		{command: "search-limit", prose: helpRowProse},
 		{command: "enable", prose: helpRowProse},
 		{command: "disable", prose: helpRowProse},
 		{command: "history", prose: helpRowProse},

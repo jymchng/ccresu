@@ -4,6 +4,59 @@ All notable changes to ccresu are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-11-20
+
+A usage limit is no longer the one interruption ccresu can miss. The daemon now
+re-reads the transcripts of the sessions it had stopped looking at, and an
+operator who knows a session has gone idle can ask for that read by hand — from
+the CLI, or with one keystroke in the sessions browser.
+
+### Added
+
+- **`monitoring.rescan_resumed`, on by default.** The detect stage now reads the
+  transcripts of `RESUMED`, `RETRY_WAIT` and `WAITING_FOR_INPUT` sessions as well
+  as `DISCOVERED` and `RUNNING`. Each of the three was invisible to every pass:
+  `RESUMED` is Settled, so nothing revisits it; `RETRY_WAIT` is counting down a
+  backoff that would retry into the same refusal; `WAITING_FOR_INPUT` is parked
+  on a human. A limit found in one of them parks the session in
+  `WAITING_FOR_RESET` on the reset the banner names, which is the only thing a
+  rescan can do — it never resumes and never spends. Set the key to `false` (or
+  `CCRESU_MONITORING__RESCAN_RESUMED=false`) to restore the previous behaviour.
+- **`ccresu search-limit <session-id> [--tail N]`**, and the same verb as
+  `ccresu sessions search-limit <session-id>` for an operator who is already in
+  that namespace. It reads the newest `N` transcript lines (default 25, the same
+  window the daemon's detector reads) and, when it recognises a banner, records
+  it and parks the session — the same `USAGE_LIMIT_DETECTED →
+  WAITING_FOR_RESET` walk the daemon takes, so the audit trail cannot tell the
+  two apart. A search that finds nothing is an answer, not a failure: exit 0,
+  nothing written, and a line saying the session was left alone. An unknown id is
+  exit 3; a session that is neither `RESUMED` nor `RUNNING` is refused with exit
+  4, because every other state either already has a pass that will read the
+  transcript or is a decision ccresu must not walk back.
+- **`L` in the sessions browser** runs that search on the selected session and
+  says which of the two outcomes happened — `usage limit found, state
+  WAITING_FOR_RESET` with the reason, which names the reset time when the banner
+  gave one, or `no usage limit found, state unchanged`. It is in the key map, the
+  list footer and the `?` screen.
+
+### Changed
+
+- **Three new state edges, and all three of them park.** `RESUMED`,
+  `RETRY_WAIT` and `WAITING_FOR_INPUT` each gain an edge to
+  `USAGE_LIMIT_DETECTED`, which reaches `WAITING_FOR_RESET` as before. None of
+  the three reaches `RESUMING`: finding a limit parks a session, it never spends
+  on one. `RESUMED` still has no direct edge to `WAITING_FOR_RESET`, so the
+  observation that produced the wait is always in the transition history rather
+  than being implied by it.
+
+### Fixed
+
+- **A limit that landed in a resumed session no longer strands it.** The session
+  sat in `RESUMED` for ever while the daemon ran happily next to it. Not looking
+  was deliberate — it is what stops a finished conversation being resumed twice —
+  so the read is either automatic behind the new switch or an explicit operator
+  act, never a silent second resume.
+
 ## [0.7.0] - 2026-11-15
 
 Six PRDs on one theme: a recovery is decided by what the supervisor publishes, not

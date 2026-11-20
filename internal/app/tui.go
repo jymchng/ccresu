@@ -831,6 +831,12 @@ func (b *browser) handleList(ctx context.Context, key keyEvent) (bool, error) {
 		return false, b.act(ctx, "retry")
 	case 'R':
 		return false, b.act(ctx, "recover")
+	case 'L':
+		// A search reads a transcript and, at most, writes a wait: it never
+		// invokes the CLI, so it is not the slow kind of action. It still goes to
+		// the worker, because reading a large transcript is not free and the
+		// keyboard must not wait for it.
+		return false, b.act(ctx, "search-limit")
 	case 'x':
 		session, ok := b.selected()
 		if !ok {
@@ -1039,6 +1045,8 @@ func actionLabel(action string) string {
 		return "retrying"
 	case "recover":
 		return "recovering"
+	case "search-limit":
+		return "searching"
 	case "create":
 		return "discovering"
 	case "delete":
@@ -1102,8 +1110,47 @@ func (b *browser) act(ctx context.Context, action string) error {
 			}
 			return fmt.Sprintf("%s %s: done", action, shortID(session.ID))
 		})
+	case "search-limit":
+		if b.busy != nil {
+			b.refuse()
+			return nil
+		}
+		b.startAction(ctx, actionLabel(action)+" "+shortID(session.ID)+"\u2026", func(ctx context.Context) string {
+			manager, err := b.app.requireRecovery(b.rt)
+			if err != nil {
+				return fmt.Sprintf("%s %s: %v", action, shortID(session.ID), err)
+			}
+			// The row on screen is the session the operator selected; re-read it
+			// because a pass may have moved it since the screen was painted, and
+			// the transcript path the scan needs is on the row.
+			stored, err := b.rt.Store.GetSession(ctx, session.ID)
+			if err != nil {
+				return fmt.Sprintf("%s %s: %v", action, shortID(session.ID), err)
+			}
+			result, err := manager.SearchLimit(ctx, stored.ID,
+				transcriptLimitScan(b.rt, stored, defaultTranscriptTail))
+			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					return "cancelled"
+				}
+				return fmt.Sprintf("%s %s: %v", action, shortID(session.ID), err)
+			}
+			return limitSearchMessage(action, session.ID, result)
+		})
 	}
 	return nil
+}
+
+// limitSearchMessage renders a limit search for the status line.
+//
+// The two answers are different outcomes, not different severities: "found" means
+// the session moved to WAITING_FOR_RESET, and "not found" means it did not move at
+// all. Saying only "done" would leave an operator unable to tell which happened.
+func limitSearchMessage(action, id string, result recovery.LimitSearch) string {
+	if !result.Found {
+		return fmt.Sprintf("%s %s: no usage limit found, state unchanged (%s)", action, shortID(id), result.State)
+	}
+	return fmt.Sprintf("%s %s: usage limit found, state %s (%s)", action, shortID(id), result.State, result.Reason)
 }
 
 // delete forgets the session, exactly as `sessions delete` does: the row goes,
@@ -1384,7 +1431,7 @@ func (b *browser) drawList(out *strings.Builder) {
 	if b.status != "" {
 		fmt.Fprintf(out, "%s\n", truncateText(b.status, 160))
 	}
-	out.WriteString("\nenter detail  n new  x delete  R resume  e enable  d disable  r retry  / filter  a all  ? help  q quit\n")
+	out.WriteString("\nenter detail  n new  x delete  R resume  e enable  d disable  r retry  L search limit  / filter  a all  ? help  q quit\n")
 }
 
 // tableContent renders the header and the rows the list screen shows.
@@ -1502,6 +1549,7 @@ func tuiKeyMap() []keyBinding {
 		{"d", "disable the selected session"},
 		{"r", "retry the selected session"},
 		{"R", "resume the selected session now (the call `ccresu recover` makes)"},
+		{"L", "search the selected session's transcript for a usage limit (the call `ccresu search-limit` makes)"},
 		{"x", "delete the selected session (asks y/N)"},
 		{"?", "this key map"},
 		{"q / ctrl-c", "quit"},

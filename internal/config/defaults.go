@@ -25,6 +25,10 @@ func Defaults() Config {
 			Enabled:                 true,
 			DetectUsageLimits:       true,
 			DetectSessionCompletion: true,
+			// On by default: a resumed session whose transcript gains a new
+			// usage-limit banner is otherwise stuck in RESUMED for ever, because
+			// RESUMED is Settled and no pass reads it again.
+			RescanResumed: true,
 		},
 		Detector: Detector{
 			Threshold:      DefaultDetectorThreshold,

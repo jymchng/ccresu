@@ -213,6 +213,8 @@ func (a *App) cmdSessions(ctx context.Context, args []string) error {
 			return a.inspectSession(ctx, "sessions status", rest)
 		case subcommandDelete:
 			return a.cmdSessionsDelete(ctx, rest)
+		case subcommandSearchLimit:
+			return a.cmdSearchLimit(ctx, rest)
 		}
 	}
 
@@ -689,10 +691,15 @@ func (a *App) writeDetailTail(w io.Writer, detail sessionDetail) {
 const (
 	subcommandStatus = "status"
 	subcommandDelete = "delete"
+	// subcommandSearchLimit is the `sessions`-namespaced spelling of the
+	// top-level `ccresu search-limit`. It is the same handler: the command is
+	// about one session, so an operator who is already in `sessions` should not
+	// have to leave it to find the verb.
+	subcommandSearchLimit = "search-limit"
 )
 
 // sessionsUsage is the documented form of the sessions command.
-const sessionsUsage = "sessions [--all] [--state STATE]... [--limit N] [--tui|--no-tui] | sessions status <session-id> | sessions delete <session-id>"
+const sessionsUsage = "sessions [--all] [--state STATE]... [--limit N] [--tui|--no-tui] | sessions status <session-id> | sessions delete <session-id> | sessions search-limit <session-id>"
 
 // sessionsSubcommand finds the subcommand in a `ccresu sessions` argument list.
 //
@@ -744,7 +751,7 @@ func withoutWord(args []string, index int) []string {
 
 // isSessionsSubcommand reports whether word names a `ccresu sessions` subcommand.
 func isSessionsSubcommand(word string) bool {
-	return word == subcommandStatus || word == subcommandDelete
+	return word == subcommandStatus || word == subcommandDelete || word == subcommandSearchLimit
 }
 
 // sessionsFlagTakesValue reports whether a flag argument consumes the next
@@ -755,7 +762,7 @@ func sessionsFlagTakesValue(arg string) bool {
 		return false
 	}
 	switch strings.TrimLeft(arg, "-") {
-	case "limit", "state", "config", "c":
+	case "limit", "state", "config", "c", "tail":
 		return true
 	default:
 		return false
@@ -1153,6 +1160,103 @@ func (a *App) cmdRetry(ctx context.Context, args []string) error {
 		return withCode(ExitNotEligible, fmt.Errorf("session %s was not resumed (state %s)", id, outcome.State))
 	}
 	return nil
+}
+
+// cmdSearchLimit looks for a usage limit in a session the operator has
+// established is idle.
+//
+// The command exists because RESUMED is Settled: a resumed session is never
+// re-observed, so a limit that lands in its transcript after the resume leaves it
+// stuck in RESUMED for ever while the daemon runs happily next to it. Not looking
+// is deliberate — it is what stops a finished conversation being resumed twice —
+// so the read cannot be automatic. It is an operator act instead, and the
+// operator is the authority on whether the session has gone idle.
+//
+// Nothing is resumed and nothing is spent: the command reads a transcript, and
+// when it finds a banner it parks the session on the wait the banner names.
+func (a *App) cmdSearchLimit(ctx context.Context, args []string) error {
+	const command = "search-limit"
+	fs := a.flags(command, command+" <session-id> [--tail N]")
+	tail := fs.Int("tail", defaultTranscriptTail, "how many transcript lines to search")
+	if err := a.parseFlags(fs, args); err != nil {
+		return err
+	}
+	id, err := a.sessionArg(fs, command)
+	if err != nil {
+		return err
+	}
+	if *tail <= 0 {
+		return usagef("--tail must be positive")
+	}
+
+	rt, release, err := a.openRuntime(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	manager, err := a.requireRecovery(rt)
+	if err != nil {
+		return err
+	}
+	// Read the session here so an unknown id exits 3 ("not found") rather than 4
+	// ("exists but not eligible"); the search reports the latter through
+	// ErrNotEligible.
+	session, err := rt.Store.GetSession(ctx, id)
+	if err != nil {
+		return fmt.Errorf("%s %s: %w", command, id, err)
+	}
+
+	result, err := manager.SearchLimit(ctx, id, transcriptLimitScan(rt, session, *tail))
+	if err != nil {
+		return fmt.Errorf("%s %s: %w", command, id, err)
+	}
+	return a.reportLimitSearch(rt, result)
+}
+
+// reportLimitSearch prints what one search found.
+//
+// A search that found nothing is a success, not a failure: the operator asked a
+// question and got the answer. The exit code stays 0 and the message says plainly
+// that the session was left alone, so a script reading the exit code is not told
+// that something broke when nothing did.
+func (a *App) reportLimitSearch(rt *Runtime, result recovery.LimitSearch) error {
+	if a.json {
+		return a.writeJSON(a.stdout, map[string]any{
+			"session_id":     result.SessionID,
+			"found":          result.Found,
+			"state":          string(result.State),
+			"banner":         result.Banner,
+			"reason":         result.Reason,
+			"known_reset":    result.Wait.Known,
+			"reset_at":       formatJSONTime(result.Wait.At),
+			"wait":           formatDuration(result.Wait.Delay),
+			"usage_limit_id": result.Wait.LimitID,
+		})
+	}
+
+	a.field(a.stdout, "session", result.SessionID)
+	a.field(a.stdout, "usage limit found", yesNo(result.Found))
+	a.field(a.stdout, "state", result.State)
+	if !result.Found {
+		a.field(a.stdout, "next", "nothing was changed; run this again once the session has gone idle")
+		return nil
+	}
+	a.field(a.stdout, "banner", truncateText(result.Banner, 120))
+	a.field(a.stdout, "reset known", yesNo(result.Wait.Known))
+	a.field(a.stdout, "next attempt", formatTime(result.Wait.At, a.displayLocation(rt)))
+	a.field(a.stdout, "wait", formatDuration(result.Wait.Delay))
+	a.field(a.stdout, "reason", result.Reason)
+	return nil
+}
+
+// formatJSONTime renders an instant for a JSON report, or an empty string when
+// there is none, so a consumer never has to parse a zero time.
+func formatJSONTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 // reportOutcome prints one recovery result.

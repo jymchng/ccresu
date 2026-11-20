@@ -55,6 +55,10 @@ func TestEveryCommandAcceptsTheGlobalFlagsInEitherPosition(t *testing.T) {
 		{"inspect", []string{"inspect", id}},
 		{"recover", []string{"recover", id}},
 		{"retry", []string{"retry", id}},
+		// --tail is the command's own flag and it takes a value, so this row is
+		// also the case where the parser has to skip that value instead of
+		// reading it as a positional or as the next global flag.
+		{"search-limit", []string{"search-limit", id, "--tail", "50"}},
 		{"enable", []string{"enable", id}},
 		{"disable", []string{"disable", id}},
 		{"history", []string{"history", id}},

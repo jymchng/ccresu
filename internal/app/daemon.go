@@ -219,6 +219,20 @@ func storageSession(session claude.Session) storage.Session {
 // Detection is idempotent by comparison, not by luck: the newest usage-limit row
 // for the session is the fingerprint, so re-reading the same banner on every pass
 // records nothing and sends nothing.
+//
+// Which sessions are read is the whole question this stage answers. DISCOVERED
+// and RUNNING are read always: they are the states a limit is expected in. Three
+// more are read when monitoring.rescan_resumed is on, because nothing else ever
+// would: RESUMED is Settled (no pass revisits it), RETRY_WAIT is counting down a
+// backoff that would retry into the refusal, and WAITING_FOR_INPUT is parked on a
+// human. A session in one of those three that hits a new limit is otherwise
+// invisible for ever, which is the defect `ccresu search-limit` was added to work
+// around by hand.
+//
+// Reading one of them can only ever park it: the two writes below are
+// USAGE_LIMIT_DETECTED and WAITING_FOR_RESET, and the state machine defines no
+// edge from any of the three to RESUMING. So a rescan cannot spend, and cannot
+// undo a recovery by resuming something twice.
 func (d *Daemon) detect(ctx context.Context) error {
 	rt := d.runtime
 	if rt.Detector == nil || rt.Transcripts == nil || rt.Store == nil || rt.Scheduler == nil {
@@ -232,7 +246,7 @@ func (d *Daemon) detect(ctx context.Context) error {
 	sessions, err := rt.Store.ListSessions(ctx, storage.SessionFilter{
 		Enabled:     &enabled,
 		Recoverable: &enabled,
-		States:      []storage.State{storage.StateDiscovered, storage.StateRunning},
+		States:      d.scannedStates(),
 	})
 	if err != nil {
 		return fmt.Errorf("list monitorable sessions: %w", err)
@@ -244,6 +258,24 @@ func (d *Daemon) detect(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// scannedStates is the state filter the detect stage reads.
+//
+// The first two are unconditional. The rest are added by
+// monitoring.rescan_resumed, and the order is the lifecycle order so a log line
+// that names them reads naturally.
+func (d *Daemon) scannedStates() []storage.State {
+	states := []storage.State{storage.StateDiscovered, storage.StateRunning}
+	rescan := d.runtime != nil && d.runtime.Config != nil && d.runtime.Config.Monitoring.RescanResumed
+	if !rescan {
+		return states
+	}
+	return append(states,
+		storage.StateResumed,
+		storage.StateRetryWait,
+		storage.StateWaitingForInput,
+	)
 }
 
 // detectIn inspects one session transcript.
@@ -370,26 +402,6 @@ func (d *Daemon) notifyLimit(ctx context.Context, session storage.Session, limit
 		}
 	}
 	return nil
-}
-
-// transcriptText joins the newest transcript lines so a banner split across lines
-// is still recognised.
-func transcriptText(entries []claude.Entry) string {
-	var text string
-	for i := len(entries) - 1; i >= 0; i-- {
-		if entries[i].Text == "" {
-			continue
-		}
-		if text == "" {
-			text = entries[i].Text
-			continue
-		}
-		text += "\n" + entries[i].Text
-		if len(text) > 4000 {
-			break
-		}
-	}
-	return text
 }
 
 // actOnSchedules recovers the sessions whose reset time (or next poll) has come.

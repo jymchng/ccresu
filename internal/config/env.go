@@ -62,6 +62,7 @@ func envSetters() []envSetter {
 		{EnvPrefix + "MONITORING__ENABLED", setBool(func(c *Config) *bool { return &c.Monitoring.Enabled })},
 		{EnvPrefix + "MONITORING__DETECT_USAGE_LIMITS", setBool(func(c *Config) *bool { return &c.Monitoring.DetectUsageLimits })},
 		{EnvPrefix + "MONITORING__DETECT_SESSION_COMPLETION", setBool(func(c *Config) *bool { return &c.Monitoring.DetectSessionCompletion })},
+		{EnvPrefix + "MONITORING__RESCAN_RESUMED", setBool(func(c *Config) *bool { return &c.Monitoring.RescanResumed })},
 
 		// Custom patterns are a structured list and stay file-only; the
 		// threshold is a single number and can be overridden here.

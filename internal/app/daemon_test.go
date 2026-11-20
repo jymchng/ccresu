@@ -725,3 +725,119 @@ func TestDaemonAdvancesThePollWhenTheLimitHasNotCleared(t *testing.T) {
 		t.Errorf("state = %s, want %s", stored.State, storage.StateWaitingForReset)
 	}
 }
+
+// TestScannedStatesFollowsTheRescanSwitch pins the filter itself: the two states
+// a usage limit is expected in are read always, and the three the switch adds are
+// added in lifecycle order so a log line naming them reads naturally.
+func TestScannedStatesFollowsTheRescanSwitch(t *testing.T) {
+	h := newHarness(t)
+	daemon := NewDaemon(h.rt, time.Minute)
+	names := func(states []storage.State) string {
+		parts := make([]string, 0, len(states))
+		for _, state := range states {
+			parts = append(parts, string(state))
+		}
+		return strings.Join(parts, ",")
+	}
+
+	h.cfg.Monitoring.RescanResumed = false
+	if got, want := names(daemon.scannedStates()), "DISCOVERED,RUNNING"; got != want {
+		t.Errorf("scannedStates with the rescan off = %q, want %q", got, want)
+	}
+
+	h.cfg.Monitoring.RescanResumed = true
+	if got, want := names(daemon.scannedStates()),
+		"DISCOVERED,RUNNING,RESUMED,RETRY_WAIT,WAITING_FOR_INPUT"; got != want {
+		t.Errorf("scannedStates with the rescan on = %q, want %q", got, want)
+	}
+
+	// A daemon with no runtime still answers: the filter is read before the stage
+	// has anything to look at, and a nil dereference there would take the whole
+	// pass down.
+	if got, want := names((&Daemon{}).scannedStates()), "DISCOVERED,RUNNING"; got != want {
+		t.Errorf("scannedStates with no runtime = %q, want %q", got, want)
+	}
+}
+
+// TestDetectRescanScope is the scope of the automatic rescan, end to end through
+// the stage rather than through the filter alone.
+//
+// With monitoring.rescan_resumed on, a limit that lands in a RESUMED, RETRY_WAIT
+// or WAITING_FOR_INPUT transcript parks the session in WAITING_FOR_RESET. With it
+// off those three are never read — which is exactly the defect `ccresu
+// search-limit` worked around by hand — while DISCOVERED and RUNNING are still
+// read, because they are the states a limit is expected in.
+func TestDetectRescanScope(t *testing.T) {
+	const (
+		resumedID = "22222222-2222-4222-8222-222222222222"
+		retryID   = "33333333-3333-4333-8333-333333333333"
+		blockedID = "44444444-4444-4444-8444-444444444444"
+		runningID = "55555555-5555-4555-8555-555555555555"
+	)
+	seeded := map[string]storage.State{
+		resumedID: storage.StateResumed,
+		retryID:   storage.StateRetryWait,
+		blockedID: storage.StateWaitingForInput,
+		runningID: storage.StateRunning,
+	}
+
+	run := func(t *testing.T, rescan bool) *harness {
+		t.Helper()
+		h := newHarness(t)
+		h.cfg.Monitoring.RescanResumed = rescan
+		for id, state := range seeded {
+			session := h.seedSession(t, id, func(s *storage.Session) {
+				s.State = state
+				s.TranscriptLines = 2
+			})
+			h.seedTranscript(session.TranscriptPath,
+				claude.Entry{Text: "hello"},
+				claude.Entry{Text: limitBanner})
+		}
+		daemon := NewDaemon(h.rt, time.Minute)
+		if err := daemon.detect(context.Background()); err != nil {
+			t.Fatalf("detect: %v", err)
+		}
+		return h
+	}
+
+	t.Run("on", func(t *testing.T) {
+		h := run(t, true)
+		for id := range seeded {
+			if _, err := h.store.LatestUsageLimit(context.Background(), id); err != nil {
+				t.Errorf("%s: usage limit was not recorded: %v", id, err)
+			}
+			stored, err := h.store.GetSession(context.Background(), id)
+			if err != nil {
+				t.Fatalf("%s: read session: %v", id, err)
+			}
+			if stored.State != storage.StateWaitingForReset {
+				t.Errorf("%s: state = %s, want %s", id, stored.State, storage.StateWaitingForReset)
+			}
+		}
+	})
+
+	t.Run("off", func(t *testing.T) {
+		h := run(t, false)
+		// The unconditional half of the filter is unchanged: RUNNING is read.
+		if _, err := h.store.LatestUsageLimit(context.Background(), runningID); err != nil {
+			t.Errorf("RUNNING was not scanned with the rescan off: %v", err)
+		}
+		// The three the switch adds are not read, and nothing about them moves.
+		for id, state := range seeded {
+			if id == runningID {
+				continue
+			}
+			if _, err := h.store.LatestUsageLimit(context.Background(), id); !errors.Is(err, storage.ErrNotFound) {
+				t.Errorf("%s was scanned with the rescan off: %v", id, err)
+			}
+			stored, err := h.store.GetSession(context.Background(), id)
+			if err != nil {
+				t.Fatalf("%s: read session: %v", id, err)
+			}
+			if stored.State != state {
+				t.Errorf("%s: state = %s, want it unchanged at %s", id, stored.State, state)
+			}
+		}
+	})
+}
