@@ -34,9 +34,8 @@ type Options struct {
 	Logger *slog.Logger
 	// QueryTimeout bounds `--version` and `agents --json`.
 	QueryTimeout time.Duration
-	// HandoffTimeout bounds the handoff invocation. The supervisor's work is not
-	// bounded by it; verification has its own setting.
-	HandoffTimeout time.Duration
+	// TurnTimeout bounds the resume invocation, which runs the whole turn.
+	TurnTimeout time.Duration
 	// MaxOutputBytes caps captured command output.
 	MaxOutputBytes int
 	// All passes --all to `claude agents --json` by default.
@@ -46,9 +45,6 @@ type Options struct {
 	// MinimumVersion overrides the supported-version floor. Tests use it to
 	// keep fixtures stable.
 	MinimumVersion *Version
-	// Guardrails are the flags every handoff carries (PRD 5 R2). The zero value
-	// adds none, which is today's behaviour exactly.
-	Guardrails Guardrails
 }
 
 // Provider is the default SessionProvider: `claude agents --json` for live
@@ -89,16 +85,15 @@ func New(opts Options) (*Provider, error) {
 		Executable:     opts.Executable,
 		Execer:         execer,
 		QueryTimeout:   opts.QueryTimeout,
-		HandoffTimeout: opts.HandoffTimeout,
+		TurnTimeout:    opts.TurnTimeout,
 		MaxOutputBytes: opts.MaxOutputBytes,
 		MinVersion:     opts.MinimumVersion,
 		// The directory the store resolved, not the option as given: an empty
 		// Home and an explicit one both end up as the same absolute directory, and
 		// that one value is what every command runs with (R9). Resolving it twice
-		// is how a read and a handoff end up on different supervisors.
-		ConfigDir:  store.Home(),
-		Logger:     logger,
-		Guardrails: opts.Guardrails,
+		// is how a read and a resume end up on different Claude Code instances.
+		ConfigDir: store.Home(),
+		Logger:    logger,
 	})
 	return &Provider{
 		cli:   cli,
@@ -117,35 +112,7 @@ func (p *Provider) CLI() *CLI { return p.cli }
 // Store exposes the on-disk store, e.g. for transcript inspection.
 func (p *Provider) Store() *Store { return p.store }
 
-// DaemonStatus reads the background supervisor's status with
-// `claude daemon status` (PRD 3 R1).
-//
-// It is the provider's job rather than the recovery engine's because the
-// provider already owns the configured CLI, the config directory (R9) and the
-// query timeout, and a supervisor read that used a second CLI could talk to a
-// second supervisor.
-func (p *Provider) DaemonStatus(ctx context.Context) (SupervisorStatus, error) {
-	return p.cli.DaemonStatus(ctx)
-}
-
-// DaemonLogs reads the supervisor's own log on demand with
-// `claude daemon logs` (PRD 3 R10).
-func (p *Provider) DaemonLogs(ctx context.Context) (LogsResult, error) {
-	return p.cli.DaemonLogs(ctx)
-}
-
-// SessionLogs reads one session's recent output on demand with
-// `claude logs <id>` (PRD 3 R10).
-//
-// The identifier is the supervisor's short state id, not the session UUID: it is
-// the same identifier `claude attach` and `claude stop` take, and the one the
-// handoff's acceptance block prints.
-func (p *Provider) SessionLogs(ctx context.Context, stateID string) (LogsResult, error) {
-	return p.cli.SessionLogs(ctx, stateID)
-}
-
-// CLIVersion reports the version of the executable ccresu invokes, so the
-// supervisor's version can be compared with it (PRD 3 R2).
+// CLIVersion reports the version of the executable ccresu invokes.
 func (p *Provider) CLIVersion(ctx context.Context) (Version, error) { return p.cli.Version(ctx) }
 
 // MinimumVersion reports the version floor this build supports (PRD 3 R2).
@@ -449,9 +416,9 @@ func sessionRunning(session Session) bool {
 }
 
 // ResumeSession continues the original conversation using the single verified
-// resume command and verifies the session id was preserved.
+// resume command.
 //
-// The handoff runs in the directory the session occupies, resolved in PRD 6's
+// The resume runs in the directory the session occupies, resolved in PRD 6's
 // fixed order: the recorded run directory, then the project directory (R3). A
 // recorded directory that no longer exists falls back and says so once (R8); a
 // session with neither is a named failure, never an inherited cwd (R2).
@@ -523,9 +490,9 @@ func (p *Provider) resumeIn(ctx context.Context, sessionID string, session Sessi
 	updated := session
 	updated.ID = sessionID
 	updated.LastSeenAt = p.clock.Now().UTC()
-	if result.Verified {
-		updated.LastActivity = updated.LastSeenAt
-	}
+	// The turn ran to its end, so the session was active: the exit status is the
+	// only evidence there is, and a zero one is what it means.
+	updated.LastActivity = updated.LastSeenAt
 	p.known[sessionID] = updated
 	p.mu.Unlock()
 	return result, nil

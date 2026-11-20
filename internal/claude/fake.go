@@ -113,13 +113,6 @@ type FakeProvider struct {
 	Statuses map[string]SessionStatus
 	// ResumeBehaviour is returned by ResumeSession for the matching id.
 	ResumeResults map[string]ResumeResult
-	// Published is the listing PublishedListing returns, scripted per test. A
-	// test that sets only Entries still gets the by-session index production
-	// builds, because PublishedListing indexes the scripted entries itself.
-	Published PublishedListing
-	// PublishedErr, when set, makes PublishedListing fail, which is how the
-	// "the read failed" path is exercised without a real CLI.
-	PublishedErr error
 
 	// Now supplies timestamps; nil means time.Now.
 	Now func() time.Time
@@ -241,29 +234,6 @@ func (f *FakeProvider) GetSessionStatus(ctx context.Context, sessionID string) (
 	}, nil
 }
 
-// PublishedListing implements SessionProvider.
-//
-// It records the call and returns the scripted listing. Indexing is done here so
-// a test can set Entries alone and still get the by-session lookup production
-// gets from the real provider.
-func (f *FakeProvider) PublishedListing(ctx context.Context) (PublishedListing, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, Call{Name: "PublishedListing"})
-	if err := ctx.Err(); err != nil {
-		return PublishedListing{}, err
-	}
-	if f.PublishedErr != nil {
-		return PublishedListing{Err: f.PublishedErr}, f.PublishedErr
-	}
-	listing := f.Published
-	listing.BySessionID = indexBySessionID(listing.Entries)
-	if listing.ReadAt.IsZero() {
-		listing.ReadAt = f.now().UTC()
-	}
-	return listing, nil
-}
-
 // ResumeSession implements SessionProvider.
 func (f *FakeProvider) ResumeSession(ctx context.Context, sessionID, message string) (ResumeResult, error) {
 	f.mu.Lock()
@@ -291,26 +261,14 @@ func (f *FakeProvider) ResumeSession(ctx context.Context, sessionID, message str
 	}
 	if hasResult {
 		result.RequestedSessionID = sessionID
-		result.Verified = result.SessionID == sessionID
 		return result, nil
 	}
-	// A fake handoff is acknowledged and carries a state ID, because the
-	// recovery path records both and refuses a result that has neither.
+	// A fake resume exits zero, because zero is the verdict the recovery path
+	// records as success.
 	return ResumeResult{
 		RequestedSessionID: sessionID,
-		SessionID:          sessionID,
-		Backgrounded:       true,
-		StateID:            StateIDFor(sessionID),
-		Name:               HandoffLabel(sessionID),
-		Handoff: Handoff{
-			Acknowledged: true,
-			StateID:      StateIDFor(sessionID),
-			Name:         HandoffLabel(sessionID),
-			Raw:          "backgrounded · " + StateIDFor(sessionID) + " · " + HandoffLabel(sessionID),
-		},
-		Result:  "resumed",
-		Subtype: "success",
-		Command: append([]string{DefaultExecutable}, HandoffArgs(sessionID, message)...),
+		ExitCode:           0,
+		Command:            append([]string{DefaultExecutable}, ResumeArgs(sessionID, message)...),
 	}, nil
 }
 

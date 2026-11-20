@@ -102,19 +102,6 @@ var (
 	ErrSessionNotPreserved = errors.New("claude: resumed session id did not match the requested session")
 	// ErrResumeFailed reports a resume whose JSON output carried is_error.
 	ErrResumeFailed = errors.New("claude: resume reported an error")
-	// ErrSessionRunningInBackground reports the CLI refusing to resume a
-	// session that is still attached to a background agent. It is the one
-	// condition ccresu answers with another command (`claude stop <job-id>`)
-	// before repeating the same resume.
-	ErrSessionRunningInBackground = errors.New("claude: session is running in the background")
-	// ErrStopFailed reports that `claude stop <job-id>` itself did not succeed,
-	// so the background session is still in the way.
-	ErrStopFailed = errors.New("claude: session stop failed")
-	// ErrInvalidBackgroundJobID reports a `claude stop` argument that is not the
-	// eight-hex background job name the CLI resolves. A session UUID belongs
-	// here: the CLI answers it with "No job matching" and exit 1, so passing it
-	// is refused locally instead of costing a failed recovery.
-	ErrInvalidBackgroundJobID = errors.New("claude: invalid background job id")
 )
 
 // sessionIDPattern matches the UUID form Claude Code uses for session ids.
@@ -298,74 +285,37 @@ type SessionStatus struct {
 	CheckedAt time.Time
 }
 
-// ResumeResult is the outcome of a handoff attempt.
+// ResumeResult is the outcome of one resume invocation.
 type ResumeResult struct {
 	// RequestedSessionID is the session id ccresu asked to resume.
 	RequestedSessionID string
-	// SessionID is the conversation the continuation landed in: the requested
-	// id when it continued in place, the copy's id when the CLI named one, and
-	// empty when a copy was made without being named.
-	SessionID string
-	// Verified reports that the original conversation provably continued. A
-	// handoff cannot prove that: the supervisor accepted the work and the proof
-	// arrives later, from the published session state. It is therefore false
-	// here on purpose rather than by omission.
-	Verified bool
-	// Backgrounded reports that the CLI accepted the handoff and printed its
-	// `backgrounded · <short-id> · <name>` block.
-	Backgrounded bool
-	// StateID is the short ID from that block. `claude attach`, `claude logs`
-	// and `claude stop` take it, and it is not the session UUID.
-	StateID string
-	// Name is the label the supervisor shows for the session.
-	Name string
-	// Handoff keeps the parsed block and the raw output it came from.
-	Handoff Handoff
-	// Copied reports that the CLI started a copy instead of continuing in place.
-	Copied bool
-	// CopySessionID is the copy's session id when the CLI named one.
-	CopySessionID string
-	// Note is the CLI's `note:` line, empty when the continuation was in place.
-	Note string
-	// SupervisorStarted reports that the CLI had to start a supervisor first.
-	SupervisorStarted bool
-	// CWD is the working directory the handoff was given.
+	// ExitCode is the process exit status of the resume.
+	//
+	// Zero is the verdict that the continuation ran. It is the only success
+	// signal the command has: on a pipe the CLI prints a result block rather
+	// than a handshake, so there is no acknowledgement to parse and nothing
+	// else to compare against.
+	ExitCode int
+	// CWD is the working directory the resume was given.
 	CWD string
-	// Result is the final assistant text of the resumed turn.
-	Result string
-	// Subtype is the CLI result subtype ("success" or an error subtype).
-	Subtype string
-	// IsError reports whether the CLI flagged the turn as an error.
-	IsError bool
-	// NumTurns is the number of turns the CLI reported.
-	NumTurns int
-	// DurationMS is the CLI-reported turn duration.
-	DurationMS int
 	// TotalCostUSD is what the CLI reported the turn cost, in US dollars.
 	//
-	// Nil means *not reported*, which is the normal case for a `--bg` handoff:
-	// the handoff returns as soon as the supervisor accepts the session, so
-	// there is no finished turn to price. It is a pointer rather than a zero
-	// float because PRD 5 R10 requires an unreported cost to be recorded as
-	// unknown and to neither count toward a spend cap nor block a resume — a
-	// zero would make every unmeasured attempt look free.
+	// Nil means *not reported*, and that is the normal case: an interactive
+	// resume prints no cost block. It is a pointer rather than a zero float
+	// because PRD 5 R10 requires an unreported cost to be recorded as unknown
+	// and to neither count toward a spend cap nor block a resume — a zero would
+	// make every unmeasured attempt look free.
 	TotalCostUSD *float64
-	// Model is the model that produced the turn, when reported.
-	Model string
 	// Command is the exact argv that was executed.
 	Command []string
 }
 
-// SessionProvider discovers Claude Code sessions and hands a paused one to the
-// background supervisor.
+// SessionProvider discovers Claude Code sessions and resumes a paused one.
 //
 // Implementations must never invent a command: resuming uses
-// `claude --bg --resume <session-id> --name <label> "<message>"`, which returns
-// once the supervisor accepts the session. Print mode is not an option here and
-// not a fallback: `--bg` and `-p`/`--print` cannot be combined, so there is no
-// second vector to fall back to and no stop-then-resume dance to clear the way.
-// `claude stop <job-id>` still acts on a running agent, and its argument is the
-// eight-hex job name, never the session UUID.
+// `claude --resume <session-id> "<message>"` and nothing else. The command runs
+// the turn to its end, so the exit status — not a supervisor's acknowledgement —
+// is what a recovery is judged by.
 type SessionProvider interface {
 	// Discover lists known sessions, newest activity first.
 	Discover(ctx context.Context, filter DiscoverFilter) ([]Session, error)
@@ -373,16 +323,7 @@ type SessionProvider interface {
 	GetSession(ctx context.Context, sessionID string) (Session, error)
 	// GetSessionStatus returns the current status of one session.
 	GetSessionStatus(ctx context.Context, sessionID string) (SessionStatus, error)
-	// PublishedListing returns the supervisor's published state for every
-	// session it knows, in one query.
-	//
-	// It is separate from GetSessionStatus because the two answer different
-	// questions. Discovery answers "which conversations exist on this machine",
-	// merging the listing with the on-disk store; this answers "what does the
-	// supervisor say is happening", and the one thing it can say that discovery
-	// cannot is that a session is not in the listing at all.
-	PublishedListing(ctx context.Context) (PublishedListing, error)
-	// ResumeSession continues an existing session and verifies the session id.
+	// ResumeSession continues an existing session.
 	ResumeSession(ctx context.Context, sessionID, message string) (ResumeResult, error)
 }
 

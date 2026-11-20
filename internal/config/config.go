@@ -126,13 +126,13 @@ type Recovery struct {
 	MaxDelay                Duration `yaml:"max_delay"`
 	Multiplier              float64  `yaml:"multiplier"`
 	Jitter                  float64  `yaml:"jitter"`
-	StartupTimeout          Duration `yaml:"startup_timeout"`
-	VerificationTimeout     Duration `yaml:"verification_timeout"`
-	HealthCheckInterval     Duration `yaml:"health_check_interval"`
+	// TurnTimeout bounds one resume turn: the whole `claude --resume` run,
+	// including the model's own time to answer.
+	TurnTimeout             Duration `yaml:"turn_timeout"`
 	MaxConcurrentRecoveries int      `yaml:"max_concurrent_recoveries"`
-	// Guardrails bounds what one resume may cost and which CLI flags the
-	// handoff may carry (PRD 5). Every knob is optional, and an unset knob
-	// means today's behaviour exactly: no flag added, no check performed.
+	// Guardrails bounds what one resume may cost (PRD 5). Every knob is
+	// optional, and an unset knob means today's behaviour exactly: no check
+	// performed.
 	Guardrails Guardrails `yaml:"guardrails"`
 }
 
@@ -153,23 +153,16 @@ func (c *Config) Warnings() []string {
 			" file written for an older release still starts. Nothing enables it and"+
 			" nothing reads it — delete the line to keep the file honest")
 	}
-	if strings.EqualFold(strings.TrimSpace(c.Recovery.Guardrails.PermissionMode), "bypassPermissions") {
-		warnings = append(warnings, "recovery.guardrails.permission_mode is bypassPermissions, "+
-			"which a background session may silently ignore: Claude Code reports that a background "+
-			"session ignores the bypass request made at launch unless the acceptance is in your user "+
-			"or managed settings. recovery.guardrails.permission_mode dontAsk denies the prompts "+
-			"nobody can answer instead")
-	}
 	return warnings
 }
 
-// Guardrails is PRD 5's config surface: two spend caps ccresu enforces itself,
-// and the four CLI flags that survive a `--bg` handoff.
+// Guardrails is the spend surface ccresu enforces itself.
 //
-// The caps exist because the flag that used to bound a run's cost,
-// `--max-budget-usd`, is documented as "only works with --print" and therefore
-// cannot ride a handoff. The replacement bounds the series of attempts rather
-// than a single turn, and §6.3 of the PRD states that hole rather than hiding it.
+// The caps exist because the flag that once bounded a run's cost,
+// `--max-budget-usd`, is documented as print mode only and therefore cannot ride
+// a resume — and a resume carries no flags at all any more. The replacement
+// bounds the series of attempts rather than a single turn, and §6.3 of PRD 5
+// states that hole rather than hiding it.
 //
 // Both caps default to zero, which means off: a non-zero default would stop
 // recovery on an upgrade nobody asked to change (R12).
@@ -180,17 +173,6 @@ type Guardrails struct {
 	// MaxCostUSDPerAttempt stops automatic recovery for the session when one
 	// attempt reports more than this (R6). Zero disables the check.
 	MaxCostUSDPerAttempt float64 `yaml:"max_cost_usd_per_attempt"`
-	// Model becomes `--model <value>` on the handoff; empty omits the flag.
-	Model string `yaml:"model"`
-	// Effort becomes `--effort <value>`; empty omits the flag.
-	Effort string `yaml:"effort"`
-	// FallbackModel becomes `--fallback-model <value>`; empty omits the flag.
-	FallbackModel string `yaml:"fallback_model"`
-	// PermissionMode becomes `--permission-mode <value>`; empty omits the flag.
-	// The recommended value for an unattended resume is `dontAsk`, which denies
-	// what nobody can answer. `bypassPermissions` is accepted but warned about at
-	// load time, because a background session may silently ignore it (§6.1).
-	PermissionMode string `yaml:"permission_mode"`
 }
 
 // Telegram holds optional notification settings.
