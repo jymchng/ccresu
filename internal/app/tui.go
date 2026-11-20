@@ -1143,12 +1143,17 @@ func (b *browser) act(ctx context.Context, action string) error {
 
 // limitSearchMessage renders a limit search for the status line.
 //
-// The two answers are different outcomes, not different severities: "found" means
-// the session moved to WAITING_FOR_RESET, and "not found" means it did not move at
-// all. Saying only "done" would leave an operator unable to tell which happened.
+// Three answers, not three severities: "found" means the wait was recorded and
+// the session is parked or re-parked, "found but not recorded" means the
+// transcript answered and the session was left alone, and "not found" means there
+// was nothing to answer. Saying only "done" would leave an operator unable to
+// tell them apart.
 func limitSearchMessage(action, id string, result recovery.LimitSearch) string {
-	if !result.Found {
+	switch {
+	case !result.Found:
 		return fmt.Sprintf("%s %s: no usage limit found, state unchanged (%s)", action, shortID(id), result.State)
+	case !result.Applied:
+		return fmt.Sprintf("%s %s: usage limit found, nothing recorded (%s)", action, shortID(id), result.Reason)
 	}
 	return fmt.Sprintf("%s %s: usage limit found, state %s (%s)", action, shortID(id), result.State, result.Reason)
 }

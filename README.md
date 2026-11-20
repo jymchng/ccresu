@@ -162,7 +162,7 @@ Commands:
   inspect       show everything known about one session (same as 'sessions status')
   recover       resume one session now
   retry         retry a session whose attempt budget is spent
-  search-limit  search an idle session's transcript for a usage limit and park it until the reset
+  search-limit  search a session's transcript for a usage limit and park it until the reset
   serve         run the local REST/SSE API
   sessions      list, inspect or delete sessions
   status        summarise session, schedule and notification state

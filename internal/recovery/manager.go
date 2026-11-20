@@ -42,6 +42,10 @@ type Store interface {
 	LatestAttempt(ctx context.Context, sessionID string) (storage.RecoveryAttempt, error)
 	ListAttempts(ctx context.Context, sessionID string, limit int) ([]storage.RecoveryAttempt, error)
 	ListTransitions(ctx context.Context, sessionID string, limit int) ([]storage.Transition, error)
+	// GetSchedule reads the session's pending wait, or a storage.ErrNotFound
+	// when it has none. A search uses it to tell a corrected reset time from one
+	// that already matched, so the history records only real changes.
+	GetSchedule(ctx context.Context, sessionID string) (storage.Schedule, error)
 }
 
 // LimitRecheck reports whether a session's usage limit has actually cleared.

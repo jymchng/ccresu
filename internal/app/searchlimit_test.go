@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jymchng/ccresu/internal/claude"
 	"github.com/jymchng/ccresu/internal/storage"
@@ -200,6 +201,126 @@ func TestSearchLimitCommandParsesAndDispatches(t *testing.T) {
 		}
 		if !strings.Contains(stderr, unknown) {
 			t.Errorf("stderr = %q, want the unknown id named", stderr)
+		}
+	})
+}
+
+// TestSearchLimitParsesAResetTimeForAnyState is the regression this command's
+// contract was rewritten for.
+//
+// A session parked in WAITING_FOR_RESET was refused ("only an idle session can be
+// searched"), which is the one state where an operator most needs the search: it
+// is the state whose stored reset can be wrong. The read must happen whatever the
+// state; what varies is whether the wait is recorded.
+func TestSearchLimitParsesAResetTimeForAnyState(t *testing.T) {
+	t.Run("a parked session is re-parsed and its wait corrected", func(t *testing.T) {
+		h := newHarness(t)
+		ctx := context.Background()
+		seedSearchableSession(t, h, canonicalSessionID, storage.StateWaitingForReset,
+			claude.Entry{Text: "hello"}, claude.Entry{Text: limitBanner})
+
+		// A stale wait the row already carries, so the search has something to
+		// correct rather than something to create.
+		stale := h.clock.Now().UTC().Add(19*time.Hour + 27*time.Minute)
+		if _, err := h.store.SaveSchedule(ctx, storage.Schedule{
+			SessionID: canonicalSessionID, ResetAt: stale, ResetRaw: "the stale phrase",
+		}); err != nil {
+			t.Fatalf("save schedule: %v", err)
+		}
+
+		code, stdout, stderr := h.exec(t, "search-limit", canonicalSessionID)
+		if code != ExitOK {
+			t.Fatalf("exit = %d, want %d: a parked session must be searchable (stderr %q)", code, ExitOK, stderr)
+		}
+		if !strings.Contains(stdout, "usage limit found: yes") {
+			t.Errorf("stdout = %q, want the banner reported", stdout)
+		}
+		if !strings.Contains(stdout, "wait recorded: yes") {
+			t.Errorf("stdout = %q, want the corrected wait reported as recorded", stdout)
+		}
+		if !strings.Contains(stdout, "next attempt") {
+			t.Errorf("stdout = %q, want the re-parsed reset time printed", stdout)
+		}
+		if !strings.Contains(stdout, string(storage.StateWaitingForReset)) {
+			t.Errorf("stdout = %q, want the state to stay %s", stdout, storage.StateWaitingForReset)
+		}
+
+		stored, err := h.store.GetSession(ctx, canonicalSessionID)
+		if err != nil {
+			t.Fatalf("read session: %v", err)
+		}
+		if stored.State != storage.StateWaitingForReset {
+			t.Errorf("state = %s, want %s", stored.State, storage.StateWaitingForReset)
+		}
+		sched, err := h.store.GetSchedule(ctx, canonicalSessionID)
+		if err != nil {
+			t.Fatalf("read schedule: %v", err)
+		}
+		// The seeded wait is replaced by the one this search planned. The test
+		// banner names no instant ("resets soon"), so the plan is a poll of an
+		// unknown reset: what matters is that the row is no longer the stale one,
+		// and that it points at the evidence this search recorded.
+		if sched.ResetRaw == "the stale phrase" {
+			t.Errorf("schedule = %+v, want the wait replaced by the one the banner planned", sched)
+		}
+		if sched.UsageLimitID == 0 {
+			t.Error("schedule is not linked to the usage limit this search recorded")
+		}
+		if sched.Unknown && sched.NextPollAt.IsZero() {
+			t.Error("unknown reset with no poll instant: the session would never be woken")
+		}
+		limit, err := h.store.LatestUsageLimit(ctx, canonicalSessionID)
+		if err != nil {
+			t.Fatalf("latest usage limit: %v", err)
+		}
+		if !strings.Contains(limit.RawMessage, "5-hour limit") {
+			t.Errorf("recorded banner = %q, want the banner the re-parse used", limit.RawMessage)
+		}
+	})
+
+	t.Run("a completed session is read and left alone", func(t *testing.T) {
+		h := newHarness(t)
+		ctx := context.Background()
+		seedSearchableSession(t, h, canonicalSessionID, storage.StateCompleted,
+			claude.Entry{Text: limitBanner})
+
+		code, stdout, stderr := h.exec(t, "search-limit", canonicalSessionID)
+		if code != ExitOK {
+			t.Fatalf("exit = %d, want %d: reading a finished session is still an answer (stderr %q)",
+				code, ExitOK, stderr)
+		}
+		if !strings.Contains(stdout, "usage limit found: yes") {
+			t.Errorf("stdout = %q, want the banner reported", stdout)
+		}
+		if !strings.Contains(stdout, "wait recorded: no") {
+			t.Errorf("stdout = %q, want it to say nothing was written", stdout)
+		}
+		if strings.Contains(stdout, "next attempt") {
+			t.Errorf("stdout = %q, want no wait printed for a session that takes no park", stdout)
+		}
+		stored, err := h.store.GetSession(ctx, canonicalSessionID)
+		if err != nil {
+			t.Fatalf("read session: %v", err)
+		}
+		if stored.State != storage.StateCompleted {
+			t.Errorf("state = %s, want it unchanged at %s", stored.State, storage.StateCompleted)
+		}
+		if _, err := h.store.LatestUsageLimit(ctx, canonicalSessionID); !errors.Is(err, storage.ErrNotFound) {
+			t.Errorf("usage limit = %v, want none: a verdict is not walked back by a read", err)
+		}
+	})
+
+	t.Run("the JSON report carries applied", func(t *testing.T) {
+		h := newHarness(t)
+		seedSearchableSession(t, h, canonicalSessionID, storage.StateWaitingForReset,
+			claude.Entry{Text: limitBanner})
+
+		code, stdout, stderr := h.exec(t, "--json", "search-limit", canonicalSessionID)
+		if code != ExitOK {
+			t.Fatalf("exit = %d, want %d (stderr %q)", code, ExitOK, stderr)
+		}
+		if !strings.Contains(stdout, `"applied": true`) {
+			t.Errorf("stdout = %q, want the JSON report to carry applied: true", stdout)
 		}
 	})
 }

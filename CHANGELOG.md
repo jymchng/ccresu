@@ -4,6 +4,47 @@ All notable changes to ccresu are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-11-20
+
+A patch release for one refusal that should never have existed. `ccresu
+search-limit` — and the `L` key that calls it — answered a session parked in
+`WAITING_FOR_RESET` with
+
+```
+recovery: session is not eligible for recovery: session <id> is WAITING_FOR_RESET,
+and only an idle session (DISCOVERED or RESUMED) can be searched
+```
+
+so the state whose stored reset an operator most often needs to repair was the
+one state the command would not look at. Nothing else changes: no schema, no
+configuration, no state name.
+
+### Changed
+
+- **`search-limit` reads any state; only the write is gated.** Parsing a banner
+  is how an operator asks "what reset does this limit name", and the answer is
+  most needed for a session that is already waiting. `RESUMING`, `COMPLETED`,
+  `DISABLED` and `UNRECOVERABLE` are now read and reported too, with
+  `wait recorded: no` (`applied: false` in `--json`) instead of an error — an
+  answer is not a failure. `RESUMING` is read-only because a pass is going to
+  read the transcript anyway; the verdicts are read-only because a search must
+  not walk back a decision, and a disabled session is an operator's decision even
+  when its state would otherwise allow a park.
+
+### Fixed
+
+- **A wrong reset time can be corrected instead of waited out.** A search on a
+  session already in `WAITING_FOR_RESET` now re-plans the wait from the banner
+  that is in the transcript and replaces the stored schedule, so a reset parsed
+  from an older banner, or a poll of a reset the transcript has since named, is
+  fixed by pressing `L` rather than by waiting for an instant that is wrong. The
+  re-parse is recorded as the machine's `WAITING_FOR_RESET → WAITING_FOR_RESET`
+  self-edge, and only when the instant actually changed, so a second press is not
+  a second event.
+- **`ccresu search-limit` no longer exits 4 for a state.** The only remaining
+  eligibility errors are the ones that mean what they say: an unknown session
+  (exit 3), and a session the recovery manager refuses to act for at all.
+
 ## [0.9.0] - 2026-11-20
 
 The state machine shrank from sixteen states to seven. What ccresu does did not

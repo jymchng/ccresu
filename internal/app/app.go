@@ -457,7 +457,7 @@ func (a *App) commands() []commandSpec {
 		},
 		{
 			name:    "search-limit",
-			summary: "search an idle session's transcript for a usage limit and park it until the reset",
+			summary: "search a session's transcript for a usage limit and park it until the reset",
 			usage:   "search-limit <session-id> [--tail N]",
 			run:     (*App).cmdSearchLimit,
 		},

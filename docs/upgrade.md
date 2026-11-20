@@ -157,6 +157,26 @@ Two consequences are worth knowing before you upgrade:
   `RESET_TIME_REACHED`, so a rollback keeps the rows and loses the nuance. Take
   the backup below if you intend to go back.
 
+### `search-limit` no longer refuses a session by state
+
+0.9.1 removes the eligibility gate from `ccresu search-limit` (and from the `L`
+key that calls it). It used to exit 4 with
+
+```
+recovery: session is not eligible for recovery: session <id> is WAITING_FOR_RESET,
+and only an idle session (DISCOVERED or RESUMED) can be searched
+```
+
+which refused the very session an operator most often wants to ask about: one
+already parked, whose stored reset may be stale or was never parsed. Now the
+transcript is read in every state. `DISCOVERED` and `RESUMED` still park;
+`WAITING_FOR_RESET` re-plans the wait from the banner that is in the transcript
+now and replaces the stored schedule, which is how a wrong reset time gets
+corrected instead of waited out; `RESUMING`, `COMPLETED`, `DISABLED` and
+`UNRECOVERABLE` are read and reported with `wait recorded: no` and left
+untouched. Nothing to do on upgrade — no configuration, schema or state name
+changed.
+
 ### `telegram.notify_needs_input` is tolerated, not refused
 
 0.9.0 removed the needs-input message, so the key that switched it no longer

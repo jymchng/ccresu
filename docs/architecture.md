@@ -289,6 +289,12 @@ reaches `RESUMING` — and `RESUMED` still has no direct edge to `WAITING_FOR_RE
 so the observation that produced the wait is always its own `state_transitions`
 row rather than an inference from the row before it.
 
+`WAITING_FOR_RESET → WAITING_FOR_RESET` is the one self-edge a command writes: an
+operator's `ccresu search-limit` on a session that is already parked re-plans the
+wait from the banner in the transcript and records the re-parse, because the
+stored instant is the thing most likely to be wrong and the state cannot move to
+say so.
+
 ## Concurrency and shutdown
 
 One reconcile pass is a six-stage pipeline in fixed order — `discover`,

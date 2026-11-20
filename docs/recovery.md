@@ -221,6 +221,17 @@ fails a named test rather than passing quietly.
    `RESUMED` session has gone idle asks for the same read with
    `ccresu search-limit <session-id>`, which takes the identical walk
    `RESUMED → DISCOVERED → WAITING_FOR_RESET` and writes the same rows.
+   The search itself is not restricted to idle sessions: it reads the transcript
+   in *any* state, because parsing a banner is how an operator asks what reset a
+   session's limit names — and the state where that question matters most is
+   `WAITING_FOR_RESET`, whose stored instant may be stale, parsed from an older
+   banner, or a poll of a reset the transcript has since named. What the state
+   restricts is the *write*: a session already in `WAITING_FOR_RESET` has its wait
+   re-planned from the banner that is in the transcript now, and the
+   `WAITING_FOR_RESET → WAITING_FOR_RESET` self-edge records the change;
+   `RESUMING` has a pass that reads the transcript anyway, and `COMPLETED`,
+   `DISABLED` and `UNRECOVERABLE` are verdicts a read must not walk back, so those
+   four are read, reported and left untouched.
 4. The text is normalised, then scored against the built-in patterns and any
    `detector.custom_patterns`, with guards and negatives deciding what counts
    (below).

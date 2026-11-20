@@ -1162,15 +1162,20 @@ func (a *App) cmdRetry(ctx context.Context, args []string) error {
 	return nil
 }
 
-// cmdSearchLimit looks for a usage limit in a session the operator has
-// established is idle.
+// cmdSearchLimit reads a session's transcript for a usage limit.
 //
 // The command exists because RESUMED is Settled: a resumed session is never
 // re-observed, so a limit that lands in its transcript after the resume leaves it
 // stuck in RESUMED for ever while the daemon runs happily next to it. Not looking
 // is deliberate — it is what stops a finished conversation being resumed twice —
-// so the read cannot be automatic. It is an operator act instead, and the
-// operator is the authority on whether the session has gone idle.
+// so the read cannot be automatic. It is an operator act instead.
+//
+// The read is not gated on the session's state. A session already parked in
+// WAITING_FOR_RESET is searched too, and a limit found there re-plans the wait
+// from the banner that is in the transcript now: that is how an operator replaces
+// a reset time that was parsed wrong. States whose transcript a pass already owns
+// (RESUMING) or whose verdict stands (COMPLETED, DISABLED, UNRECOVERABLE) are
+// read and reported without being written to.
 //
 // Nothing is resumed and nothing is spent: the command reads a transcript, and
 // when it finds a banner it parks the session on the wait the banner names.
@@ -1220,11 +1225,17 @@ func (a *App) cmdSearchLimit(ctx context.Context, args []string) error {
 // question and got the answer. The exit code stays 0 and the message says plainly
 // that the session was left alone, so a script reading the exit code is not told
 // that something broke when nothing did.
+//
+// The same holds for a search that found a banner on a session that does not take
+// a park: the transcript answered, the answer is printed, and "wait recorded: no"
+// says that the session was left exactly as it was. The reason says why, because
+// "no" on its own would leave the operator guessing whether the command failed.
 func (a *App) reportLimitSearch(rt *Runtime, result recovery.LimitSearch) error {
 	if a.json {
 		return a.writeJSON(a.stdout, map[string]any{
 			"session_id":     result.SessionID,
 			"found":          result.Found,
+			"applied":        result.Applied,
 			"state":          string(result.State),
 			"banner":         result.Banner,
 			"reason":         result.Reason,
@@ -1238,15 +1249,20 @@ func (a *App) reportLimitSearch(rt *Runtime, result recovery.LimitSearch) error 
 	a.field(a.stdout, "session", result.SessionID)
 	a.field(a.stdout, "usage limit found", yesNo(result.Found))
 	a.field(a.stdout, "state", result.State)
+	a.field(a.stdout, "wait recorded", yesNo(result.Applied))
 	if !result.Found {
-		a.field(a.stdout, "next", "nothing was changed; run this again once the session has gone idle")
+		a.field(a.stdout, "next", "nothing was changed; run this again when the transcript carries a usage limit")
 		return nil
 	}
 	a.field(a.stdout, "banner", truncateText(result.Banner, 120))
+	a.field(a.stdout, "reason", result.Reason)
+	if !result.Applied {
+		a.field(a.stdout, "next", "nothing was changed; the banner above is what the transcript says")
+		return nil
+	}
 	a.field(a.stdout, "reset known", yesNo(result.Wait.Known))
 	a.field(a.stdout, "next attempt", formatTime(result.Wait.At, a.displayLocation(rt)))
 	a.field(a.stdout, "wait", formatDuration(result.Wait.Delay))
-	a.field(a.stdout, "reason", result.Reason)
 	return nil
 }
 

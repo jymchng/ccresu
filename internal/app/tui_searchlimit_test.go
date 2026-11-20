@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jymchng/ccresu/internal/claude"
 	"github.com/jymchng/ccresu/internal/storage"
@@ -207,6 +208,69 @@ func TestSessionsBrowserSearchesTheSelectedSessionOnL(t *testing.T) {
 		}
 		if _, err := h.store.LatestUsageLimit(ctx, firstID); err == nil {
 			t.Errorf("the row above the cursor was searched too")
+		}
+	})
+
+	t.Run("a parked session is re-parsed instead of refused", func(t *testing.T) {
+		// The regression: 'L' on a WAITING_FOR_RESET row answered
+		// "session <id> is WAITING_FOR_RESET, and only an idle session ... can be
+		// searched", which refused the one state whose stored reset an operator
+		// most needs re-parsed.
+		h := newHarness(t)
+		session := h.seedSession(t, canonicalSessionID, func(s *storage.Session) {
+			s.State = storage.StateWaitingForReset
+			s.TranscriptLines = 2
+		})
+		h.seedTranscript(session.TranscriptPath,
+			claude.Entry{Text: "hello"}, claude.Entry{Text: limitBanner})
+		stale := h.clock.Now().UTC().Add(19*time.Hour + 27*time.Minute)
+		if _, err := h.store.SaveSchedule(ctx, storage.Schedule{
+			SessionID: canonicalSessionID, ResetAt: stale, ResetRaw: "the stale phrase",
+		}); err != nil {
+			t.Fatalf("save schedule: %v", err)
+		}
+
+		paced := h.startBrowser(t, "sessions", "--all")
+		paced.waitForScreen(t, "enter detail")
+		paced.send(t, "L")
+		paced.waitForScreen(t, "the reset time was re-parsed")
+		if code := paced.quit(t); code != ExitOK {
+			t.Fatalf("exit = %d (stderr %q)", code, h.stderr.String())
+		}
+
+		stored, err := h.store.GetSession(ctx, canonicalSessionID)
+		if err != nil {
+			t.Fatalf("read session: %v", err)
+		}
+		if stored.State != storage.StateWaitingForReset {
+			t.Errorf("state = %s, want %s", stored.State, storage.StateWaitingForReset)
+		}
+		sched, err := h.store.GetSchedule(ctx, canonicalSessionID)
+		if err != nil {
+			t.Fatalf("read schedule: %v", err)
+		}
+		if sched.ResetRaw == "the stale phrase" {
+			t.Errorf("schedule = %+v, want the stale wait replaced by the one the banner planned", sched)
+		}
+		if sched.UsageLimitID == 0 {
+			t.Error("schedule is not linked to the usage limit the search recorded")
+		}
+
+		// The re-parse is an event even though the state cannot move, so it is
+		// recorded as the machine's self-edge.
+		transitions, err := h.store.ListTransitions(ctx, canonicalSessionID, 0)
+		if err != nil {
+			t.Fatalf("list transitions: %v", err)
+		}
+		sawReparse := false
+		for _, transition := range transitions {
+			if transition.FromState == storage.StateWaitingForReset &&
+				transition.ToState == storage.StateWaitingForReset {
+				sawReparse = true
+			}
+		}
+		if !sawReparse {
+			t.Errorf("transitions = %+v, want a WAITING_FOR_RESET -> WAITING_FOR_RESET row", transitions)
 		}
 	})
 }
