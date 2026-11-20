@@ -351,20 +351,43 @@ func TestScheduleCascadesWithSession(t *testing.T) {
 // TestClaudeSessionIDShape documents why the schedule is keyed by session ID: it
 // is what `claude --resume` accepts, so the wait can be attributed to a real
 // session rather than a process.
+//
+// The fake is seeded on purpose. It used to be built empty, so `Discover`
+// returned nothing and the only reachable outcome was a skip: a green run
+// counted a test that never asserted anything. With a session in it, the test
+// says what the shape is for — a schedule keyed by anything the CLI cannot
+// resume would be a wait nothing can serve.
 func TestClaudeSessionIDShape(t *testing.T) {
 	t.Parallel()
 
-	provider := claude.NewFakeProvider()
+	const sessionID = "11111111-1111-4111-8111-111111111111"
+
+	provider := claude.NewFakeProvider(claude.Session{
+		ID:          sessionID,
+		Type:        claude.SessionTypeBackground,
+		ProjectPath: "/tmp/project",
+		Recoverable: true,
+	})
 	sessions, err := provider.Discover(context.Background(), claude.DiscoverFilter{})
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	if len(sessions) == 0 {
-		t.Skip("the fake provider discovered no sessions")
+	if len(sessions) != 1 {
+		t.Fatalf("Discover returned %d sessions, want 1", len(sessions))
 	}
-	for _, session := range sessions {
-		if session.ID == "" {
-			t.Fatal("a discovered session must have an ID")
+	if sessions[0].ID != sessionID {
+		t.Fatalf("discovered session id = %q, want %q", sessions[0].ID, sessionID)
+	}
+	if err := claude.ValidateSessionID(sessions[0].ID); err != nil {
+		t.Fatalf("the discovered id is not one `claude --resume` accepts: %v", err)
+	}
+
+	// The other half of the shape: these are what a naive key would hold — a
+	// storage-style row id, an eight-hex background job name, and nothing at
+	// all — and none of them is a session the CLI can resume.
+	for _, notASessionID := range []string{"", "sess-1", "1234abcd"} {
+		if claude.ValidSessionID(notASessionID) {
+			t.Fatalf("ValidSessionID(%q) = true, want false", notASessionID)
 		}
 	}
 }

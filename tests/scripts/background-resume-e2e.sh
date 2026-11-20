@@ -227,6 +227,10 @@ printf '%s\t%s\n' \
 "$ccresu" config init >/dev/null
 
 # ---------------------------------------------------------------- pass one
+# The backticks are prose quoting a command name, not a command substitution:
+# SC2016 would have this string double-quoted, which turns the literal
+# `ccresu recover` in the banner into an execution.
+# shellcheck disable=SC2016
 printf '\n== pass 1: discover, opt in, then `ccresu recover` each session\n'
 # The first pass only discovers and detects: recovery is switched off for this
 # single invocation so the daemon records the usage limit and parks the sessions
@@ -287,6 +291,9 @@ contains "recover A is proven by the supervisor's acceptance" "$recover_a" \
 	"proven: the continuation was handed to the background supervisor"
 check "the handoff ran exactly once for A" "$handoff_a" "1"
 check_nonzero "recover B is refused" "$recover_b_code"
+# B's refusal was a real attempt, not a skipped one: exactly one handoff was
+# sent for it, and the failure was not retried into a second.
+check "the refused handoff was attempted exactly once for B" "$handoff_b" "1"
 check "session B is rediscovered" "$(state_field "$inspect_b")" "DISCOVERED"
 check_nonzero "recover C is refused" "$recover_c_code"
 check "session C is rediscovered" "$(state_field "$inspect_c")" "DISCOVERED"
