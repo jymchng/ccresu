@@ -29,7 +29,7 @@ as the user who owns the Claude Code sessions.
 | `internal/claude` | The only place that talks to Claude Code: discovery, transcripts, version floor, resume. |
 | `internal/detector` | Normalisation plus configurable patterns that recognise a usage limit, its reset phrase and a paused goal — and refuse to classify auth, network, cancellation or completion messages as limits. |
 | `internal/scheduler` | Reset-phrase parsing (AM/PM, 24h, noon/midnight, relative, `tomorrow`, explicit dates, IANA zones, DST), schedules and the unknown-reset backoff. |
-| `internal/recovery` | The persisted state machine: eligibility, per-session locking, concurrency limit, backoff, the refusal parker and the verifier that proves a resume happened. |
+| `internal/recovery` | The persisted state machine: eligibility, per-session locking, concurrency limit, backoff, the refusal parker, the exit-status verdict and the transcript measurement recorded beside it. |
 | `internal/telegram` | Bot API client, HTML templates, seven notification events, persistent queue with delivery status, token redaction. |
 | `internal/server` | REST + SSE API on `127.0.0.1:8787` (`DefaultAddr`) under `/api/v1` (`APIPrefix`), bearer token, Origin allowlist, limits. |
 
@@ -94,43 +94,29 @@ reason `waiting until <RFC3339>` when the reset is known. The row, not a timer,
 is the source of truth: a restart, an upgrade or a reboot mid-wait resumes from
 the database. `LoadSchedules` orders the earliest deadline first and excludes
 rows with no deadline at all, because such a row could never become due.
-6. **Handoff** — when a schedule is due, `actOnSchedules` asks for a recovery
+6. **Resume** — when a schedule is due, `actOnSchedules` asks for a recovery
 (`daemon.go:414-468`). There is no "the reset time arrived" state to record
 first: with seven states the pass wakes the session from whatever state it is in
 (`WAITING_FOR_RESET → RESUMING`), so the intermediate beat the old machine needed
 is gone. The manager records the
 attempt *before* it issues the continuation (`StartAttempt` at
-`manager.go:631`) and calls `claude.HandoffArgs`, whose vector is
-`[]string{"--bg", "--resume", sessionID, "--name", HandoffLabel(sessionID), message}`
-(`internal/claude/handoff.go:148-158`). The message is the **last** element because
-the CLI takes the prompt as a positional argument after the flags, so it follows
-the session id it belongs to instead of sitting between flags; `--bg` and `-p`
-cannot be combined, so the print-mode vector is absent by construction. The label
-is `ccresu-<first-8-hex>` derived from the session id, which makes a recovered
-session identifiable in agent view without consulting the database. The attempt's
-`command` column is a preview rendered in the same order
-(`manager.go:1399-1406`). The CLI answers a handoff with a
-`backgrounded · <short-id> · <name>` block that `claude` parses into
-`Handoff{StateID, Name, Copied, …}`; a handoff that prints no block is
-`ErrHandoffNotAcknowledged`, because ccresu could not then name what it created.
-7. **Observation** — acceptance is the proof, and the supervisor's published
-state is what happens next. `ObservationSource.Observe`
-(`internal/recovery/observation.go:71`) reads one `claude agents --json --all`
-per pass — always `--all`, whatever `claude.discover_all_sessions` says — indexes
-it by `sessionId` (`claude.PublishedListing`, `internal/claude/published.go:62`),
-and hands the entry to the total mapping `recovery.Observe`
-(`internal/recovery/published.go:123`). `working` after a handoff is `RESUMED`;
-`blocked` is **not** a park any more: with a handoff outstanding the continuation
-landed, so the session is `RESUMED` and the prompt it waits on is the operator's
-to answer, and with no handoff the pass hands it a continuation like any other
-session; `done` before a handoff is `COMPLETED`; `failed` and `stopped` are
-retries; an unrecognised value is a retry with the value recorded. A session
-missing from the listing while a handoff is outstanding is `HandoffUnobserved` →
-`WAITING_FOR_RESET`, never a failure, and a read that fails is
-`ErrObservationUnavailable`, which keeps the attempt open: an outage is not a
-verdict. Transcript growth is still measured, but only as a diagnostic
-(`verify.go:189`), and it can never make a blocked session read as anything other
-than what the supervisor published.
+`manager.go:631`) and calls `claude.ResumeArgs`, whose vector is
+`[]string{"--resume", sessionID, message}` (`internal/claude/resume.go`). The
+message is the **last** element because the CLI takes the prompt as a positional
+argument, so it follows the session id it belongs to instead of sitting between
+flags, and no `--` separator is emitted, which would change how a leading dash in
+it is read. That is the whole vector: no background flag, no session label, no
+guardrail flags. The attempt's `command` column is a preview rendered in the same
+order (`manager.go`). The command is **blocking**: it runs the whole turn and
+returns when the continuation is finished, bounded by `recovery.turn_timeout`.
+7. **Verdict** — the exit status is what decides. Status 0 moves
+`RESUMING → RESUMED`; anything else is a failed attempt carrying its exit code and
+stderr, retried with backoff and jitter while the budget lasts. The transcript is
+read once *after* a successful exit (`recovery.Recorder.Measure`,
+`internal/recovery/verify.go`) and the measurement is stored as a diagnostic —
+`proven`, `exit_code`, `transcript_grew`, the line and size readings before and
+after, plus a note for every conclusion. It can never fail a recovery and never
+revises the verdict, because by the time it runs the turn is already over.
 8. **Refusal** — if the CLI ran but said the limit is still in force, the
 session does **not** go to a backoff: it returns to `WAITING_FOR_RESET`
 through the `RESUMING → WAITING_FOR_RESET` edge, because a retry a minute later
@@ -150,7 +136,7 @@ migrations under `internal/storage/migrations`, plus one bookkeeping table:
 | --- | --- |
 | `sessions` | one row per discovered session: `id` (the Claude Code UUID, primary key), `project_path` (where the session **started**, recorded once), `runs_in_path` (where it **actually runs**, refreshed from every observation — the two differ when a background session has moved into a git worktree), `transcript_path`, `provider`, `session_type`, `pid` (evidence only: no lifecycle decision reads it), `state`, `enabled`, `recoverable`, `reason`, `last_error`, `transcript_size`, `transcript_lines`, `retry_at`, `discovered_at`, `last_seen_at`, `updated_at` |
 | `usage_limits` | each detected limit: `session_id`, `limit_type`, `raw_message`, `reset_at`, `reset_timezone`, `reset_raw`, `confidence`, `paused_goal`, `detected_at` |
-| `recovery_attempts` | every continuation: `session_id`, `usage_limit_id`, `attempt_number`, `state`, `command`, `started_at`, `finished_at`, `success`, `output`, `error`, `session_id_verified`, `transcript_grew`, `cost_usd` (NULL means the CLI reported no cost, which is *unknown*, not zero), the handoff (`handoff_state_id`, `handoff_name`, `handoff_at`, `handoff_copied`) and the observation it rested on (`observed_state`, `observed_status`, `observed_waiting_for`, `observed_at`, `observed_listed`) |
+| `recovery_attempts` | every continuation: `session_id`, `usage_limit_id`, `attempt_number`, `state`, `command`, `started_at`, `finished_at`, `success`, `output`, `error`, `session_id_verified`, `transcript_grew` (the post-turn diagnostic, never the verdict), `cost_usd` (NULL means the CLI reported no cost, which is *unknown*, not zero) |
 | `state_transitions` | the append-only audit trail: `session_id`, `attempt_id`, `from_state`, `to_state`, `reason`, `occurred_at` |
 | `schedules` | the durable wait: `session_id` (primary key), `usage_limit_id`, `reset_at`, `reset_timezone`, `reset_raw`, `unknown_reset`, `attempts`, `next_poll_at`, `created_at`, `updated_at` |
 | `notifications` | queued/sent/failed messages: `session_id`, `attempt_id`, `event`, `dedupe_key`, `body`, `status`, `attempts`, `last_error`, `created_at`, `updated_at`, `sent_at` |
@@ -267,8 +253,8 @@ DISCOVERED → WAITING_FOR_RESET → RESUMING → RESUMED → DISCOVERED
 ```
 
 `DISCOVERED` is the transcript read, `WAITING_FOR_RESET` is the durable wait on
-the instant a banner named, `RESUMING` is the one attempt spent handing the
-backgrounded session a continuation, and `RESUMED` is the landing beat — whose
+the instant a banner named, `RESUMING` is the one attempt spent running the
+blocking resume, and `RESUMED` is the landing beat — whose
 edge back to `DISCOVERED` is what makes the loop a loop. There is no terminal
 failure state: every beat that permits automatic work has an edge back to
 `DISCOVERED`, and entering `DISCOVERED` resets the attempt budget, so a spent
@@ -278,16 +264,13 @@ and has exactly one edge, back to `DISCOVERED`, which only `ccresu enable`
 takes); `Pending(s)` — what a restarted daemon picks up — is `WAITING_FOR_RESET`
 and `RESUMING`; `Failed(s)` is `UNRECOVERABLE` alone.
 
-Two edges exist only so a limit can be noticed in a session that is otherwise
-finished with: `DISCOVERED → RESUMED` and `WAITING_FOR_RESET → RESUMED` record a
-session the supervisor found alive again on its own once the window reset. They
-are observations from the published state, not resumes — no attempt is spent and
-no continuation is handed over. A rescan of a `RESUMED` session takes
-`RESUMED → DISCOVERED → WAITING_FOR_RESET`, and `ccresu search-limit` takes the
-same two on the operator's behalf. They are parks, not resumptions — neither
-reaches `RESUMING` — and `RESUMED` still has no direct edge to `WAITING_FOR_RESET`,
-so the observation that produced the wait is always its own `state_transitions`
-row rather than an inference from the row before it.
+A rescan of a `RESUMED` session takes `RESUMED → DISCOVERED → WAITING_FOR_RESET`,
+and `ccresu search-limit` takes the same two on the operator's behalf. They are
+parks, not resumptions — neither reaches `RESUMING` — and `RESUMED` has no direct
+edge to `WAITING_FOR_RESET`, so the detection that produced the wait is always its
+own `state_transitions` row rather than an inference from the row before it.
+There is no edge that reaches `RESUMED` without a resume: a session cannot be
+recorded as continued unless a `claude --resume` process exited 0.
 
 `WAITING_FOR_RESET → WAITING_FOR_RESET` is the one self-edge a command writes: an
 operator's `ccresu search-limit` on a session that is already parked re-plans the

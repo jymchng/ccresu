@@ -125,22 +125,20 @@ var ErrSpendCapReached = errors.New("recovery: spend cap reached")
 // The list is deliberately narrow and explicit. Every entry is a condition that
 // will still be true a minute later: a missing binary, an unsupported version,
 // a session that cannot be resumed, a session id the CLI will not accept, or a
-// handoff the supervisor refused or never acknowledged. The handoff entries are
-// here because the same arguments produce the same silence: `claude.Resume`
-// documents that neither an untrusted workspace nor a missing `backgrounded`
-// block gets better by trying again, and the classifier is what makes that true
-// rather than merely intended.
+// resume the CLI refused to run in the directory it was given. An untrusted
+// workspace is here because the same arguments produce the same refusal: it is
+// the operator's call whether to trust the directory, not something a retry can
+// change.
 var nonRetryable = []error{
 	claude.ErrCLIUnavailable,
 	claude.ErrUnsupportedVersion,
 	claude.ErrUnrecognizedVersion,
 	claude.ErrInvalidSessionID,
+	claude.ErrResumeDirectoryMissing,
 	claude.ErrEmptyMessage,
 	claude.ErrMessageTooLong,
 	claude.ErrSessionNotPreserved,
 	claude.ErrWorkspaceNotTrusted,
-	claude.ErrHandoffNotAcknowledged,
-	claude.ErrHandoffDirectoryMissing,
 }
 
 // permanentMarkers are text fragments that identify an authentication or

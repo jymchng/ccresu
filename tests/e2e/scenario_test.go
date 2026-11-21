@@ -172,8 +172,8 @@ func TestFullScenarioReplaysTheRealInterruption(t *testing.T) {
 		t.Fatalf("recover: %v (state %s)", err, outcome.State)
 	}
 
-	// (6) The continuation was handed to the supervisor, exactly once, with the
-	// documented argv: --bg first, the message last, and no print mode anywhere.
+	// (6) The continuation was resumed exactly once, with the documented argv:
+	// the subcommand, the session id and the message, and nothing else.
 	calls := provider.ResumeCalls()
 	if len(calls) != 1 {
 		t.Fatalf("assertion 6: %d resumes, want exactly 1", len(calls))
@@ -181,29 +181,26 @@ func TestFullScenarioReplaysTheRealInterruption(t *testing.T) {
 	if got := calls[0].Message; got != manager.ContinuationMessage() {
 		t.Fatalf("assertion 6: continuation message = %q, want %q", got, manager.ContinuationMessage())
 	}
-	wantArgs := claude.HandoffArgs(support.SessionID, manager.ContinuationMessage())
-	if len(wantArgs) != 6 || wantArgs[0] != "--bg" || wantArgs[1] != "--resume" ||
-		wantArgs[2] != support.SessionID || wantArgs[3] != "--name" ||
-		wantArgs[4] != claude.HandoffLabel(support.SessionID) ||
-		wantArgs[5] != manager.ContinuationMessage() {
-		t.Fatalf("assertion 6: unexpected handoff argv shape %v", wantArgs)
+	wantArgs := claude.ResumeArgs(support.SessionID, manager.ContinuationMessage())
+	if len(wantArgs) != 3 || wantArgs[0] != "--resume" ||
+		wantArgs[1] != support.SessionID || wantArgs[2] != manager.ContinuationMessage() {
+		t.Fatalf("assertion 6: unexpected resume argv %v", wantArgs)
 	}
 	for _, arg := range wantArgs {
-		if arg == "-p" || arg == "--print" || arg == "--output-format" {
-			t.Fatalf("assertion 6: handoff argv carries a print-mode flag: %v", wantArgs)
+		switch arg {
+		case "-p", "--print", "--output-format", "--bg", "--name":
+			t.Fatalf("assertion 6: resume argv carries a retired flag: %v", wantArgs)
 		}
 	}
 
-	// (7) The session that was handed off is the original one, and the handoff
-	// asked for a ccresu-owned label derived from it.
+	// (7) The session that was resumed is the original one. There is no label and
+	// no acknowledgement to compare: the verdict is the exit status below.
 	if calls[0].SessionID != support.SessionID {
 		t.Fatalf("assertion 7: resumed %q, want %q", calls[0].SessionID, support.SessionID)
 	}
-	if !outcome.Verification.SessionIDPreserved {
-		t.Fatalf("assertion 7: session id was not proven preserved: %v", outcome.Verification.Notes)
-	}
-	if want := claude.HandoffLabel(support.SessionID); outcome.Verification.HandoffName != want {
-		t.Fatalf("assertion 7: handoff name = %q, want %q", outcome.Verification.HandoffName, want)
+	if !outcome.Verification.Proven || outcome.Verification.ExitCode != 0 {
+		t.Fatalf("assertion 7: the resume exited %d, want the zero exit that proves it: %v",
+			outcome.Verification.ExitCode, outcome.Verification.Notes)
 	}
 
 	// (8) The working directory is unchanged: the handoff addressed the same
@@ -230,20 +227,18 @@ func TestFullScenarioReplaysTheRealInterruption(t *testing.T) {
 		t.Fatalf("assertion 9: surviving session is %q, want %q", sessions[0].ID, support.SessionID)
 	}
 
-	// (10) The handoff was acknowledged, and that is what counts as proven now.
-	// The transcript is deliberately NOT the proof: the supervisor owns the work,
-	// so growth arrives later and would prove nothing about the continuation.
-	if !outcome.Verification.HandoffAccepted {
-		t.Fatalf("assertion 10: the handoff was not accepted: %v", outcome.Verification.Notes)
-	}
-	if outcome.Verification.HandoffStateID == "" {
-		t.Fatalf("assertion 10: no state id was recorded: %v", outcome.Verification.Notes)
-	}
-	if outcome.Verification.TranscriptGrew {
-		t.Fatal("assertion 10: verification claimed transcript growth for a handoff")
-	}
+	// (10) The exit status is the verdict, and the transcript measurement is only
+	// a diagnostic: ccresu reports the growth it read, and nothing about it can
+	// revise the verdict the exit status already gave.
 	if !outcome.Verification.Proven {
 		t.Fatalf("assertion 10: verification was not proven: %s", outcome.Verification.Reason())
+	}
+	if !outcome.Verification.TranscriptGrew {
+		t.Fatalf("assertion 10: the pre-resume transcript read was not measured: %v", outcome.Verification.Notes)
+	}
+	if outcome.Verification.LinesAfter <= outcome.Verification.LinesBefore {
+		t.Fatalf("assertion 10: lines before/after = %d/%d, want the growth the provider reported",
+			outcome.Verification.LinesBefore, outcome.Verification.LinesAfter)
 	}
 
 	// (11) The final state is RESUMED and it is persisted.
@@ -269,20 +264,13 @@ func TestFullScenarioReplaysTheRealInterruption(t *testing.T) {
 	if attempts[0].Success == nil || !*attempts[0].Success {
 		t.Fatalf("assertion 12: attempt not recorded as successful: %+v", attempts[0])
 	}
-	// The handoff is what the attempt records now: the short state ID, the label,
-	// when it was accepted and whether it landed in a copy. This is the evidence
-	// that tells a restarting ccresu the work is the supervisor's.
-	if attempts[0].HandoffStateID == "" {
-		t.Fatalf("assertion 12: attempt records no handoff state id: %+v", attempts[0])
+	// The attempt records the diagnostic it took afterwards and nothing it no
+	// longer has: the handoff columns are gone with the handoff itself.
+	if attempts[0].TranscriptGrew == nil || !*attempts[0].TranscriptGrew {
+		t.Fatalf("assertion 12: attempt does not record the transcript growth it measured: %+v", attempts[0])
 	}
-	if want := claude.HandoffLabel(support.SessionID); attempts[0].HandoffName != want {
-		t.Fatalf("assertion 12: attempt handoff name = %q, want %q", attempts[0].HandoffName, want)
-	}
-	if attempts[0].HandoffAt.IsZero() {
-		t.Fatalf("assertion 12: attempt records no handoff time, so a restart would call it stale: %+v", attempts[0])
-	}
-	if attempts[0].HandoffCopied == nil || *attempts[0].HandoffCopied {
-		t.Fatalf("assertion 12: attempt does not record an in-place continuation: %+v", attempts[0])
+	if attempts[0].FinishedAt.IsZero() {
+		t.Fatalf("assertion 12: attempt has no finish time: %+v", attempts[0])
 	}
 
 	// (13) Telegram delivered the success notification, over real HTTP, carrying
@@ -410,9 +398,15 @@ func TestScenarioSurvivesRestartMidWait(t *testing.T) {
 	}
 }
 
-// TestScenarioRefusesWhenTheLimitIsStillInForce proves the pre-resume check is
-// respected: a session whose limit has not actually cleared goes back to
-// waiting instead of being resumed.
+// TestScenarioRefusesWhenTheLimitIsStillInForce proves the shipped refusal path:
+// the resume runs, the CLI refuses because the usage window has not reset, and
+// the session is parked on the instant the banner named instead of being retried.
+//
+// It is the resume that reports the limit. There is no pre-resume check — a
+// window is only ever announced by a claude run — so this is the only shape the
+// refusal takes in production: a *LimitInForceError that is recognisable as
+// ErrLimitNotCleared, with no attempt budget consulted and no retry instant
+// written, because a backoff would ask the same question a second time.
 func TestScenarioRefusesWhenTheLimitIsStillInForce(t *testing.T) {
 	ctx := context.Background()
 	clk := clock.NewFake(support.BaseTime)
@@ -421,18 +415,27 @@ func TestScenarioRefusesWhenTheLimitIsStillInForce(t *testing.T) {
 
 	support.SeedSession(t, store, support.SessionID, storage.StateWaitingForReset)
 	provider := support.NewGrowingProvider(support.SessionID, 12, 20)
+	const banner = "Claude usage limit reached. Your limit will reset at 10am (Europe/Berlin)."
+	provider.ResumeErr = &claude.CLIError{
+		What:     "claude --resume",
+		ExitCode: 1,
+		Stdout:   []byte(banner),
+		Err:      errors.New("exit status 1"),
+		Kind:     claude.ErrUsageLimitInForce,
+	}
+	reset := support.BaseTime.Add(3 * time.Hour)
+	var parked []string
 
 	manager, err := recovery.New(recovery.Config{
-		Store:               store,
-		Provider:            provider,
-		Clock:               clk,
-		Logger:              support.QuietLogger(),
-		Enabled:             true,
-		MaxAttempts:         10,
-		VerificationTimeout: -1,
-		HealthCheckInterval: -1,
-		LimitRecheck: func(context.Context, string) (bool, error) {
-			return false, nil
+		Store:       store,
+		Provider:    provider,
+		Clock:       clk,
+		Logger:      support.QuietLogger(),
+		Enabled:     true,
+		MaxAttempts: 10,
+		LimitPark: func(_ context.Context, _ string, banner string) (recovery.Wait, error) {
+			parked = append(parked, banner)
+			return recovery.Wait{At: reset, Known: true, Delay: 3 * time.Hour}, nil
 		},
 	})
 	if err != nil {
@@ -443,11 +446,34 @@ func TestScenarioRefusesWhenTheLimitIsStillInForce(t *testing.T) {
 	if !errors.Is(err, recovery.ErrLimitNotCleared) {
 		t.Fatalf("error = %v, want ErrLimitNotCleared", err)
 	}
+	if !errors.Is(err, claude.ErrUsageLimitInForce) {
+		t.Errorf("error = %v, want claude.ErrUsageLimitInForce through the refusal", err)
+	}
 	if outcome.State != recovery.StateWaitingForReset {
 		t.Fatalf("state = %s, want WAITING_FOR_RESET", outcome.State)
 	}
-	if n := len(provider.ResumeCalls()); n != 0 {
-		t.Fatalf("%d resumes ran while the limit was in force, want 0", n)
+	if outcome.Resumed {
+		t.Error("Resumed = true, a refused resume is not a success")
+	}
+	if !outcome.WaitUntil.Equal(reset) {
+		t.Errorf("wait until = %s, want the instant the parker planned (%s)", outcome.WaitUntil, reset)
+	}
+	if len(parked) != 1 || parked[0] != banner {
+		t.Fatalf("parker calls = %d (%v), want one call carrying the CLI's own banner", len(parked), parked)
+	}
+
+	stored, err := store.GetSession(ctx, support.SessionID)
+	if err != nil {
+		t.Fatalf("re-read session: %v", err)
+	}
+	if stored.State != storage.StateWaitingForReset {
+		t.Errorf("stored state = %s, want WAITING_FOR_RESET", stored.State)
+	}
+	if stored.RetryAt != nil {
+		t.Errorf("retry at = %s, want none: the reset ends this wait, not a backoff", stored.RetryAt)
+	}
+	if stored.LastError != banner {
+		t.Errorf("last error = %q, want the banner %q", stored.LastError, banner)
 	}
 }
 

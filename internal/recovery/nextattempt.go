@@ -40,8 +40,10 @@ const (
 	ReasonRediscovered = "returned to discovery; ccresu will re-read the transcript and schedule the next reset"
 	// ReasonUnrecoverable is reported when the session cannot be resumed at all.
 	ReasonUnrecoverable = "session cannot be recovered"
-	// ReasonResumed is reported once ccresu has resumed the session.
-	ReasonResumed = "already resumed"
+	// ReasonResumed is reported for a session ccresu has resumed and then
+	// settled: it is alive again, and nothing further is scheduled until its next
+	// usage limit is seen.
+	ReasonResumed = "resumed; nothing scheduled until the next usage limit"
 	// ReasonCompleted is reported for a session that finished normally.
 	ReasonCompleted = "session completed"
 	// ReasonInFlight is reported while a recovery is actually running.

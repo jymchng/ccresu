@@ -42,15 +42,15 @@ export const features: readonly Feature[] = [
     icon: Cpu,
     title: "Resumes the same session",
     description:
-      "Hands the session to Claude Code's supervisor with one `claude --bg --resume <session-id> --name ccresu-<hex>` call and a continuation message. No forking, no new conversation, no keystroke injection.",
+      "Continues the session with one `claude --resume <session-id> \"<message>\"` command, run in its own working directory. No forking, no new conversation, no keystroke injection.",
     detail: "Conversation history, working directory and active goal are preserved.",
   },
   {
     icon: CircleCheckBig,
-    title: "Proves the handoff was accepted",
+    title: "Proves it by the exit status",
     description:
-      "A launch is not a recovery. ccresu records RESUMED only when the supervisor prints its `backgrounded` block or publishes the state that says so. The transcript is read, but as a diagnostic rather than as proof.",
-    detail: "Acceptance is the evidence; growth alone is not.",
+      "A launch is not a recovery. ccresu records RESUMED only when the resume process exits 0: the exit status is the verdict. The transcript is read too, but as a diagnostic rather than as proof.",
+    detail: "The exit status is the evidence; growth alone is not.",
   },
   {
     icon: Database,
@@ -111,12 +111,12 @@ export const workflow: readonly WorkflowStep[] = [
     title: "Resume",
     command: "ccresu recover <session-id>",
     description:
-      "After the reset, checks the session and the limit, then hands off with `claude --bg --resume --name ccresu-<hex>` in the session's own working directory, never the daemon's.",
+      "After the reset, continues the session with one blocking `claude --resume <session-id> \"<message>\"` run in the session's own working directory — never the daemon's — and reads its exit status as the verdict. Nothing checks the limit first: the resume is the check, and a refusal parks the session on the reset it named.",
   },
   {
     title: "Verify",
     command: "ccresu status",
     description:
-      "Records RESUMED only once the supervisor accepted the handoff and printed its `backgrounded` block, keeps the transcript growth as a diagnostic, and notifies you if Telegram is configured.",
+      "Records RESUMED only once the resume exits 0, keeps the transcript growth as a diagnostic, and notifies you if Telegram is configured.",
   },
 ];

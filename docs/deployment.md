@@ -1,7 +1,7 @@
 # Deployment
 
 One ccresu process per user is the whole deployment. It is a foreground loop
-(`ccresu daemon`); everything else is a supervisor and a log destination.
+(`ccresu daemon`); everything else is a log destination.
 
 It is a **user** process on purpose: it reads `~/.claude`, writes into your
 project directories and drives `claude` with your credentials. Run it as you —
@@ -73,14 +73,14 @@ What the unit does, and why:
 - `Restart=on-failure` with `RestartSec=10s` — a watchdog that silently dies is
   worse than no watchdog. A broken configuration still stops the unit, because
   systemd's default start limit ends the restart loop instead of spinning.
-- `KillSignal=SIGTERM`, `TimeoutStopSec=35s` — sized for the only children the
-  daemon still runs: `claude` queries capped by the 30s query timeout
-  (`--version`, `agents --json`, `daemon status`, `logs`) and the `claude --bg`
-  handoff that returns as soon as the supervisor accepts the session. The
-  session's work is **not** a child of this unit — it runs under `claude`'s own
-  supervisor, which survives a `systemctl --user stop` — so the timeout no
-  longer accommodates a `claude -p --resume`. A stop that lands mid-handoff is
-  not lost work: the session is retried and re-observed on the next pass.
+- `KillSignal=SIGTERM`, `TimeoutStopSec=35s` — sized for the daemon's own
+  bookkeeping, not for the turn. The long child is the blocking resume itself
+  (`claude --resume <session-id> "<message>"`, bounded by
+  `recovery.turn_timeout`, 30m by default), and a stop deliberately does not wait
+  for it: the transcript keeps what was written, the session is resumable, and
+  the next pass continues it again. Sizing the timeout for the turn would make
+  every stop hang for up to half an hour. The short children (`--version`,
+  `agents --json`) are capped by the 30s query timeout and finish well inside it.
 - `After=network-online.target` — the daemon discovers locally, but benefits from
   DNS being up before it talks to Telegram.
 - `Environment=CCRESU_APP__LOG_FORMAT=json` — journald already timestamps and
@@ -125,7 +125,8 @@ restarts because it lives in SQLite.
 ## Logs
 
 The daemon logs one line per meaningful event: discovery counts, detections, the
-scheduled reset, each attempt's two proofs, notification delivery failures.
+scheduled reset, each attempt's exit status with the transcript measurement taken
+after it, notification delivery failures.
 
 ```bash
 journalctl --user -u ccresu.service -f            # follow
@@ -198,7 +199,6 @@ need it.
 | --- | --- |
 | `recovery.max_concurrent_recoveries` | Keep it low (default `3`) so a burst of limits does not spawn a dozen `claude` children. |
 | `recovery.max_attempts` | The budget for one discovery cycle. A session that spends it returns to `DISCOVERED` and gets a fresh budget on the next cycle. |
-| `scheduler.recheck_before_resume` | Leave `true`: re-reads the session before resuming, so a limit that cleared early is not resumed twice. |
 | `telegram.enabled` | The only way to learn about a failure on a headless box; see [telegram.md](telegram.md). |
 | `server.host` | Leave `127.0.0.1`. Read [security.md](security.md) before changing it. |
 | `storage.path` | Point it at a backed-up or larger disk if `~` is small; the schema migrates itself on open. |

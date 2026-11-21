@@ -14,7 +14,7 @@ const guarantees = [
     icon: ShieldCheck,
     title: "No keystroke automation",
     description:
-      "Resume is one `claude --bg --resume <session-id> --name ccresu-<hex>` call with the message as the last argument. No pty, no simulated typing, no fork.",
+      "Resume is one `claude --resume <session-id> \"<message>\"` call with the message as the last argument. No pty, no simulated typing, no fork.",
   },
   {
     icon: CircleSlash,
@@ -155,9 +155,9 @@ export function LandingPage({ releaseVersion }: { releaseVersion: string }) {
             </h2>
             <p className="text-sm leading-relaxed text-muted-foreground">
               Every claim on this page is implemented in {" "}
-              {site.name} and documented: the exact handoff command, the
-              acceptance block that proves the supervisor took the session,
-              the state machine, and the limitations we know about.
+              {site.name} and documented: the exact resume command, the exit
+              status that settles it, the state machine, and the limitations
+              we know about.
             </p>
           </div>
           <div className="flex flex-wrap gap-3">

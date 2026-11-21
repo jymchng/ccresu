@@ -436,10 +436,9 @@ func (a *App) inspectSession(ctx context.Context, command string, args []string)
 
 // sessionDetail is everything the status page says about one session.
 //
-// It is a value rather than a set of locals so the page can be rendered in two
-// halves: the browser paints the store's half from the keystroke and fills the
-// supervisor's in afterwards, while `sessions status` renders the whole thing in
-// one pass and may wait for the CLI.
+// It is a value rather than a set of locals so `sessions status` and the browser
+// render the same page from the same read: the browser can paint it from a
+// keystroke, and no part of the page waits on the CLI.
 type sessionDetail struct {
 	Session     storage.Session
 	Limit       storage.UsageLimit
@@ -459,11 +458,10 @@ type sessionDetail struct {
 // loadSessionDetail reads one session and everything the status page shows about
 // it.
 //
-// It reads the store and nothing else: the supervisor is asked by the caller, so
-// the browser can paint the page before a slow CLI answers, and a batch command
-// can still wait for the answer. Every failure that is not "there is no such row
-// yet" is returned, because a page that silently omits a section is a page that
-// lies about the session.
+// It reads the store and nothing else, so the page describes what ccresu
+// recorded rather than what a fresh read of the CLI would say now. Every failure
+// that is not "there is no such row yet" is returned, because a page that
+// silently omits a section is a page that lies about the session.
 func (a *App) loadSessionDetail(ctx context.Context, rt *Runtime, id string) (sessionDetail, error) {
 	var detail sessionDetail
 	session, err := rt.Store.GetSession(ctx, id)
@@ -517,8 +515,7 @@ func (a *App) loadSessionDetail(ctx context.Context, rt *Runtime, id string) (se
 // It is separated from inspectSession so the interactive sessions browser can
 // render the very same page: pressing Enter on a row shows this output rather
 // than a second, thinner view that could drift from `sessions status`. The browser
-// renders the same two halves through writeDetailFacts and writeDetailTail, with
-// the supervisor block filled in between them when the CLI answers.
+// composes the same page through writeDetailFacts and writeDetailTail.
 func (a *App) writeSessionDetail(ctx context.Context, rt *Runtime, id string, w io.Writer) error {
 	detail, err := a.loadSessionDetail(ctx, rt, id)
 	if err != nil {
@@ -533,29 +530,19 @@ func (a *App) writeSessionDetail(ctx context.Context, rt *Runtime, id string, w 
 			"transitions":  detail.Transitions,
 			"next_attempt": nextAttemptReport(detail.Next, detail.Now),
 			"spend":        spendReport(detail.Spend, detail.Limits),
-			"supervisor":   a.supervisorReport(ctx, rt, detail.Attempt, detail.AttemptErr),
 		})
 	}
 
 	a.writeDetailFacts(w, detail)
-	// PRD 3 R10: the supervisor is the only thing that knows what the session is
-	// doing and what it last printed, so `inspect` asks it on demand rather than
-	// ccresu tailing files behind its back. Nothing here is polled.
-	// A provider with no supervisor surface leaves the block out of the text
-	// rendering entirely: "unavailable" would describe the provider rather than the
-	// session. The JSON rendering keeps it, where a script can branch on it.
-	if reader, ok := rt.Provider.(SupervisorReader); ok {
-		a.writeSupervisorDetail(w, a.readSupervisor(ctx, reader, detail.Attempt, detail.AttemptErr))
-	}
 	a.writeDetailTail(w, detail)
 	return nil
 }
 
-// writeDetailFacts prints the store's half of the status page: what ccresu knows
+// writeDetailFacts prints the first half of the status page: what ccresu knows
 // about the session, what it will do next, and what it recorded about the last
 // attempt.
 //
-// It never asks the supervisor, so the browser can paint it from a keystroke.
+// It reads the store alone, so the browser can paint it from a keystroke.
 func (a *App) writeDetailFacts(w io.Writer, detail sessionDetail) {
 	a.field(w, "session", detail.Session.ID)
 	a.field(w, "state", detail.Session.State)
@@ -624,36 +611,6 @@ func (a *App) writeDetailFacts(w io.Writer, detail sessionDetail) {
 		}
 		if detail.Attempt.Error != "" {
 			a.field(w, "error", detail.Attempt.Error)
-		}
-
-		// PRD 2 / R13: what the supervisor published about the session when the
-		// attempt was made, verbatim. This is the evidence the decision rested
-		// on, so `inspect` must be able to say what was seen rather than what
-		// was inferred from a file size.
-		//
-		// "not recorded" is a distinct answer, not an empty one. An attempt
-		// recorded before the observation columns existed genuinely has no
-		// observation, and rendering that as a blank state would present
-		// "we did not look" as "nothing was there" (R8).
-		fmt.Fprintln(w, "")
-		fmt.Fprintln(w, "Observed")
-		observation := detail.Attempt.Observation
-		if !observation.Recorded() {
-			a.field(w, "state", "not recorded")
-		} else {
-			a.field(w, "state", emptyDash(observation.State))
-			if observation.Status != "" {
-				a.field(w, "status", observation.Status)
-			}
-			if observation.WaitingFor != "" {
-				a.field(w, "waiting for", observation.WaitingFor)
-			}
-			a.field(w, "at", formatTime(observation.ObservedAt, detail.Loc))
-			listed := "not recorded"
-			if observation.Listed != nil {
-				listed = yesNo(*observation.Listed)
-			}
-			a.field(w, "in listing", listed)
 		}
 	}
 }
@@ -968,12 +925,12 @@ func runsInCell(session storage.Session) string {
 
 // runsInDetail renders the run directory for `inspect`: the path when it differs,
 // the word that says why it is not repeated when it does not, and "unknown" when
-// no observation has recorded one yet.
+// none has been recorded yet.
 func runsInDetail(session storage.Session) string {
 	runsIn := strings.TrimSpace(session.RunsInPath)
 	switch {
 	case runsIn == "":
-		return "unknown (no observation has recorded one; the project directory is used)"
+		return "unknown (not recorded yet; the project directory is used)"
 	case runsIn == strings.TrimSpace(session.ProjectPath):
 		return runsIn + " (same as the project)"
 	default:
@@ -1298,22 +1255,17 @@ func (a *App) reportOutcome(rt *Runtime, outcome recovery.Outcome) error {
 	return nil
 }
 
-// describeVerification renders the proof that the original conversation
-// continued, so a failed resume is never mistaken for a successful one.
+// describeVerification renders what the last resume left behind, so a failed
+// resume is never mistaken for a successful one.
 //
-// A proven resume has had two shapes since print mode was retired: the
-// supervisor accepted a handoff, or it published a state that establishes the
-// conversation continued. Naming growth in either case would describe evidence
-// ccresu no longer collects as proof, so the proof is rendered from the
-// verification itself (recovery.Verification.Reason) rather than from a fixed
-// sentence.
+// The verdict is the resume's exit status; the measurement beside it says
+// whether the transcript grew while the turn ran. The sentence is rendered from
+// the verification itself (recovery.Verification.Reason) rather than from a
+// fixed string, so it cannot drift from what was actually recorded.
 func describeVerification(outcome recovery.Outcome) string {
 	verification := outcome.Verification
 	if !verification.Proven {
-		if missing := verification.Missing(); len(missing) > 0 {
-			return "not proven: " + strings.Join(missing, "; ")
-		}
-		return "not proven"
+		return "not proven: " + verification.Reason()
 	}
 	return "proven: " + verification.Reason()
 }
@@ -1413,183 +1365,4 @@ func detectedSummary(event detector.UsageLimitEvent) string {
 		return "no usage limit (" + string(event.Classification) + ")"
 	}
 	return fmt.Sprintf("%s limit at confidence %.2f", event.Limit, event.Confidence)
-}
-
-// supervisorReport is what `inspect` learned from the supervisor on demand (PRD 3
-// R10), and why it could not learn it when it could not.
-//
-// The status is a word rather than a bool because four answers are different facts
-// and an operator acts differently on each: "running" (here is what it says), "not
-// running" (the documented exit-1 answer, and the next handoff starts one),
-// "unavailable" (this provider has no supervisor surface) and "unreadable" (it was
-// asked and failed, which is the one to look at).
-type supervisorReport struct {
-	Status  string   `json:"status"`
-	State   string   `json:"state,omitempty"`
-	Version string   `json:"version,omitempty"`
-	Workers *int     `json:"workers,omitempty"`
-	Socket  string   `json:"socket_dir,omitempty"`
-	Argv    []string `json:"argv,omitempty"`
-	// LogTarget is the supervisor state id the recent output was read from, empty
-	// when there is none to read.
-	LogTarget string `json:"log_target,omitempty"`
-	// RecentOutput is the tail of `claude logs <state-id>`, newest last.
-	RecentOutput []string `json:"recent_output,omitempty"`
-	// DaemonOutput is the tail of `claude daemon logs` — the supervisor's own
-	// log, which is where a failed handoff or a restart explains itself (R10).
-	DaemonOutput []string `json:"daemon_output,omitempty"`
-	// DaemonError is why the supervisor's log could not be read, when the read
-	// failed while the supervisor itself answered.
-	DaemonError string `json:"daemon_error,omitempty"`
-	// Error explains an "unreadable" or "unavailable" status.
-	Error string `json:"error,omitempty"`
-	// Pending reports that the read is still in flight. The block then renders
-	// its status line and nothing else, so a fill in progress cannot present an
-	// unread log or a missing state id as a verdict.
-	Pending bool `json:"-"`
-}
-
-// supervisorLogLines bounds how much recent output `inspect` prints: enough to see
-// what the session last did, not enough to drown the page.
-const supervisorLogLines = 20
-
-// supervisorReport reads the supervisor on demand and turns it into one value the
-// text and JSON renderings share.
-//
-// Every failure is a status rather than an error return: `inspect` is a report
-// about a session, and refusing to print the session because the supervisor would
-// not answer would hide the very facts an operator opened it to see.
-func (a *App) supervisorReport(ctx context.Context, rt *Runtime, attempt storage.RecoveryAttempt, attemptErr error) supervisorReport {
-	reader, ok := rt.Provider.(SupervisorReader)
-	if !ok {
-		// The JSON rendering reports the absence rather than omitting the key, so a
-		// script can tell "ccresu cannot ask" from "the supervisor has nothing to
-		// say".
-		return supervisorReport{Status: "unavailable", Error: "this provider cannot read the supervisor"}
-	}
-	return a.readSupervisor(ctx, reader, attempt, attemptErr)
-}
-
-// readSupervisor asks the supervisor what it says now, and reads the session's
-// recent output if the latest attempt recorded a state id to read it with.
-func (a *App) readSupervisor(ctx context.Context, reader SupervisorReader, attempt storage.RecoveryAttempt, attemptErr error) supervisorReport {
-
-	status, err := reader.DaemonStatus(ctx)
-	report := supervisorReport{Argv: status.Argv}
-	switch {
-	case err != nil:
-		report.Status = "unreadable"
-		report.Error = err.Error()
-		return report
-	case !status.Running:
-		// Exit 1 is the documented "the supervisor isn't running" answer, not a
-		// failure: a machine that has never run `claude --bg` has no supervisor,
-		// and the next handoff starts one.
-		report.Status = "not running"
-		return report
-	}
-	report.Status = "running"
-	report.State = status.State
-	if status.Version.Parsed {
-		report.Version = status.Version.String()
-	} else {
-		report.Version = status.Version.Raw
-	}
-	if status.WorkersKnown {
-		workers := status.Workers
-		report.Workers = &workers
-	}
-	report.Socket = status.SocketDir
-
-	// The supervisor's own log is read only while it is running: it is the file
-	// its process follows, so a "not running" answer has nothing to read and
-	// asking would report a failure where the honest answer is "there is no
-	// supervisor yet" (R1). Both reads are on demand, for `inspect` only (R10).
-	if daemon, daemonErr := reader.DaemonLogs(ctx); daemonErr != nil {
-		report.DaemonError = daemonErr.Error()
-	} else {
-		report.DaemonOutput = lastLines(daemon.Text, supervisorLogLines)
-	}
-
-	// The recent output belongs to a session the supervisor hosts, and its name for
-	// that session is the short state id the handoff printed. Without one there is
-	// nothing to ask about, and saying so is better than printing an empty log as if
-	// the session had printed nothing.
-	if attemptErr != nil || strings.TrimSpace(attempt.HandoffStateID) == "" {
-		return report
-	}
-	report.LogTarget = attempt.HandoffStateID
-	logs, logErr := reader.SessionLogs(ctx, attempt.HandoffStateID)
-	if logErr != nil {
-		report.Error = logErr.Error()
-		return report
-	}
-	report.RecentOutput = lastLines(logs.Text, supervisorLogLines)
-	return report
-}
-
-// writeSupervisorDetail prints the supervisor report.
-func (a *App) writeSupervisorDetail(w io.Writer, report supervisorReport) {
-	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "Supervisor")
-	a.field(w, "status", report.Status)
-	if report.Pending {
-		// A read in flight says only that it is in flight. Rendering the rest of
-		// the block here would report "no recent output" about a log that has not
-		// been read yet.
-		return
-	}
-	if report.State != "" {
-		a.field(w, "state", report.State)
-	}
-	if report.Version != "" {
-		a.field(w, "version", report.Version)
-	}
-	if report.Workers != nil {
-		a.field(w, "workers", *report.Workers)
-	}
-	if report.Socket != "" {
-		a.field(w, "socket dir", report.Socket)
-	}
-	if len(report.Argv) > 0 {
-		a.field(w, "command", "claude "+strings.Join(report.Argv, " "))
-	}
-	switch {
-	case len(report.DaemonOutput) > 0:
-		a.field(w, "supervisor log", fmt.Sprintf("last %d line(s) of `claude daemon logs`", len(report.DaemonOutput)))
-		for _, line := range report.DaemonOutput {
-			fmt.Fprintf(w, "  %s\n", truncateText(line, 200))
-		}
-	case report.DaemonError != "":
-		a.field(w, "supervisor log", "`claude daemon logs` failed: "+truncateText(report.DaemonError, 200))
-	default:
-		a.field(w, "supervisor log", "`claude daemon logs` printed nothing")
-	}
-	switch {
-	case report.LogTarget != "" && len(report.RecentOutput) > 0:
-		a.field(w, "recent output", fmt.Sprintf("last %d line(s) of `claude logs %s`", len(report.RecentOutput), report.LogTarget))
-		for _, line := range report.RecentOutput {
-			fmt.Fprintf(w, "  %s\n", truncateText(line, 200))
-		}
-	case report.LogTarget != "":
-		a.field(w, "recent output", fmt.Sprintf("`claude logs %s` printed nothing", report.LogTarget))
-	default:
-		a.field(w, "recent output", "not recorded: the latest attempt carries no supervisor state id")
-	}
-	if report.Error != "" {
-		a.field(w, "error", truncateText(report.Error, 200))
-	}
-}
-
-// lastLines returns at most n trailing lines of text.
-func lastLines(text string, n int) []string {
-	trimmed := strings.TrimRight(text, "\n")
-	if strings.TrimSpace(trimmed) == "" || n <= 0 {
-		return nil
-	}
-	lines := strings.Split(trimmed, "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	return lines
 }

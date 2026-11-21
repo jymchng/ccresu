@@ -28,15 +28,7 @@ const MONO = "font-mono";
 /** Shared box geometry for the state machine: one column, growing downward. */
 const NODE = { x: 20, width: 230, height: 34, gap: 18, centre: 135 } as const;
 
-const STATE_CHAIN = [
-  "DISCOVERED",
-  "USAGE_LIMIT_DETECTED",
-  "WAITING_FOR_RESET",
-  "RESET_TIME_REACHED",
-  "CHECKING_SESSION",
-  "CHECKING_LIMIT",
-  "RESUMING",
-] as const;
+const STATE_CHAIN = ["DISCOVERED", "WAITING_FOR_RESET", "RESUMING"] as const;
 
 /** y of the top edge of chain node `index`. */
 function chainY(index: number): number {
@@ -81,7 +73,9 @@ function StateMachine({ titleId, descriptionId, label, description }: DiagramPro
   const solid = `url(#diagram-state-machine-solid)`;
   const dashed = `url(#diagram-state-machine-dashed)`;
   const resumingY = chainY(STATE_CHAIN.length - 1);
-  const checkingSessionY = chainY(4);
+  // A retryable failure parks the session back on its wait, so the loop climbs
+  // from RESUMING to WAITING_FOR_RESET and no further.
+  const waitingForResetY = chainY(1);
 
   return (
     <svg
@@ -140,7 +134,7 @@ function StateMachine({ titleId, descriptionId, label, description }: DiagramPro
 
       {/* The retry loop: a failed attempt with budget left climbs back up. */}
       <polyline
-        points={`${NODE.x + NODE.width},${resumingY + NODE.height / 2} 300,${resumingY + NODE.height / 2} 300,${checkingSessionY + NODE.height / 2} ${NODE.x + NODE.width + 3},${checkingSessionY + NODE.height / 2}`}
+        points={`${NODE.x + NODE.width},${resumingY + NODE.height / 2} 300,${resumingY + NODE.height / 2} 300,${waitingForResetY + NODE.height / 2} ${NODE.x + NODE.width + 3},${waitingForResetY + NODE.height / 2}`}
         fill="none"
         stroke="var(--muted-foreground)"
         strokeWidth="1.25"
@@ -282,19 +276,19 @@ type Step = {
   note: readonly string[];
 };
 
-const HANDOFF_STEPS: readonly Step[] = [
+const RESUME_STEPS: readonly Step[] = [
   {
-    command: ["claude --bg --resume <id>", '--name ccresu-<hex> "<message>"'],
+    command: ["claude --resume <session-id>", '\"<continuation message>\"'],
     note: [
       "one invocation, in the session's own",
       "working directory, never the daemon's",
     ],
   },
   {
-    command: ["backgrounded · <short-id> · <name>"],
+    command: ["exit status 0"],
     note: [
-      "the supervisor's acceptance block:",
-      "the only proof ccresu keeps",
+      "the verdict, read from the process:",
+      "nothing else is consulted",
     ],
   },
 ];
@@ -302,15 +296,16 @@ const HANDOFF_STEPS: readonly Step[] = [
 const STEP = { x: 20, width: 300, centre: 170, arrow: 20, noteGap: 8, lineHeight: 13 };
 
 /**
- * One handoff: the invocation, the supervisor's acceptance block, and the state
- * that follows. The work itself happens after this drawing ends.
+ * One resume: the invocation, the exit status that settles it, and the state
+ * that follows. The turn runs between the call and the verdict, which is why
+ * the drawing is bounded by the command rather than by a later observation.
  */
-function Handoff({ titleId, descriptionId, label, description }: DiagramProps) {
+function Resume({ titleId, descriptionId, label, description }: DiagramProps) {
   const stroke = "var(--muted-foreground)";
   const elements: ReactElement[] = [];
   let y = 8;
 
-  HANDOFF_STEPS.forEach((step, index) => {
+  RESUME_STEPS.forEach((step, index) => {
     const height = 24 + step.command.length * 16;
 
     elements.push(
@@ -351,7 +346,7 @@ function Handoff({ titleId, descriptionId, label, description }: DiagramProps) {
         y2={y + STEP.arrow - 3}
         stroke={stroke}
         strokeWidth="1.25"
-        markerEnd="url(#diagram-handoff-arrow)"
+        markerEnd="url(#diagram-resume-arrow)"
       />,
     );
     y += STEP.arrow;
@@ -388,7 +383,7 @@ function Handoff({ titleId, descriptionId, label, description }: DiagramProps) {
       <desc id={descriptionId}>{description}</desc>
 
       <defs>
-        <Arrowhead id="diagram-handoff-arrow" colour={stroke} />
+        <Arrowhead id="diagram-resume-arrow" colour={stroke} />
       </defs>
 
       {elements}
@@ -419,7 +414,7 @@ function Handoff({ titleId, descriptionId, label, description }: DiagramProps) {
         fontSize="9.5"
         fill="var(--muted-foreground)"
       >
-        accepted: the supervisor holds the session
+        the turn ran and exited zero
       </text>
     </svg>
   );
@@ -427,7 +422,7 @@ function Handoff({ titleId, descriptionId, label, description }: DiagramProps) {
 
 const DIAGRAMS: Record<DiagramId, (props: DiagramProps) => ReactElement> = {
   "state-machine": StateMachine,
-  handoff: Handoff,
+  resume: Resume,
 };
 
 /**

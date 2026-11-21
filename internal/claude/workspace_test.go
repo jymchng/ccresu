@@ -68,7 +68,7 @@ func agentsJSONWithCWD(id, cwd string) string {
 }
 
 // observingProvider returns a Provider whose `agents --json` answer walks cwds,
-// one entry per call, and whose handoff is acknowledged.
+// one entry per call, and whose resume runs its turn to the end.
 //
 // The walk is what makes R4 and R9 testable: a session that moves into a
 // worktree mid-life is only observable if two consecutive passes can disagree.
@@ -90,8 +90,8 @@ func observingProvider(t *testing.T, home string, cwds []string, logger *slog.Lo
 			call++
 			mu.Unlock()
 			return Output{Stdout: []byte(agentsJSONWithCWD(testSessionID, cwd))}, nil
-		case strings.HasPrefix(argv, "--bg --resume"):
-			return Output{Stdout: []byte(testHandoffBlock)}, nil
+		case strings.HasPrefix(argv, "--resume"):
+			return Output{Stdout: []byte(testResumeOutput)}, nil
 		default:
 			return Output{ExitCode: -1}, errors.New("unexpected claude invocation: " + argv)
 		}
@@ -109,11 +109,11 @@ func observingProvider(t *testing.T, home string, cwds []string, logger *slog.Lo
 	return provider, execer
 }
 
-// resumeCalls returns the recorded `--bg --resume` invocations.
+// resumeCalls returns the recorded `--resume` invocations.
 func resumeCalls(execer *FakeExecer) []Call {
 	var out []Call
 	for _, call := range execer.Calls() {
-		if len(call.Args) > 0 && call.Args[0] == "--bg" {
+		if len(call.Args) > 0 && call.Args[0] == "--resume" {
 			out = append(out, call)
 		}
 	}
@@ -314,7 +314,7 @@ func TestNewerObservationWinsOverAStaleBinding(t *testing.T) {
 	if _, err := provider.Discover(ctx, DiscoverFilter{}); err != nil {
 		t.Fatalf("first Discover: %v", err)
 	}
-	// ResumeSession re-observes, so the handoff must follow the newer cwd rather
+	// ResumeSession re-observes, so the resume must follow the newer cwd rather
 	// than the binding recorded on the first pass.
 	result, err := provider.ResumeSession(ctx, testSessionID, "continue")
 	if err != nil {
@@ -325,10 +325,10 @@ func TestNewerObservationWinsOverAStaleBinding(t *testing.T) {
 	}
 	calls := resumeCalls(execer)
 	if len(calls) != 1 {
-		t.Fatalf("handoff calls = %d, want exactly 1", len(calls))
+		t.Fatalf("resume calls = %d, want exactly 1", len(calls))
 	}
 	if calls[0].Options.Dir != worktree {
-		t.Errorf("handoff ran in %q, want the newer observation %q", calls[0].Options.Dir, worktree)
+		t.Errorf("resume ran in %q, want the newer observation %q", calls[0].Options.Dir, worktree)
 	}
 	if !strings.Contains(logs.String(), "changed its working directory") {
 		t.Errorf("logs = %q, want the disagreement recorded", logs.String())
@@ -338,7 +338,7 @@ func TestNewerObservationWinsOverAStaleBinding(t *testing.T) {
 	}
 }
 
-func TestResumeSessionInRunsTheHandoffInTheGivenDirectory(t *testing.T) {
+func TestResumeSessionInRunsTheResumeInTheGivenDirectory(t *testing.T) {
 	// R2/R3: the directory the caller resolved is the one the child process
 	// runs in. This is the falsifiable requirement — `RunOptions.Dir` on the
 	// invocation the fake execer received, not a field on a result.
@@ -354,16 +354,16 @@ func TestResumeSessionInRunsTheHandoffInTheGivenDirectory(t *testing.T) {
 	}
 	calls := resumeCalls(execer)
 	if len(calls) != 1 {
-		t.Fatalf("handoff calls = %d, want exactly 1", len(calls))
+		t.Fatalf("resume calls = %d, want exactly 1", len(calls))
 	}
 	if calls[0].Options.Dir != worktree {
-		t.Errorf("handoff Dir = %q, want the worktree %q and not the daemon's cwd", calls[0].Options.Dir, worktree)
+		t.Errorf("resume Dir = %q, want the worktree %q and not the daemon's cwd", calls[0].Options.Dir, worktree)
 	}
 
 	// R2 also covers the query invocations: the version probe and the listing
 	// must not inherit the session's directory either.
 	for _, call := range execer.Calls() {
-		if call.Args[0] == "--bg" {
+		if call.Args[0] == "--resume" {
 			continue
 		}
 		if call.Options.Dir == worktree {
@@ -387,14 +387,14 @@ func TestResumeVectorHasNoWorktreeFlag(t *testing.T) {
 		t.Fatalf("ResumeSessionIn: %v", err)
 	}
 
-	want := append([]string{"claude"}, HandoffArgs(testSessionID, "continue")...)
+	want := append([]string{"claude"}, ResumeArgs(testSessionID, "continue")...)
 	if strings.Join(result.Command, "\x00") != strings.Join(want, "\x00") {
-		t.Errorf("handoff vector = %v, want %v", result.Command, want)
+		t.Errorf("resume vector = %v, want %v", result.Command, want)
 	}
 
 	calls := resumeCalls(execer)
 	if len(calls) != 1 {
-		t.Fatalf("handoff calls = %d, want exactly 1", len(calls))
+		t.Fatalf("resume calls = %d, want exactly 1", len(calls))
 	}
 	forbidden := map[string]string{
 		"--worktree": "a recovery must not create a worktree (R5)",
@@ -405,20 +405,19 @@ func TestResumeVectorHasNoWorktreeFlag(t *testing.T) {
 	}
 	for _, arg := range calls[0].Args {
 		if why, bad := forbidden[arg]; bad {
-			t.Errorf("handoff vector %v contains %q: %s", calls[0].Args, arg, why)
+			t.Errorf("resume vector %v contains %q: %s", calls[0].Args, arg, why)
 		}
 	}
-	// The shape PRD 5 fixed is unchanged: --bg, --resume <id>, --name <label>,
-	// then the message.
-	if got := calls[0].Args; len(got) < 6 || got[0] != "--bg" || got[1] != "--resume" ||
-		got[2] != testSessionID || got[3] != "--name" || got[5] != "continue" {
-		t.Errorf("handoff argv = %v, want --bg --resume <id> --name <label> <message>", got)
+	// The vector is the verified one and nothing else: --resume <id> <message>.
+	if got := calls[0].Args; len(got) != 3 || got[0] != "--resume" ||
+		got[1] != testSessionID || got[2] != "continue" {
+		t.Errorf("resume argv = %v, want --resume <id> <message>", got)
 	}
 }
 
 func TestResumeSessionFallsBackWhenTheRecordedWorktreeIsGone(t *testing.T) {
 	// R8 end to end: the recorded run directory has been cleared, so the
-	// handoff runs in the project directory and the fallback is announced. The
+	// resume runs in the project directory and the fallback is announced. The
 	// session still resumes — a missing worktree is not a verdict.
 	repo := t.TempDir()
 	gone := filepath.Join(t.TempDir(), "cleared-worktree")
@@ -438,10 +437,10 @@ func TestResumeSessionFallsBackWhenTheRecordedWorktreeIsGone(t *testing.T) {
 	}
 	calls := resumeCalls(execer)
 	if len(calls) != 1 {
-		t.Fatalf("handoff calls = %d, want exactly 1: the attempt proceeds", len(calls))
+		t.Fatalf("resume calls = %d, want exactly 1: the attempt proceeds", len(calls))
 	}
 	if calls[0].Options.Dir != repo {
-		t.Errorf("handoff Dir = %q, want the project directory %q", calls[0].Options.Dir, repo)
+		t.Errorf("resume Dir = %q, want the project directory %q", calls[0].Options.Dir, repo)
 	}
 	if !strings.Contains(logs.String(), "recorded run directory is gone") {
 		t.Errorf("logs = %q, want the fallback announced", logs.String())
@@ -465,13 +464,13 @@ func TestResumeSessionRefusesAnUnresolvedWorkspace(t *testing.T) {
 		t.Error("error wraps ErrUnrecoverable, want a failed attempt: a directory can come back")
 	}
 	if calls := resumeCalls(execer); len(calls) != 0 {
-		t.Errorf("handoff calls = %d, want 0: nothing may run without a directory", len(calls))
+		t.Errorf("resume calls = %d, want 0: nothing may run without a directory", len(calls))
 	}
 }
 
 func TestResumeSessionInResumesASessionTheListingOmits(t *testing.T) {
 	// A session the CLI no longer lists is still resumable by id: the caller
-	// already resolved a directory, and the handoff is addressed by session id.
+	// already resolved a directory, and the resume is addressed by session id.
 	// Reading the id off a zero-value Session instead built a `--resume ""`
 	// vector that the CLI rejected, so this case could never hand off at all.
 	dir := t.TempDir()
@@ -486,13 +485,13 @@ func TestResumeSessionInResumesASessionTheListingOmits(t *testing.T) {
 	}
 	calls := resumeCalls(execer)
 	if len(calls) != 1 {
-		t.Fatalf("handoff calls = %d, want exactly 1", len(calls))
+		t.Fatalf("resume calls = %d, want exactly 1", len(calls))
 	}
-	if calls[0].Args[2] != testSessionID {
-		t.Errorf("handoff argv = %v, want --resume %s", calls[0].Args, testSessionID)
+	if calls[0].Args[1] != testSessionID {
+		t.Errorf("resume argv = %v, want --resume %s", calls[0].Args, testSessionID)
 	}
 	if calls[0].Options.Dir != dir {
-		t.Errorf("handoff Dir = %q, want the caller's directory %q", calls[0].Options.Dir, dir)
+		t.Errorf("resume Dir = %q, want the caller's directory %q", calls[0].Options.Dir, dir)
 	}
 }
 

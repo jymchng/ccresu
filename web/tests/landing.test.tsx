@@ -110,19 +110,20 @@ describe("landing page", () => {
     expect(screen.getByText(/No limit bypass/i)).toBeInTheDocument();
   });
 
-  it("renders the handoff and its acceptance block as accessible text", () => {
+  it("renders the resume invocation and the exit-status verdict as accessible text", () => {
     const { container } = render(<Hero />);
     const text = container.textContent ?? "";
 
     // The hero is the first thing a reader meets, so it must advertise the
-    // command the binary actually runs (`claude.HandoffArgs`) and the block
-    // the supervisor actually prints. Both are text nodes inside <pre><code>,
-    // which is what keeps the figure readable to a screen reader rather than a
-    // picture of a terminal.
-    expect(text).toContain("claude --bg --resume");
-    expect(text).toContain("accepted as 8f2a1c");
+    // command the binary actually runs (`claude.ResumeArgs`) and the verdict
+    // that settles it. Both are text nodes inside <pre><code>, which is what
+    // keeps the figure readable to a screen reader rather than a picture of a
+    // terminal.
+    expect(text).toContain("claude --resume");
+    expect(text).toContain("the resume finished its turn");
+    expect(text).not.toContain("--bg");
     expect(text).not.toContain("-p --resume");
-    expect(text).not.toContain("transcript grew");
+    expect(text).not.toContain("backgrounded");
     expect(container.querySelectorAll("pre code").length).toBeGreaterThanOrEqual(2);
   });
 });

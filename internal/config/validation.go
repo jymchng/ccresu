@@ -181,14 +181,8 @@ func (c *Config) validateRecovery(add problemAdder) {
 	if c.Recovery.Jitter < 0 || c.Recovery.Jitter >= 1 {
 		add("recovery.jitter must be in the range [0, 1)")
 	}
-	if c.Recovery.StartupTimeout.Duration <= 0 {
-		add("recovery.startup_timeout must be greater than zero")
-	}
-	if c.Recovery.VerificationTimeout.Duration <= 0 {
-		add("recovery.verification_timeout must be greater than zero")
-	}
-	if c.Recovery.HealthCheckInterval.Duration <= 0 {
-		add("recovery.health_check_interval must be greater than zero")
+	if c.Recovery.TurnTimeout.Duration <= 0 {
+		add("recovery.turn_timeout must be greater than zero")
 	}
 	if c.Recovery.MaxConcurrentRecoveries < 1 {
 		add("recovery.max_concurrent_recoveries must be at least 1")

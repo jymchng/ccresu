@@ -32,25 +32,22 @@ type CLIOptions struct {
 	Execer Execer
 	// QueryTimeout bounds `--version` and `agents --json`.
 	QueryTimeout time.Duration
-	// HandoffTimeout bounds the handoff invocation. It does not bound the
-	// supervisor's work, which is no longer ccresu's process.
-	HandoffTimeout time.Duration
+	// TurnTimeout bounds the resume invocation, which runs the whole turn.
+	TurnTimeout time.Duration
 	// MaxOutputBytes caps captured output.
 	MaxOutputBytes int
 	// MinVersion overrides the supported-version floor.
 	MinVersion *Version
 	// ConfigDir is the resolved Claude Code config directory. When set, every
-	// invocation carries CLAUDE_CONFIG_DIR=<dir>, so the read and the handoff can
-	// never land on two different supervisors (PRD 3 R9): $CLAUDE_CONFIG_DIR makes
-	// separate instances, and inheriting it from the environment means a daemon
-	// started one way could read one supervisor and hand off to another.
+	// invocation carries CLAUDE_CONFIG_DIR=<dir>, so the read and the resume can
+	// never land on two different Claude Code instances (PRD 3 R9):
+	// $CLAUDE_CONFIG_DIR makes separate instances, and inheriting it from the
+	// environment means a daemon started one way could read one state directory
+	// and write another.
 	ConfigDir string
-	// Logger receives the recovery diagnostics for a handoff that needed a
-	// retry or a directory decision. Empty means slog.Default().
+	// Logger receives the recovery diagnostics for a resume that needed a
+	// directory decision. Empty means slog.Default().
 	Logger *slog.Logger
-	// Guardrails are the flags every handoff carries (PRD 5 R2). The zero value
-	// adds none.
-	Guardrails Guardrails
 	// WorkDir is the working directory ccresu's own invocations run in — the
 	// version probe, `agents --json` and the lifecycle commands. Empty means the
 	// process's current directory, resolved once at construction so no child ever
@@ -64,20 +61,18 @@ type CLIOptions struct {
 //
 //	claude --version
 //	claude agents --json [--all] [--cwd <path>]
-//	claude --bg --resume <session-id> --name <label> <message>
-//	claude stop <job-id>
+//	claude --resume <session-id> <message>
 //	(the transcript and session-env files are read, not executed)
 //
-// Recovery hands the continuation to the supervisor rather than running it:
-// `--bg` cannot be combined with `-p`/`--print`, so the print-mode flags are
-// absent by construction and not merely unused. The handoff is given the
-// session's own directory, never the daemon's, and the message is always passed
-// as a single argv element so no shell ever sees it.
+// Resuming is a run, not a handoff: the command continues the session and
+// returns when the turn it was given is finished, so the exit status is the
+// verdict. It is given the session's own directory, never the daemon's, and the
+// message is always passed as a single argv element so no shell ever sees it.
 type CLI struct {
 	bin            string
 	exec           Execer
 	queryTimeout   time.Duration
-	handoffTimeout time.Duration
+	turnTimeout    time.Duration
 	maxOutputBytes int
 	minVersion     Version
 	configDir      string
@@ -85,8 +80,6 @@ type CLI struct {
 	// invocation passes it explicitly instead of inheriting (PRD 6 R2).
 	workDir string
 	log     *slog.Logger
-	// guardrails are the flags every handoff carries (PRD 5 R2).
-	guardrails Guardrails
 
 	mu          sync.Mutex
 	version     Version
@@ -100,12 +93,11 @@ func NewCLI(opts CLIOptions) *CLI {
 		bin:            strings.TrimSpace(opts.Executable),
 		exec:           opts.Execer,
 		queryTimeout:   opts.QueryTimeout,
-		handoffTimeout: opts.HandoffTimeout,
+		turnTimeout:    opts.TurnTimeout,
 		maxOutputBytes: opts.MaxOutputBytes,
 		configDir:      strings.TrimSpace(opts.ConfigDir),
 		workDir:        strings.TrimSpace(opts.WorkDir),
 		log:            opts.Logger,
-		guardrails:     opts.Guardrails,
 	}
 	if c.workDir == "" {
 		// Resolved once, at construction, rather than per invocation: the daemon
@@ -127,8 +119,8 @@ func NewCLI(opts CLIOptions) *CLI {
 	if c.queryTimeout <= 0 {
 		c.queryTimeout = DefaultQueryTimeout
 	}
-	if c.handoffTimeout <= 0 {
-		c.handoffTimeout = DefaultHandoffTimeout
+	if c.turnTimeout <= 0 {
+		c.turnTimeout = DefaultTurnTimeout
 	}
 	c.minVersion = MinimumVersion
 	if opts.MinVersion != nil {
@@ -252,26 +244,21 @@ func (c *CLI) Agents(ctx context.Context, query AgentsQuery) ([]AgentEntry, erro
 	return entries, nil
 }
 
-// Resume hands the session to the supervisor:
+// Resume continues a session:
 //
-//	claude --bg --resume <session-id> --name <label> <message>
+//	claude --resume <session-id> <message>
 //
-// It is a handoff, not a run. The print-mode flags are gone: `--bg` cannot be
-// combined with `-p`/`--print`, so a single invocation cannot carry both, and
-// R12 of the PRD retires print mode rather than keeping it beside the handoff.
-// The invocation returns as soon as the supervisor accepts the session, which
-// the CLI reports by printing a `backgrounded · <short-id> · <name>` block;
-// catching that block is the whole verification this PRD keeps, and proving the
-// work happened is a later PRD's job.
+// It is a run. The command continues the conversation, takes the continuation
+// through its turn, and returns; the exit status is the whole verdict, because
+// there is no acknowledgement to parse and nothing else the CLI reports on a
+// pipe.
 //
-// dir is the directory the session occupies, never the caller's. The handoff is
-// the first ccresu invocation that chooses a working directory deliberately; a
-// recovery that ran in the daemon's cwd would resume the wrong tree.
+// dir is the directory the session occupies, never the caller's. A recovery that
+// ran in the daemon's cwd would continue the wrong tree.
 //
 // Either refusal that is not a crash is named rather than described: an
-// untrusted workspace wraps ErrWorkspaceNotTrusted, and output without a block
-// wraps ErrHandoffNotAcknowledged. Neither is retried, because neither gets
-// better by trying again with the same arguments.
+// untrusted workspace wraps ErrWorkspaceNotTrusted. Neither is retried, because
+// neither gets better by trying again with the same arguments.
 func (c *CLI) Resume(ctx context.Context, sessionID, message, dir string) (ResumeResult, error) {
 	if err := ValidateSessionID(sessionID); err != nil {
 		return ResumeResult{}, err
@@ -283,7 +270,7 @@ func (c *CLI) Resume(ctx context.Context, sessionID, message, dir string) (Resum
 		return ResumeResult{}, fmt.Errorf("%w: %d bytes (max %d)", ErrMessageTooLong, len(message), MaxMessageBytes)
 	}
 	if strings.TrimSpace(dir) == "" {
-		return ResumeResult{}, fmt.Errorf("%w: session %s", ErrHandoffDirectoryMissing, sessionID)
+		return ResumeResult{}, fmt.Errorf("%w: session %s", ErrResumeDirectoryMissing, sessionID)
 	}
 
 	version, err := c.Version(ctx)
@@ -294,54 +281,31 @@ func (c *CLI) Resume(ctx context.Context, sessionID, message, dir string) (Resum
 		return ResumeResult{}, err
 	}
 
-	// The guardrail flags ride the handoff, and an unset knob adds nothing: a
-	// config with no guardrails produces the same vector as before PRD 5.
-	args := HandoffArgs(sessionID, message, c.guardrails)
+	args := ResumeArgs(sessionID, message)
 	result := ResumeResult{
 		RequestedSessionID: sessionID,
 		Command:            append([]string{c.bin}, args...),
 		CWD:                dir,
 	}
-	out, runErr := c.runIn(ctx, c.handoffTimeout, dir, nil, args...)
-	result.Handoff = Handoff{Raw: strings.TrimSpace(string(out.Stdout))}
+	// The resume is detached from ccresu's own terminal — its own session, no
+	// inherited stdin — but it is still ccresu's child: the exit status is what
+	// the recovery is judged by, so the call waits for it, bounded by the turn
+	// timeout rather than by a handshake bound.
+	out, runErr := c.runResume(ctx, dir, args...)
+	result.ExitCode = out.ExitCode
 	// R4: what the turn cost, when the CLI says. It is read before the error
 	// checks because an attempt that failed still spent whatever it spent, and a
 	// nil figure stays nil — unknown, never zero (R10).
 	result.TotalCostUSD = ParseReportedCost(out.Stdout)
 	if runErr != nil || out.ExitCode != 0 {
 		if WorkspaceNotTrusted(out) {
-			// The remedy is the operator's: trust the directory, or resume
-			// somewhere they do trust. It is its own outcome so it is not
-			// mistaken for a transient failure and retried on a backoff.
-			result.Handoff = Handoff{Raw: strings.TrimSpace(string(out.Stdout))}
 			return result, fmt.Errorf("%w: %s", ErrWorkspaceNotTrusted, dir)
 		}
 		if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
 			return result, fmt.Errorf("%w: %w", ErrCLIUnavailable, runErr)
 		}
-		return result, describeRunError("claude --bg --resume", out, runErr)
+		return result, describeRunError("claude --resume", out, runErr)
 	}
-
-	handoff, parseErr := ParseHandoff(out.Stdout)
-	result.Handoff = handoff
-	result.Backgrounded = handoff.Acknowledged
-	result.StateID = handoff.StateID
-	result.Name = handoff.Name
-	result.Note = handoff.Note
-	result.Copied = handoff.Copied
-	result.CopySessionID = handoff.CopySessionID
-	result.SupervisorStarted = handoff.StartedService
-	if parseErr != nil {
-		return result, parseErr
-	}
-	if handoff.Copied {
-		// A copy is an expected outcome, not a failure: the continuation lives
-		// in a new conversation. The note names it when the CLI says so, and
-		// the field is left empty when it does not rather than guessed.
-		result.SessionID = handoff.CopySessionID
-		return result, nil
-	}
-	result.SessionID = sessionID
 	return result, nil
 }
 
@@ -352,19 +316,30 @@ func (c *CLI) Resume(ctx context.Context, sessionID, message, dir string) (Resum
 // (PRD 6 R2): an inherited cwd is the same directory, but only because of how the
 // daemon happened to be started — under the shipped systemd unit that is `$HOME`.
 // Making it explicit means no invocation depends on that accident, and the one
-// invocation whose directory is *not* ccresu's own (the handoff) is the only
+// invocation whose directory is *not* ccresu's own (the resume) is the only
 // caller that supplies a different one.
 func (c *CLI) run(ctx context.Context, timeout time.Duration, stdin []byte, args ...string) (Output, error) {
-	return c.runIn(ctx, timeout, c.workDir, stdin, args...)
+	return c.runIn(ctx, timeout, c.workDir, stdin, false, args...)
+}
+
+// runResume executes the resume in the session's own directory, detached.
+//
+// Detached means its own session and no inherited standard input, so a signal
+// aimed at the daemon's process group does not reach a turn that is already
+// under way, and no child can ever believe it owns a terminal. It does not mean
+// abandoned: runIn still waits for the process, because the exit status is the
+// verdict.
+func (c *CLI) runResume(ctx context.Context, dir string, args ...string) (Output, error) {
+	return c.runIn(ctx, c.turnTimeout, dir, nil, true, args...)
 }
 
 // runIn executes one command in dir.
 //
-// It exists because the handoff is the one invocation whose working directory is
-// part of its meaning: a recovery handed to the supervisor from the daemon's cwd
-// would continue the wrong tree. Everything else passes ccresu's own directory,
-// so the deliberate choice is visible at the one call site that makes it.
-func (c *CLI) runIn(ctx context.Context, timeout time.Duration, dir string, stdin []byte, args ...string) (Output, error) {
+// It exists because resuming is the one invocation whose working directory is
+// part of its meaning: a recovery continued from the daemon's cwd would continue
+// the wrong tree. Everything else passes ccresu's own directory, so the
+// deliberate choice is visible at the one call site that makes it.
+func (c *CLI) runIn(ctx context.Context, timeout time.Duration, dir string, stdin []byte, detach bool, args ...string) (Output, error) {
 	if err := ctx.Err(); err != nil {
 		return Output{ExitCode: -1}, err
 	}
@@ -375,11 +350,11 @@ func (c *CLI) runIn(ctx context.Context, timeout time.Duration, dir string, stdi
 	}
 	defer cancel()
 
-	opts := RunOptions{MaxOutputBytes: c.maxOutputBytes, Dir: dir}
+	opts := RunOptions{MaxOutputBytes: c.maxOutputBytes, Dir: dir, Detach: detach}
 	// One config directory for every invocation, whether it is the state read or
-	// the handoff (R9). Passing it explicitly rather than inheriting it is what
-	// makes "the same supervisor" a property ccresu guarantees instead of a
-	// property of how the daemon happened to be started.
+	// the resume (R9). Passing it explicitly rather than inheriting it is what
+	// makes "the same Claude Code instance" a property ccresu guarantees instead
+	// of a property of how the daemon happened to be started.
 	if c.configDir != "" {
 		opts.Env = append(opts.Env, EnvConfigDir+"="+c.configDir)
 	}
@@ -420,7 +395,7 @@ func describeRunError(what string, out Output, err error) error {
 // with errors.Is while the message stays readable; the captured streams stay
 // available as fields for anything that needs the raw output.
 type CLIError struct {
-	// What is the invocation being described, e.g. "claude --bg --resume".
+	// What is the invocation being described, e.g. "claude --resume <id>".
 	What string
 	// ExitCode is the process exit status.
 	ExitCode int

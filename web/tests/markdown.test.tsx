@@ -65,9 +65,9 @@ describe("documentation pages as Markdown", () => {
         { kind: "capture", id: "help" },
         {
           kind: "diagram",
-          id: "handoff",
-          label: "One handoff",
-          description: "The continuation is handed to the background supervisor.",
+          id: "resume",
+          label: "One resume",
+          description: "The continuation is one blocking command, and its exit status is the verdict.",
         },
       ],
     };
@@ -87,9 +87,9 @@ describe("documentation pages as Markdown", () => {
     expect(markdown).toContain(captures.help.output.replace(/\n+$/, ""));
 
     // A diagram has no Markdown equivalent, but it must not vanish.
-    expect(markdown).toContain("**Figure: One handoff**");
+    expect(markdown).toContain("**Figure: One resume**");
     expect(markdown).toContain(
-      "The continuation is handed to the background supervisor.",
+      "The continuation is one blocking command, and its exit status is the verdict.",
     );
   });
 

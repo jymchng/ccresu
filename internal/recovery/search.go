@@ -13,11 +13,11 @@ import (
 
 // LimitScan looks for a usage-limit banner in one session's transcript.
 //
-// It is injected for the same reason LimitRecheck and LimitPark are: reading a
-// transcript is the provider's job and recognising a banner in it is the
-// detector's, so the recovery engine asks whether one is there instead of
-// growing a second copy of either. A scan that finds nothing reports
-// found == false, which is an answer and not a failure.
+// It is injected for the same reason LimitPark is: reading a transcript is the
+// provider's job and recognising a banner in it is the detector's, so the
+// recovery engine asks whether one is there instead of growing a second copy of
+// either. A scan that finds nothing reports found == false, which is an answer
+// and not a failure.
 type LimitScan func(ctx context.Context, sessionID string) (banner string, found bool, err error)
 
 // LimitSearch is what one operator-initiated search found and did.

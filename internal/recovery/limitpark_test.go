@@ -210,15 +210,15 @@ func TestRefusalBannerPrefersTheCLIsOwnOutput(t *testing.T) {
 }
 
 // TestARefusedAttemptsOwnWritesDoNotProveAResume pins the baseline against the
-// other half of the misreport. `claude -p --resume` appends its refusal to the
-// transcript before exiting, so the file grows even though nothing was resumed.
-// If that growth were measured against the pre-attempt snapshot, the next status
-// check would take the "the session had already resumed after the limit reset"
-// shortcut and report a refused resume as a success.
+// other half of the misreport. `claude --resume` prints its refusal and exits
+// non-zero, but it appends to the transcript on the way out, so the file grows
+// even though nothing was resumed. If that growth were measured against the
+// pre-attempt snapshot, the pass after the reset would record a later attempt
+// beside growth the failed one caused itself, and a refused resume would be
+// reported as though the conversation had advanced.
 //
 // The failed attempt's own lines are therefore absorbed into the stored
-// baseline, and only growth beyond them can prove the session continued by
-// itself.
+// baseline, so only what the successful turn writes is measured afterwards.
 func TestARefusedAttemptsOwnWritesDoNotProveAResume(t *testing.T) {
 	store := newTestStore(t)
 	provider := &providerStub{}
@@ -271,7 +271,7 @@ func TestARefusedAttemptsOwnWritesDoNotProveAResume(t *testing.T) {
 	// The reset arrives. Nothing has to be written to say so: the session is
 	// already parked in WAITING_FOR_RESET, and the daemon's schedule wakes it by
 	// calling Recover again — WAITING_FOR_RESET -> RESUMING is the edge the pass
-	// takes once the limit check clears.
+	// takes once the window has reopened.
 
 	outcome, err := manager.Recover(context.Background(), session.ID)
 	if err == nil {
@@ -293,8 +293,8 @@ func TestARefusedAttemptsOwnWritesDoNotProveAResume(t *testing.T) {
 		t.Fatalf("list transitions: %v", err)
 	}
 	for _, transition := range transitions {
-		if strings.Contains(transition.Reason, "already resumed") {
-			t.Errorf("a refused resume was recorded as an independent resumption: %s -> %s (%s)",
+		if transition.ToState == StateResumed {
+			t.Errorf("a refused resume was recorded as a resumption: %s -> %s (%s)",
 				transition.FromState, transition.ToState, transition.Reason)
 		}
 		// The attempt was answered, so nothing about it may be rewritten as a

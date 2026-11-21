@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/jymchng/ccresu/internal/claude"
-	"github.com/jymchng/ccresu/internal/clock"
 	"github.com/jymchng/ccresu/internal/storage"
 )
 
@@ -393,24 +392,14 @@ func TestRecoverExplainsAStatusThatLostRecoverability(t *testing.T) {
 	}
 }
 
-// TestRecoverRecognisesAnAlreadyResumedSessionEvenIfBookkeepingFails proves the
-// "it continued on its own" path does not depend on advisory writes: the metrics
-// update is allowed to fail, and the RESUMED transition is still attempted.
-func TestRecoverRecognisesAnAlreadyResumedSessionEvenIfBookkeepingFails(t *testing.T) {
+// TestRecoverSucceedsEvenIfTheMetricsWriteFails pins the advisory writes: the
+// transcript metrics are a diagnostic, so the resume is issued and its verdict
+// stands whether or not the row was refreshed.
+func TestRecoverSucceedsEvenIfTheMetricsWriteFails(t *testing.T) {
 	inner := newTestStore(t)
 	seedSession(t, inner, recoverableSession(sessionA))
 	faulty := newFaultStore(inner, "SetSessionTranscriptMetrics", 0)
-	// The supervisor must already publish the conversation as working on the
-	// *first* pass: a session it knows nothing about would fall through to a real
-	// resume, and the test would silently cover the wrong branch.
-	provider := &providerStub{
-		statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
-			status := statusFor(sessionID, 14, 280)
-			status.Running = true
-			return status, nil
-		},
-		listingFn: publishedWorking(sessionA),
-	}
+	provider := growthProvider(10, 14)
 	manager := testManager(t, faulty, provider, nil)
 
 	outcome, err := manager.Recover(context.Background(), sessionA)
@@ -418,57 +407,48 @@ func TestRecoverRecognisesAnAlreadyResumedSessionEvenIfBookkeepingFails(t *testi
 		t.Fatalf("Recover = %v, want success despite the advisory write failing", err)
 	}
 	if !outcome.Resumed || outcome.State != StateResumed {
-		t.Errorf("outcome = %+v, want RESSUMED with Resumed=true", outcome)
+		t.Errorf("outcome = %+v, want RESUMED with Resumed=true", outcome)
 	}
 	if !outcome.Verification.Proven {
-		t.Error("Proven = false, want true: the supervisor published the session as working")
+		t.Error("Proven = false, want true: the resume exited zero")
 	}
-	if provider.resumeCount() != 0 {
-		t.Errorf("resume calls = %d, want 0: the already-resumed shortcut must be taken, not a real resume",
-			provider.resumeCount())
-	}
-	if !containsNote(outcome.Verification.Notes, "continued on its own") {
-		t.Errorf("notes = %v, want the already-resumed explanation", outcome.Verification.Notes)
+	if provider.resumeCount() != 1 {
+		t.Errorf("resume calls = %d, want 1: there is no shortcut to take, the command runs", provider.resumeCount())
 	}
 	if faulty.count("SetSessionTranscriptMetrics") == 0 {
 		t.Error("the metrics write was never attempted, so this test proved nothing")
 	}
 }
 
-// TestRecoverRefusesToClaimAnAlreadyResumedSessionItCannotRecord proves the
-// shortcut is only reported as success when the RESUMED transition was actually
-// persisted: an unrecorded success would let a restart resume the same session a
-// second time.
-func TestRecoverRefusesToClaimAnAlreadyResumedSessionItCannotRecord(t *testing.T) {
+// TestRecoverDoesNotResumeUntilResumingIsRecorded is the ordering guarantee: the
+// RESUMING transition is written before the attempt row and the command, so a
+// transition that cannot be persisted stops the pass instead of leaving a
+// continuation whose state nobody recorded.
+func TestRecoverDoesNotResumeUntilResumingIsRecorded(t *testing.T) {
 	inner := newTestStore(t)
 	seedSession(t, inner, recoverableSession(sessionA))
-	// 1 = RESUMED. The machine has no "checking" beat any more: the pass reads
-	// the status and the listing in the state it found the session in, so the
-	// shortcut writes exactly one transition.
+	// 1 = RESUMING: a WAITING_FOR_RESET session has no earlier transition.
 	faulty := newFaultStore(inner, "TransitionSession", 1)
-	provider := &providerStub{statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
-		status := statusFor(sessionID, 14, 280)
-		status.Running = true
-		return status, nil
-	}}
+	provider := growthProvider(10, 14)
 	manager := testManager(t, faulty, provider, nil)
 
 	outcome, err := manager.Recover(context.Background(), sessionA)
 	if err == nil || !strings.Contains(err.Error(), errInjected.Error()) {
 		t.Fatalf("Recover = %v, want the injected storage failure", err)
 	}
-	if outcome.Resumed || outcome.State == StateResumed {
+	if outcome.State == StateResumed {
 		t.Errorf("outcome = %+v, want no RESUMED claim when the transition was not written", outcome)
 	}
 	if provider.resumeCount() != 0 {
-		t.Errorf("resume calls = %d, want 0", provider.resumeCount())
+		t.Errorf("resume calls = %d, want 0: nothing may run before the state says it is running",
+			provider.resumeCount())
 	}
 }
 
 // TestRecoverRefusesToClaimAWaitItCannotRecord covers the sibling case a step
-// later: a limit that has not cleared must end in WAITING_FOR_RESET, and when
-// that transition cannot be written the caller must be told rather than be
-// handed a state the database does not hold.
+// later: a refusal must end in WAITING_FOR_RESET, and when that transition
+// cannot be written the caller must be told rather than be handed a state the
+// database does not hold.
 //
 // The session is seeded in DISCOVERED on purpose: the park is then a real state
 // change, written through TransitionSession, and the assertion below can tell a
@@ -478,12 +458,16 @@ func TestRecoverRefusesToClaimAWaitItCannotRecord(t *testing.T) {
 	discovered := recoverableSession(sessionA)
 	discovered.State = StateDiscovered
 	seedSession(t, inner, discovered)
-	// The limit check runs before RESUMING is entered, so the park is the only
-	// transition the pass writes.
-	faulty := newFaultStore(inner, "TransitionSession", 1)
-	manager := testManager(t, faulty, growthProvider(10, 12), func(cfg *Config) {
-		cfg.LimitRecheck = func(context.Context, string) (bool, error) { return false, nil }
-	})
+	// The pass writes two transitions — DISCOVERED -> RESUMING, then the park
+	// back to WAITING_FOR_RESET once the CLI refuses — so the second one is the
+	// park, and that is the write this test breaks.
+	faulty := newFaultStore(inner, "TransitionSession", 2)
+	provider := &providerStub{
+		resumeFn: func(string, string) (claude.ResumeResult, error) {
+			return claude.ResumeResult{}, refusedResume()
+		},
+	}
+	manager := testManager(t, faulty, provider, nil)
 
 	outcome, err := manager.Recover(context.Background(), sessionA)
 	if err == nil || !strings.Contains(err.Error(), errInjected.Error()) {
@@ -494,32 +478,6 @@ func TestRecoverRefusesToClaimAWaitItCannotRecord(t *testing.T) {
 	}
 	if outcome.State == StateWaitingForReset {
 		t.Errorf("state = WAITING_FOR_RESET although the transition was not written")
-	}
-}
-
-// TestRecoverKeepsWaitingWhenTheLimitHasNotCleared proves a still-active limit
-// returns the session to WAITING_FOR_RESET and reports ErrLimitNotCleared, and
-// that it never issues a resume.
-func TestRecoverKeepsWaitingWhenTheLimitHasNotCleared(t *testing.T) {
-	store := newTestStore(t)
-	seedSession(t, store, recoverableSession(sessionA))
-	provider := growthProvider(10, 12)
-
-	manager := testManager(t, store, provider, func(cfg *Config) {
-		cfg.LimitRecheck = func(context.Context, string) (bool, error) { return false, nil }
-	})
-	outcome, err := manager.Recover(context.Background(), sessionA)
-	if !errors.Is(err, ErrLimitNotCleared) {
-		t.Fatalf("Recover = %v, want ErrLimitNotCleared", err)
-	}
-	if outcome.State != StateWaitingForReset {
-		t.Errorf("state = %s, want WAITING_FOR_RESET", outcome.State)
-	}
-	if outcome.Resumed {
-		t.Error("Resumed = true, want false: the limit is still in force")
-	}
-	if provider.resumeCount() != 0 {
-		t.Error("a resume was issued while the limit was still in force")
 	}
 }
 
@@ -605,66 +563,6 @@ func TestStateWalkerReportsAPersistenceFailure(t *testing.T) {
 		sessionID: sessionA, current: StateWaitingForReset}
 	if err := repeat.move(StateWaitingForReset, "still waiting", 0); !errors.Is(err, errInjected) {
 		t.Fatalf("repeated move = %v, want the injected failure", err)
-	}
-}
-
-// TestVerifierAppliesItsDocumentedDefaults proves an unset timeout and interval
-// fall back to the documented values rather than waiting for ever or spinning:
-// a transcript that has already grown is accepted on the first check.
-func TestVerifierAppliesItsDocumentedDefaults(t *testing.T) {
-	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
-		return statusFor(sessionA, 11, 220), nil
-	}}
-	verifier := Verifier{Provider: provider, Clock: clock.NewFake(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))}
-
-	got, err := verifier.Verify(context.Background(), baselineFor(sessionA), goodResult(sessionA))
-	if err != nil {
-		t.Fatalf("Verify: %v", err)
-	}
-	if !got.TranscriptGrew {
-		t.Error("TranscriptGrew = false, want true: the growth is the measurement the bound exists to collect")
-	}
-	if got.Proven {
-		t.Error("Proven = true, want false: growth is a diagnostic, not proof (PRD 2 / R3)")
-	}
-	if provider.statusCount() != 1 {
-		t.Errorf("status calls = %d, want 1: growth must be accepted immediately", provider.statusCount())
-	}
-}
-
-// TestVerifierStopsWhenTheContextIsCancelledWhileWaiting proves the polling loop
-// is interruptible: a shutdown must not be delayed until the verification
-// timeout expires.
-func TestVerifierStopsWhenTheContextIsCancelledWhileWaiting(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	provider := &providerStub{statusFn: func(call int, sessionID string) (claude.SessionStatus, error) {
-		if call == 2 {
-			cancel()
-		}
-		// The transcript has not grown, so the loop keeps polling until the
-		// context is cancelled instead of returning early.
-		return statusFor(sessionID, 5, 100), nil
-	}}
-	// A real clock with a millisecond interval is used here on purpose: the
-	// point of the test is that the wait itself is interruptible, and a frozen
-	// fake clock would simply block in the select instead of exercising it.
-	verifier := Verifier{
-		Provider: provider,
-		Timeout:  5 * time.Second,
-		Interval: time.Millisecond,
-	}
-
-	got, err := verifier.Verify(ctx, baselineFor(sessionA), goodResult(sessionA))
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("Verify = %v, want context.Canceled", err)
-	}
-	if got.Proven {
-		t.Error("Proven = true after a cancelled verification")
-	}
-	if provider.statusCount() < 2 {
-		t.Errorf("status calls = %d, want at least 2: the loop must have polled", provider.statusCount())
 	}
 }
 

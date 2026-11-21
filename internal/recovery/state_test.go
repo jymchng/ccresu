@@ -196,15 +196,17 @@ func TestNoDoubleResume(t *testing.T) {
 	if CanTransition(StateResumed, StateWaitingForReset) {
 		t.Error("RESUMED -> WAITING_FOR_RESET is legal; the next limit must be observed before it is parked")
 	}
-	// The two observing edges into RESUMED are legal, and they are the whole
-	// reason a pass can recognise a session that continued on its own once the
-	// window reset instead of handing it a second continuation. They are
-	// observations from the published state, not resumes, so they spend no
-	// attempt and they do not weaken the guard above.
+	// RESUMING -> RESUMED is the only entry into the landing beat. The two
+	// observing edges DISCOVERED -> RESUMED and WAITING_FOR_RESET -> RESUMED went
+	// with the published listing that fed them: a pass has nothing left to
+	// observe, so only a resume that exited 0 may record a continuation.
 	for _, from := range []State{StateDiscovered, StateWaitingForReset} {
-		if !CanTransition(from, StateResumed) {
-			t.Errorf("%s -> RESUMED is illegal; a session that resumed itself could not be recorded", from)
+		if CanTransition(from, StateResumed) {
+			t.Errorf("%s -> RESUMED is legal; only a resume that exited 0 may record a continuation", from)
 		}
+	}
+	if !CanTransition(StateResuming, StateResumed) {
+		t.Error("RESUMING -> RESUMED is not legal; a resume that exited 0 could not be recorded")
 	}
 	err := ValidateTransition(StateResumed, StateResuming)
 	if !errors.Is(err, ErrInvalidTransition) {
@@ -222,18 +224,32 @@ func TestNoDoubleResume(t *testing.T) {
 // small: whatever a live session is doing, it can always go back to the top of
 // the loop, and it can always be recorded as finished, disabled or unresumable.
 // No beat can strand a session.
+//
+// RESUMING carries one documented exception. The beat exists only between
+// entering it and the resume's exit status, and no pass ever looks at a session
+// while it is there, so nothing can observe a completion in that window and the
+// table gives it no COMPLETED edge. Everything else it can still reach, which is
+// what keeps an interrupted attempt from stranding a session.
 func TestEveryLiveStateHasTheSameFourExits(t *testing.T) {
 	live := []State{StateDiscovered, StateWaitingForReset, StateResuming, StateResumed}
-	exits := []State{StateDiscovered, StateCompleted, StateDisabled, StateUnrecoverable}
 	for _, from := range live {
 		if Terminal(from) {
 			t.Errorf("%s is terminal; a live state must keep moving", from)
 		}
-		for _, to := range exits {
+		for _, to := range []State{StateDiscovered, StateDisabled, StateUnrecoverable} {
 			if !CanTransition(from, to) {
 				t.Errorf("%s -> %s is not legal; a session there would be stranded", from, to)
 			}
 		}
+	}
+	// COMPLETED is the one exit not every beat has.
+	for _, from := range []State{StateDiscovered, StateWaitingForReset, StateResumed} {
+		if !CanTransition(from, StateCompleted) {
+			t.Errorf("%s -> COMPLETED is not legal; a finished session could not be recorded there", from)
+		}
+	}
+	if CanTransition(StateResuming, StateCompleted) {
+		t.Error("RESUMING -> COMPLETED is legal; no pass observes a session in RESUMING, so nothing can take that edge")
 	}
 }
 

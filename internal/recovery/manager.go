@@ -23,7 +23,15 @@ const DefaultMaxConcurrent = 3
 const DefaultContinuationMessage = "Continue working on the existing active goal from where execution was interrupted by the usage limit. Review the current state, avoid repeating completed work, and continue until the goal is completed."
 
 // ErrLimitNotCleared reports that the usage limit is still in force, so the
-// session went back to waiting instead of being resumed.
+// session is waiting for the reset instead of resuming now.
+//
+// It has exactly one producer: a resume the CLI refused. That refusal is
+// reported as *LimitInForceError, which unwraps to the adapter's
+// claude.ErrUsageLimitInForce and reports this sentinel through Is, so a caller
+// that only knows the sentinel still learns that the session is waiting rather
+// than broken. There is no other way to learn it: a usage window is only ever
+// announced by a `claude` run, so a pass that has not run the command cannot
+// know, and there is no pre-resume check that could report it instead.
 var ErrLimitNotCleared = errors.New("recovery: usage limit is still in force")
 
 // Store is the persistence the manager needs. *storage.Store satisfies it.
@@ -47,13 +55,6 @@ type Store interface {
 	// that already matched, so the history records only real changes.
 	GetSchedule(ctx context.Context, sessionID string) (storage.Schedule, error)
 }
-
-// LimitRecheck reports whether a session's usage limit has actually cleared.
-//
-// It is injected so the recovery engine does not have to know how a limit is
-// detected. A nil hook means "trust the schedule": the reset time was verified
-// by the scheduler before this point.
-type LimitRecheck func(ctx context.Context, sessionID string) (cleared bool, err error)
 
 // Config assembles a Manager.
 //
@@ -80,15 +81,10 @@ type Config struct {
 	MaxConcurrent int
 	// ContinuationMessage is the message sent with the resume command.
 	ContinuationMessage string
-	// VerificationTimeout and HealthCheckInterval configure the verifier.
-	VerificationTimeout time.Duration
-	HealthCheckInterval time.Duration
-	// Verifier overrides the default verifier, for tests and for hosts that
-	// measure transcript growth differently.
-	Verifier *Verifier
-	// LimitRecheck is an optional pre-resume limit check. Nil means the
-	// scheduler already confirmed the reset.
-	LimitRecheck LimitRecheck
+	// Recorder overrides the default post-resume measurement, for tests and
+	// for hosts that read the transcript differently. Nil measures through
+	// Provider.
+	Recorder *Recorder
 	// LimitPark records a usage-limit refusal and plans the wait until the
 	// reset. Nil means a refusal is still reported as a wait, but no schedule
 	// and no usage-limit row are written, so the wait ends only when something
@@ -102,11 +98,6 @@ type Config struct {
 	// Limits are PRD 5's two spend caps. The zero value disables both, which is
 	// today's behaviour exactly: no sum is taken and no check runs.
 	Limits SpendLimits
-	// Supervisor reads the background supervisor's status and version (PRD 3
-	// R1, R2). Nil means no supervisor capability is installed: every pass
-	// reports "no supervisor" and recovers exactly as before, which is the same
-	// answer as a machine that has never run `claude --bg`.
-	Supervisor SupervisorReader
 }
 
 // Manager runs recoveries for one process.
@@ -125,18 +116,10 @@ type Manager struct {
 	maxAttempts int
 	backoff     Backoff
 	message     string
-	verifier    Verifier
-	limitCheck  LimitRecheck
+	recorder    Recorder
 	limitPark   LimitPark
 	limits      SpendLimits
 	observer    Observer
-	// observations reads the supervisor's published state. It caches one read
-	// per pass, so every session in a pass is answered from the same instant.
-	observations *ObservationSource
-	// supervisors reads `claude daemon status` once per pass (R1), so the
-	// supervisor's state, version and worker count are one fact per pass rather
-	// than one fact per session.
-	supervisors *SupervisorSource
 
 	locks *sessionLocks
 	sem   chan struct{}
@@ -182,40 +165,29 @@ func New(cfg Config) (*Manager, error) {
 		logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	}
 
-	verifier := Verifier{
-		Provider: cfg.Provider,
-		Clock:    clk,
-		Timeout:  cfg.VerificationTimeout,
-		Interval: cfg.HealthCheckInterval,
-	}
-	if cfg.Verifier != nil {
-		verifier = *cfg.Verifier
-		if verifier.Provider == nil {
-			verifier.Provider = cfg.Provider
-		}
-		if verifier.Clock == nil {
-			verifier.Clock = clk
+	recorder := Recorder{Provider: cfg.Provider}
+	if cfg.Recorder != nil {
+		recorder = *cfg.Recorder
+		if recorder.Provider == nil {
+			recorder.Provider = cfg.Provider
 		}
 	}
 
 	return &Manager{
-		store:        cfg.Store,
-		provider:     cfg.Provider,
-		clock:        clk,
-		log:          logger,
-		enabled:      cfg.Enabled,
-		maxAttempts:  maxAttempts,
-		backoff:      backoff,
-		message:      message,
-		verifier:     verifier,
-		limits:       cfg.Limits,
-		limitCheck:   cfg.LimitRecheck,
-		limitPark:    cfg.LimitPark,
-		observer:     cfg.Observer,
-		observations: NewObservationSource(cfg.Provider, clk),
-		supervisors:  NewSupervisorSource(cfg.Supervisor),
-		locks:        newSessionLocks(),
-		sem:          make(chan struct{}, maxConcurrent),
+		store:       cfg.Store,
+		provider:    cfg.Provider,
+		clock:       clk,
+		log:         logger,
+		enabled:     cfg.Enabled,
+		maxAttempts: maxAttempts,
+		backoff:     backoff,
+		message:     message,
+		recorder:    recorder,
+		limits:      cfg.Limits,
+		limitPark:   cfg.LimitPark,
+		observer:    cfg.Observer,
+		locks:       newSessionLocks(),
+		sem:         make(chan struct{}, maxConcurrent),
 	}, nil
 }
 
@@ -237,28 +209,13 @@ func (m *Manager) announce(ctx context.Context, kind MilestoneKind, outcome Outc
 	})
 }
 
-// attemptObservation picks the observation an attempt row should carry: the one
-// taken after the resume when there is one, and the pass's pre-resume read
-// otherwise (PRD 2 / R13).
-//
-// Preferring the later read is the point — it is the observation the verdict
-// rests on. Falling back rather than leaving it empty is the other half: a
-// handoff is proven by the CLI's block, and the row still owes an operator what
-// the supervisor had said about the session before it was handed over.
-func attemptObservation(before, after StateObservation) StateObservation {
-	if after.Recorded() {
-		return after
-	}
-	return before
-}
-
 // recordTranscriptMetrics stores the transcript measurement a status check
 // observed, so the next pass compares against what is actually on disk.
 //
 // It is a diagnostic and nothing else (R3): no decision is read back out of it,
 // and a failure to record is logged rather than returned. A session that was
-// observed, parked or recognised as already resumed still owes the operator its
-// state even if the measurement could not be stored.
+// observed, parked or resumed still owes the operator its state even if the
+// measurement could not be stored.
 func (m *Manager) recordTranscriptMetrics(ctx context.Context, sessionID string, status claude.SessionStatus) {
 	if strings.TrimSpace(status.Transcript.Path) == "" {
 		return
@@ -284,8 +241,6 @@ func FromConfig(cfg *config.Config, store Store, provider claude.SessionProvider
 		Backoff:             FromConfigValues(rec.InitialDelay.Duration, rec.MaxDelay.Duration, rec.Multiplier, rec.Jitter),
 		MaxConcurrent:       rec.MaxConcurrentRecoveries,
 		ContinuationMessage: cfg.Claude.ContinuationMessage,
-		VerificationTimeout: rec.VerificationTimeout.Duration,
-		HealthCheckInterval: rec.HealthCheckInterval.Duration,
 		Limits: SpendLimits{
 			PerSession: rec.Guardrails.MaxCostUSDPerSession,
 			PerAttempt: rec.Guardrails.MaxCostUSDPerAttempt,
@@ -343,19 +298,14 @@ type Outcome struct {
 	// WaitUntil is the instant Wait ends: the reset the refusal named, or the
 	// first poll when it named none. Zero when no wait was planned.
 	WaitUntil time.Time
-	// Resumed reports that the original conversation was proven to continue,
-	// either because ccresu resumed it or because it had already resumed.
+	// Resumed reports that the original conversation continued: ccresu ran the
+	// resume and its turn finished.
 	Resumed bool
 	// Interrupted reports that the pass ended because an attempt left running by
-	// a process that died was closed as interrupted (PRD 3 R6). It is not a
-	// failure: nothing was handed off, no budget was spent, and the session
-	// returns to DISCOVERED for the next pass to re-observe.
+	// a process that died was closed as interrupted. It is not a failure:
+	// nothing was resumed, no budget was spent, and the session returns to
+	// DISCOVERED for the next pass to look at again.
 	Interrupted bool
-	// Supervisor is what `claude daemon status` reported on this pass (PRD 3
-	// R1). It is carried rather than re-read, so a caller that wants to record or
-	// show the reading cannot end up describing a different supervisor than the
-	// pass acted on.
-	Supervisor claude.SupervisorStatus
 }
 
 // Recover attempts one recovery of a session.
@@ -467,9 +417,9 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 
 	// An attempt row with no finish time belongs to a process that died — a
 	// restart or a reboot. It is closed as *interrupted*, and the pass ends
-	// there: the supervisor may still be running the work, so handing off again
-	// in the same pass would duplicate the recovery the supervisor is already
-	// doing (PRD 3 R6).
+	// there: the resume that row belongs to may still be running, so sending a
+	// second continuation in the same pass would duplicate the recovery that turn
+	// is already doing (PRD 3 R6).
 	if closed, err := m.closeInterruptedAttempt(ctx, state, sessionID); err != nil {
 		return Outcome{SessionID: sessionID, State: state.current}, err
 	} else if closed {
@@ -484,35 +434,20 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 	outcome := Outcome{SessionID: sessionID}
 	baseline := BaselineFromSession(session)
 
-	// Everything below until the handoff is pre-flight: reading the supervisor,
-	// the status and the published listing, then the limit and spend checks. It
-	// runs in the state the pass found the session in — DISCOVERED, or
-	// WAITING_FOR_RESET for a session woken by its schedule — because the machine
-	// has no separate "checking" beat. RESUMING is entered once, immediately
-	// before the continuation is handed over, so every attempt row sits under
-	// exactly one RESUMING transition and the audit trail says what was spent.
+	// Everything below until the resume is pre-flight: the status read and the
+	// spend cap. It runs in the state the pass found the session in
+	// — DISCOVERED, or WAITING_FOR_RESET for a session woken by its schedule —
+	// because the machine has no separate "checking" beat. RESUMING is entered
+	// once, immediately before the continuation is sent, so every attempt row
+	// sits under exactly one RESUMING transition and the audit trail says what
+	// was spent.
 	//
-	// PRD 3 R1/R2: the supervisor is read once per pass, and its version is
-	// compared with the CLI ccresu would hand off with. Three answers are
-	// possible and each is its own outcome: no supervisor (normal, carry on), an
-	// unreadable status (named failure, hand off nothing), and a version mismatch
-	// (named condition with the documented remedy, hand off nothing). The last
-	// two are reported through fail(), which records the cause on the session and
-	// spends no attempt budget, because no continuation was issued.
-	//
-	// The read is bookkeeping, not a decision: what the pass decides about the
-	// session still comes from the published listing. Recording the reading here
-	// is what lets an operator see which supervisor the pass was talking to when
-	// it made that decision.
-	supervisor, supervisorErr := m.supervisors.Check(ctx)
-	outcome.Supervisor = supervisor
-	m.log.Info("read the background supervisor",
-		"session", sessionID, "supervisor", SupervisorSummary(supervisor), "argv", supervisor.Argv)
-	if supervisorErr != nil {
-		return m.fail(ctx, state, Outcome{SessionID: sessionID, Supervisor: supervisor}, baseline,
-			storage.RecoveryAttempt{}, Verification{}, supervisorErr)
-	}
-
+	// Nothing here tries to predict what the resume will do. There is no
+	// published-state listing to consult and no supervisor to ask, and there is
+	// no usage-limit recheck either: a window can only be announced by a claude
+	// run, so the resume is the check. The command runs the turn and reports
+	// through its exit status, so the pass's job before it runs is only to
+	// establish that a continuation is allowed to be sent.
 	status, err := m.provider.GetSessionStatus(ctx, sessionID)
 	if err != nil {
 		return m.fail(ctx, state, Outcome{SessionID: sessionID}, baseline, storage.RecoveryAttempt{},
@@ -527,96 +462,17 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 		return m.fail(ctx, state, Outcome{SessionID: sessionID}, baseline, storage.RecoveryAttempt{},
 			Verification{}, cause)
 	}
-	merged := mergeBaseline(baseline, BaselineFromStatus(status))
-
-	// What the supervisor published decides what this session is. One read of
-	// `claude agents --json --all` serves the whole pass (R1), and the mapping
-	// takes "is a handoff outstanding" as an argument (R5) rather than inferring
-	// it — here nothing has been handed off yet, so it is false.
-	//
-	// A read that failed is an outage, not a verdict (R8): no observation means
-	// no decision, and the attempt stays open for the next pass.
-	observation, obsErr := m.observations.Observe(ctx, sessionID)
-	if obsErr != nil {
-		return m.fail(ctx, state, Outcome{SessionID: sessionID}, baseline,
-			storage.RecoveryAttempt{}, Verification{}, obsErr)
-	}
-	// stopIssuedByCCRESU is false because nothing in this path has issued a
-	// stop; a `stopped` observation therefore keeps its documented retry
-	// meaning instead of becoming the operator's decision.
-	decision := Observe(observation, false, false)
-	observed := Verification{
-		LinesBefore: baseline.TranscriptLines,
-		LinesAfter:  status.Transcript.Lines,
-		SizeBefore:  baseline.TranscriptSize,
-		SizeAfter:   status.Transcript.Size,
-		Running:     status.Running,
-		// Nothing in this path resumed anything, so the only identity fact to
-		// check is that the status describes the session that was asked about.
-		// An empty id is the CLI declining to name it, which is not a mismatch.
-		SessionIDPreserved: status.Session.ID == "" || status.Session.ID == sessionID,
-	}
-	observed.ObservePublished(observation, decision)
-
-	switch {
-	case decision.State == StateResumed:
-		// It continued on its own once the window reset: a success, and one that
-		// must be recognised without issuing a resume, because resuming a session
-		// that is already working would duplicate its work.
-		m.recordTranscriptMetrics(ctx, sessionID, status)
-		if err := state.move(StateResumed, decision.Reason, 0); err != nil {
-			return Outcome{SessionID: sessionID, State: state.current}, err
-		}
-		outcome.State = state.current
-		outcome.Verification = observed
-		outcome.Resumed = true
-		// The supervisor says the conversation is alive, so this is a success
-		// even though ccresu issued no resume: announcing it here is what keeps
-		// "recovery succeeded" from meaning "ccresu ran a command".
-		m.announce(ctx, MilestoneSucceeded, outcome, nil)
-		return outcome, nil
-	case decision.State == StateCompleted:
-		// `done` with no handoff outstanding: the last turn finished what was
-		// asked for, so there is nothing to continue and no continuation is sent
-		// (R6). Handing a finished conversation a "continue" message is the
-		// mistake this branch exists to prevent.
-		m.recordTranscriptMetrics(ctx, sessionID, status)
-		if err := state.move(StateCompleted, decision.Reason, 0); err != nil {
-			return Outcome{SessionID: sessionID, State: state.current}, err
-		}
-		outcome.State = state.current
-		outcome.Verification = observed
-		return outcome, nil
-	}
-	// Every other observation — failed, stopped, an unknown value, or a session
-	// the supervisor has not heard of — leaves the resume path as it was: the
-	// limit has reset, and continuing the conversation is what recovery does.
-	baseline = merged
-
-	// The limit check is the last of the pre-flight checks. It runs before
-	// RESUMING is entered, because a limit that is still in force means no
-	// continuation will be handed over at all: the session is parked on the reset
-	// the banner named, and the next lap starts when that instant arrives.
-	if m.limitCheck != nil {
-		cleared, err := m.limitCheck(ctx, sessionID)
-		if err != nil {
-			return m.fail(ctx, state, Outcome{SessionID: sessionID}, baseline, storage.RecoveryAttempt{},
-				Verification{}, fmt.Errorf("check usage limit: %w", err))
-		}
-		if !cleared {
-			if moveErr := state.move(StateWaitingForReset, "the usage limit is still in force", 0); moveErr != nil {
-				return Outcome{SessionID: sessionID, State: state.current}, moveErr
-			}
-			return Outcome{SessionID: sessionID, State: state.current, Resumed: false},
-				sessionError(ErrLimitNotCleared, sessionID)
-		}
-	}
+	// The status is read even though nothing is decided from it any more: it says
+	// whether the session is still recoverable, and it is the freshest transcript
+	// measurement available before the turn. What happens next is settled by the
+	// resume itself, not by a listing of published state.
+	m.recordTranscriptMetrics(ctx, sessionID, status)
+	baseline = mergeBaseline(baseline, BaselineFromStatus(status))
 
 	// R5: the session spend check runs here, before an attempt row exists, so a
 	// refusal spends nothing — the same rule the attempt budget follows, where a
 	// request that spends no attempt has started nothing. It is a pre-resume
-	// check like the limit check above, so it ends the pass through fail() with
-	// no attempt row behind it.
+	// check, so it ends the pass through fail() with no attempt row behind it.
 	if err := m.checkSessionCap(ctx, sessionID, req.Manual); err != nil {
 		return m.fail(ctx, state, Outcome{SessionID: sessionID}, baseline,
 			storage.RecoveryAttempt{}, Verification{}, err)
@@ -653,11 +509,6 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 		return m.fail(ctx, state, outcome, baseline, attempt, Verification{},
 			fmt.Errorf("resume session %s: %w", sessionID, resumeErr))
 	}
-	if result.IsError {
-		return m.fail(ctx, state, outcome, baseline, attempt, Verification{},
-			fmt.Errorf("resume session %s: %w: %s", sessionID, claude.ErrResumeFailed, firstLine(result.Result)))
-	}
-
 	// R6: one attempt over the per-attempt cap stops recovery. The check runs
 	// after the cost is known and before the outcome is decided, and fail()
 	// records the cost it judged rather than discarding it.
@@ -665,73 +516,22 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 		return m.fail(ctx, state, outcome, baseline, attempt, Verification{}, capErr)
 	}
 
-	verification, verifyErr := m.verifier.Verify(ctx, baseline, result)
-	if verifyErr != nil {
-		return m.fail(ctx, state, outcome, baseline, attempt, verification,
-			fmt.Errorf("verify session %s: %w", sessionID, verifyErr))
-	}
-
-	// PRD 2 / R3: a resume that was not handed off is proven by what the
-	// supervisor publishes about the conversation, and growth of the transcript
-	// is a diagnostic that is reported but never believed. The pass read the
-	// listing before the resume, so that read is ended here — an observation
-	// taken before the continuation cannot attest to it.
-	var published StateObservation
-	if !verification.HandoffAccepted {
-		m.observations.Reset()
-		obs, obsErr := m.observations.Observe(ctx, sessionID)
-		if obsErr != nil {
-			return m.fail(ctx, state, outcome, baseline, attempt, verification,
-				fmt.Errorf("observe session %s after resume: %w", sessionID, obsErr))
-		}
-		published = obs
-		verification.ObservePublished(obs, Observe(obs, true, false))
-	} else {
-		// PRD 3 R7: acceptance is when the supervisor takes the session, not when
-		// the work is safe. It idle-stops sessions after about an hour, restarts
-		// itself across its own updates, and reports `stopped` for a session that
-		// ended while it was off — none of which is a verdict about the
-		// conversation, and all of which look identical from here unless the
-		// listing is read again.
-		//
-		// So the pass asks once more, after the handoff. A session the supervisor
-		// no longer lists (having listed it before) or lists as `stopped`,
-		// `failed` or an unknown value is not proven resumed: the session is
-		// parked on a retry instant that re-observes it before handing off again,
-		// and nothing about it is reported as a permanent failure or "cured" with
-		// a respawn.
-		m.observations.Reset()
-		after, obsErr := m.observations.Observe(ctx, sessionID)
-		if obsErr != nil {
-			return m.fail(ctx, state, outcome, baseline, attempt, verification,
-				fmt.Errorf("observe session %s after the handoff: %w", sessionID, obsErr))
-		}
-		if reason, lost := handoffLost(after, observation); lost {
-			return m.retryHandoff(ctx, state, outcome, attempt, verification, after, reason)
-		}
-	}
-	if !verification.Proven {
-		return m.fail(ctx, state, outcome, baseline, attempt, verification,
-			VerificationFailedError(sessionID, verification))
+	// The provider has already turned a non-zero exit into an error, so a result
+	// that reaches here ran the turn to its end. What follows measures the
+	// transcript. Nothing it finds can revise that verdict, and a measurement
+	// that cannot be taken is recorded as absent rather than promoted into a
+	// second opinion about work that has already finished.
+	verification := m.recorder.Measure(ctx, baseline, result)
+	for _, note := range verification.Notes {
+		m.log.Info("post-resume measurement", "session", sessionID, "note", note)
 	}
 
 	finished, err := m.store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
-		State:             StateResumed,
-		Success:           boolPtr(true),
-		Output:            truncate(result.Result),
-		SessionIDVerified: boolPtr(verification.SessionIDPreserved),
-		TranscriptGrew:    boolPtr(verification.TranscriptGrew),
-		HandoffStateID:    verification.HandoffStateID,
-		HandoffName:       verification.HandoffName,
-		HandoffAt:         handoffTime(verification, m.now()),
-		HandoffCopied:     handoffCopied(verification),
-		CostUSD:           attempt.CostUSD,
-		// R13: the state the supervisor published is stored verbatim, so a
-		// decision can be re-examined later instead of being re-argued from a
-		// transcript measurement. A handoff has no post-resume observation, so
-		// the pass's pre-resume read is what the row carries.
-		Observation: RecordedObservation(attemptObservation(observation, published)),
-		FinishedAt:  m.now(),
+		State:          StateResumed,
+		Success:        boolPtr(true),
+		TranscriptGrew: boolPtr(verification.TranscriptGrew),
+		CostUSD:        attempt.CostUSD,
+		FinishedAt:     m.now(),
 	})
 	if err != nil {
 		return Outcome{SessionID: sessionID, State: state.current}, fmt.Errorf("finish attempt: %w", err)
@@ -749,14 +549,9 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 		m.log.Warn("clear session error", "session", sessionID, "error", err)
 	}
 	// The reason names what actually happened, because it is what an operator
-	// reads in `ccresu history`. A handoff did not grow a transcript under
-	// ccresu's process, and saying it did would teach the wrong mental model.
-	reason := "the original session resumed and the conversation grew"
-	if verification.HandoffAccepted {
-		reason = fmt.Sprintf("the supervisor accepted the continuation as %s (%s)",
-			verification.HandoffStateID, verification.HandoffName)
-	}
-	if err := state.move(StateResumed, reason, attempt.ID); err != nil {
+	// reads in `ccresu history`: the resume's turn finished, and the transcript
+	// did or did not grow while it ran.
+	if err := state.move(StateResumed, verification.Reason(), attempt.ID); err != nil {
 		return Outcome{SessionID: sessionID, State: state.current}, err
 	}
 	outcome.State = state.current
@@ -773,9 +568,9 @@ func (m *Manager) run(ctx context.Context, req Request, sessionID string) (Outco
 // with a fresh budget. Only a proved-unrecoverable session stops there, because
 // that verdict is a fact about the conversation rather than a count of attempts.
 //
-// A failure reported before the resume was issued — the pre-resume status check,
-// the limit check or the spend cap — has no attempt row behind it, so it spends
-// no budget. A spend stop and an unrecoverable verdict are still destinations,
+// A failure reported before the resume was issued — the pre-resume status check
+// or the spend cap — has no attempt row behind it, so it spends no budget. A
+// spend stop and an unrecoverable verdict are still destinations,
 // because repeating either on a backoff would be the spending or the loop the
 // verdict exists to prevent; everything else a pre-resume check can decide is
 // worth another look, so it waits.
@@ -786,11 +581,11 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 
 	// A resume that failed may still have written to the transcript: the CLI
 	// appends its refusal, its error or a partial turn before exiting. Those
-	// lines are the attempt's own work, not evidence that the conversation
-	// continued by itself, so the stored baseline is advanced past them before
-	// anything is decided. Otherwise the next status check sees growth it
-	// caused itself and takes the "the session had already resumed after the
-	// limit reset" shortcut, which reports a refused resume as a success.
+	// lines are the failed attempt's own work, not the turn's, so the stored
+	// baseline is advanced past them before anything is decided. Otherwise the
+	// next pass would measure growth the failure caused itself and record it
+	// beside a later attempt as though the conversation had advanced in between,
+	// which is how a refused resume used to be reported as a success.
 	if attempt.ID != 0 {
 		m.absorbAttemptWrites(ctx, outcome.SessionID)
 	}
@@ -827,13 +622,9 @@ func (m *Manager) fail(ctx context.Context, state *stateWalker, outcome Outcome,
 			// The cost is carried on the attempt the caller handed over: it is known
 			// once the resume returns, whether that resume succeeded, failed or
 			// overspent, and it is recorded even when it is the reason for stopping.
-			CostUSD:           attempt.CostUSD,
-			SessionIDVerified: boolPtr(verification.SessionIDPreserved),
-			TranscriptGrew:    boolPtr(verification.TranscriptGrew),
-			// R13: a failed attempt records what was seen as well, because that
-			// is the fact an operator needs when asking why ccresu gave up.
-			Observation: RecordedObservation(verification.Observation),
-			FinishedAt:  m.now(),
+			CostUSD:        attempt.CostUSD,
+			TranscriptGrew: boolPtr(verification.TranscriptGrew),
+			FinishedAt:     m.now(),
 		}); err != nil {
 			m.log.Warn("record failed attempt", "session", outcome.SessionID, "error", err)
 		}
@@ -925,12 +716,11 @@ func (m *Manager) park(ctx context.Context, state *stateWalker, outcome Outcome,
 	if attempt.ID != 0 {
 		verification := outcome.Verification
 		if _, err := m.store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
-			State:             StateWaitingForReset,
-			Success:           boolPtr(false),
-			Error:             truncate(banner),
-			SessionIDVerified: boolPtr(verification.SessionIDPreserved),
-			TranscriptGrew:    boolPtr(verification.TranscriptGrew),
-			FinishedAt:        m.now(),
+			State:          StateWaitingForReset,
+			Success:        boolPtr(false),
+			Error:          truncate(banner),
+			TranscriptGrew: boolPtr(verification.TranscriptGrew),
+			FinishedAt:     m.now(),
 		}); err != nil {
 			m.log.Warn("record the refused attempt", "session", outcome.SessionID, "error", err)
 		}
@@ -1036,104 +826,13 @@ func targetFor(class Class, attemptNumber, maxAttempts int) State {
 	return class.State()
 }
 
-// ErrHandoffUnobserved reports that a continuation ccresu handed to the
-// supervisor is not in the supervisor's listing any more, or is listed in a state
-// that is not evidence the continuation ran (PRD 3 R7).
-//
-// It is retryable on purpose. An idle stop is expected, the conversation stays on
-// disk, and the next pass re-observes the session before handing it off again —
-// which is also how a session that ended while the supervisor was off comes back.
-var ErrHandoffUnobserved = errors.New("recovery: the handed-off session is not being observed")
-
-// handoffLost decides whether the supervisor says the handed-off continuation is
-// gone, and why.
-//
-// Two readings mean it is gone:
-//
-//   - The session was in the listing before the handoff and is not in it after
-//     (PRD 2 R8's HandoffUnobserved). A session that was never listed is a
-//     different case and deliberately not a loss: a handoff issued a moment ago is
-//     not in the listing yet, and the `backgrounded` block is what proves the
-//     supervisor took it.
-//   - It is listed with a state that is itself a retryable outcome — `stopped`,
-//     `failed`, or a value ccresu does not recognise. None of them is evidence
-//     that the continuation ran, and PRD 2's mapping already says so.
-//
-// A session still `working`, already `done`, or now `blocked` is not lost: the
-// supervisor owns the work, and a blocked session has been handed a continuation
-// that is sitting behind a prompt, which is a landed handoff rather than a lost
-// one.
-func handoffLost(after, before StateObservation) (reason string, lost bool) {
-	decision := Observe(after, true, false)
-	switch {
-	case decision.HandoffUnobserved && before.InListing:
-		return "the session vanished from the supervisor's listing after the handoff", true
-	case decision.HandoffUnobserved:
-		return "", false
-	case decision.State == StateWaitingForReset:
-		return fmt.Sprintf("the supervisor publishes %q for the handed-off session, which is not evidence that the continuation ran", after.State), true
-	}
-	return "", false
-}
-
-// retryHandoff records a handoff whose continuation the supervisor did not keep.
-//
-// The attempt is closed *unresolved* — `Success` stays nil, exactly as R6 closes
-// an attempt whose child disappeared — because the handoff was accepted and what
-// became of the work is unknown. Writing `false` would claim the continuation
-// failed, and writing `true` would claim it ran; neither is something ccresu saw.
-//
-// The session is parked with a scheduled retry, so the next pass
-// re-observes it before handing off again (R7). Nothing here is announced as a
-// permanent failure and nothing is resolved with `respawn` (R4): an idle stop is
-// expected, the conversation is on disk, and the retry continues it.
-func (m *Manager) retryHandoff(ctx context.Context, state *stateWalker, outcome Outcome,
-	attempt storage.RecoveryAttempt, verification Verification,
-	observation StateObservation, reason string) (Outcome, error) {
-	cause := fmt.Errorf("%w: %s", ErrHandoffUnobserved, reason)
-	verification.ObservePublished(observation, Observe(observation, true, false))
-	outcome.Verification = verification
-
-	reasonText := fmt.Sprintf("%s; re-observing the session before the next handoff", reason)
-	if _, err := m.store.FinishAttempt(ctx, attempt.ID, storage.AttemptResult{
-		State:             StateWaitingForReset,
-		Error:             truncate(reasonText),
-		SessionIDVerified: boolPtr(verification.SessionIDPreserved),
-		TranscriptGrew:    boolPtr(verification.TranscriptGrew),
-		HandoffStateID:    verification.HandoffStateID,
-		HandoffName:       verification.HandoffName,
-		HandoffAt:         handoffTime(verification, m.now()),
-		HandoffCopied:     handoffCopied(verification),
-		Observation:       RecordedObservation(observation),
-		FinishedAt:        m.now(),
-	}); err != nil {
-		m.log.Warn("record the handed-off attempt", "session", outcome.SessionID, "error", err)
-	}
-
-	attemptNumber := attempt.AttemptNumber
-	delay := m.backoff.Delay(attemptNumber)
-	if err := state.move(StateWaitingForReset, truncate(fmt.Sprintf("%s; next check in %s", reasonText, delay)), attempt.ID); err != nil {
-		return Outcome{SessionID: outcome.SessionID, State: state.current, Supervisor: outcome.Supervisor}, err
-	}
-	if err := m.store.SetSessionRetryAt(ctx, outcome.SessionID, m.now().Add(delay)); err != nil {
-		m.log.Warn("record next attempt", "session", outcome.SessionID, "error", err)
-	}
-	_ = m.store.SetSessionError(ctx, outcome.SessionID, truncate(cause.Error()))
-	outcome.State = state.current
-	outcome.Delay = delay
-	return outcome, &RetryError{
-		SessionID: outcome.SessionID, Attempt: attemptNumber, Max: m.maxAttempts,
-		Delay: delay, Cause: cause,
-	}
-}
-
 // closeInterruptedAttempt finishes an attempt left running by a process that died.
 //
 // The attempt is *interrupted*, not failed. Its child vanished because ccresu was
-// restarted or the machine rebooted, and the supervisor — which owns the session
-// now — may have kept the work running, restarted it, or idle-stopped it. The
-// docs describe all three as normal, so "the child disappeared" is not evidence
-// about the work at all (PRD 3 R6).
+// restarted or the machine rebooted, so what became of the turn is unknown: it
+// may have finished, been cut off mid-answer, or never started. "The child
+// disappeared" is therefore not evidence about the work at all, and the row says
+// so rather than guessing.
 //
 // Two consequences follow, and both are the point of this function:
 //
@@ -1142,11 +841,10 @@ func (m *Manager) retryHandoff(ctx context.Context, state *stateWalker, outcome 
 //     writing `false` claimed a verdict a restart cannot support and made the
 //     operator read a failure for work that never stopped.
 //   - The session returns to DISCOVERED rather than being parked, so the next
-//     pass re-observes it (PRD 2) instead of handing off again on top of a
-//     session the supervisor may still be hosting. DISCOVERED is also what makes
-//     the interruption free: the attempt budget counts the attempts started since
-//     the last DISCOVERED transition, so an interrupted attempt can never spend a
-//     cycle's budget.
+//     pass reads it again instead of resuming on top of a turn that may still be
+//     running. DISCOVERED is also what makes the interruption free: the attempt
+//     budget counts the attempts started since the last DISCOVERED transition, so
+//     an interrupted attempt can never spend a cycle's budget.
 func (m *Manager) closeInterruptedAttempt(ctx context.Context, state *stateWalker, sessionID string) (bool, error) {
 	latest, err := m.store.LatestAttempt(ctx, sessionID)
 	if err != nil {
@@ -1237,8 +935,8 @@ type stateWalker struct {
 // move records a transition and updates the walker's current state.
 //
 // Moving to the state the session is already in is not a no-op: the audit row is
-// still written, because "the limit was checked again and was still in force" is
-// information worth keeping.
+// still written, because "this pass failed and parked the session it found
+// parked" is information worth keeping.
 func (w *stateWalker) move(to State, reason string, attemptID int64) error {
 	if w.current == to {
 		return w.store.RecordTransition(w.ctx, storage.Transition{
@@ -1359,8 +1057,8 @@ func grew(baseline Baseline, status claude.SessionStatus) bool {
 // A resume that fails still touches the transcript: the CLI appends its
 // refusal, its error, or the beginning of a turn it then abandoned. Those lines
 // belong to the attempt, not to the conversation continuing by itself, so the
-// baseline is moved to the post-attempt observation and the "the session had
-// already resumed after the limit reset" shortcut keeps meaning what it says.
+// baseline is moved to the post-attempt observation and the next diagnostic
+// compares against what the attempt actually left behind.
 //
 // The re-read is deliberately a fresh status rather than an estimate: ccresu
 // cannot know how many lines a refused command wrote, and guessing would either
@@ -1389,14 +1087,11 @@ func (m *Manager) absorbAttemptWrites(ctx context.Context, sessionID string) {
 	}
 }
 
-// commandPreview renders the handoff recorded with an attempt.
+// commandPreview renders the resume recorded with an attempt.
 //
-// The shape matches what is actually executed — `claude --bg --resume <id>
-// --name <label> <message>` — because the command column is the audit trail an
-// operator reads to answer "what did ccresu run?". Recording the retirement-era
-// print-mode invocation here would describe a command that no longer happens,
-// and would be the only place left in the binary that claims recovery uses
-// print mode.
+// The shape matches what is actually executed — `claude --resume <id> <message>`
+// — because the command column is the audit trail an operator reads to answer
+// "what did ccresu run?".
 //
 // The message itself is summarised rather than stored in full: the column is an
 // audit aid, not a copy of the conversation.
@@ -1405,8 +1100,7 @@ func commandPreview(sessionID, message string) string {
 	if trimmed := strings.TrimSpace(message); trimmed != "" {
 		summary = fmt.Sprintf("%d-byte continuation message", len(trimmed))
 	}
-	return fmt.Sprintf("claude --bg --resume %s --name %s <%s>",
-		sessionID, claude.HandoffLabel(sessionID), summary)
+	return fmt.Sprintf("claude --resume %s <%s>", sessionID, summary)
 }
 
 // truncate caps a stored string so a huge CLI dump cannot bloat the database.
@@ -1432,37 +1126,14 @@ func firstLine(s string) string {
 // boolPtr returns a pointer to b, for the nullable attempt columns.
 func boolPtr(b bool) *bool { return &b }
 
-// handoffTime is when the handoff was accepted, or zero when there was none.
+// resume issues the resume in the directory the session occupies.
 //
-// It is the attempt's "not stale" bit, so it is only set for an accepted
-// handoff: stamping it on a print-mode resume would tell a restarting ccresu
-// that a supervisor owns work that never left this process.
-func handoffTime(verification Verification, now time.Time) time.Time {
-	if !verification.HandoffAccepted {
-		return time.Time{}
-	}
-	return now.UTC()
-}
-
-// handoffCopied records the copy-or-in-place outcome, nil when there was no
-// handoff, because "we did not ask" and "it continued in place" are different
-// facts.
-func handoffCopied(verification Verification) *bool {
-	if !verification.HandoffAccepted {
-		return nil
-	}
-	return boolPtr(verification.Copied)
-}
-
-// resume issues the handoff in the directory the session occupies.
-//
-// PRD 6 R3: the directory is resolved in a fixed order — the freshest
-// observation's run directory, then the persisted run directory, then the
-// project directory. The observation is the only source that knows a session
-// moved into a worktree since the last pass; the persisted row is the only
-// source after a restart for a session the CLI no longer lists. Neither is
-// guessed, and an empty resolution is a named failure rather than an inherited
-// cwd (R2).
+// PRD 6 R3: the directory is resolved in a fixed order — the freshest status's
+// run directory, then the persisted run directory, then the project directory.
+// The status is the only source that knows a session moved into a worktree since
+// the last pass; the persisted row is the only source after a restart for a
+// session the CLI no longer lists. Neither is guessed, and an empty resolution is
+// a named failure rather than an inherited cwd (R2).
 //
 // A provider that cannot be told a directory resolves it itself; that fallback
 // keeps fakes and tests which never cared about directories working unchanged.

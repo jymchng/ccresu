@@ -31,12 +31,11 @@ monitoring:
   enabled: true
   detect_usage_limits: true
   detect_session_completion: true
-  # Also scan the sessions the daemon would otherwise never read again, so a new
-  # usage limit is found instead of being missed: RESUMED (Settled, so no pass
-  # revisits it), RETRY_WAIT (a backoff that would retry into the refusal) and
-  # WAITING_FOR_INPUT (parked on a human). A limit found in one of them parks the
-  # session in WAITING_FOR_RESET. The scan can only park a session, never resume
-  # one. Default true; set false to restore the pre-0.8.0 behaviour.
+  # Also scan sessions in RESUMED, which a pass never revisits (it is settled), so
+  # a new usage limit that lands in an already-resumed session's transcript is
+  # found instead of being missed. A limit found there parks the session in
+  # WAITING_FOR_RESET. The scan can only park a session, never resume one.
+  # Default true; set false to restore the pre-0.8.0 behaviour.
   # Override with CCRESU_MONITORING__RESCAN_RESUMED.
   rescan_resumed: true
 
@@ -62,7 +61,6 @@ scheduler:
   poll_interval: 30s
   unknown_reset_initial_interval: 5m
   unknown_reset_max_interval: 30m
-  recheck_before_resume: true
 
 recovery:
   enabled: true
@@ -71,41 +69,25 @@ recovery:
   max_delay: 15m
   multiplier: 2.0
   jitter: 0.15
-  # Bounds the `claude --bg --resume` handoff call itself: how long ccresu waits
-  # for the CLI to accept the session. It does not bound the resumed work, which
-  # runs under the supervisor and outlives ccresu. The default is the two minutes
-  # the handoff call used before this key had a reader, so leaving it alone
-  # changes nothing; raise it where starting the background service is slow.
-  startup_timeout: 2m
-  # Bounds the transcript-growth poll on a resume that did not hand off. A handoff
-  # returns as soon as the `backgrounded` block is parsed, so this never bounds it.
-  verification_timeout: 120s
-  health_check_interval: 10s
+  # Bounds one resume turn: the whole `claude --resume <id> "<message>"` run,
+  # including the model's own time to answer. The command returns when the turn
+  # has finished, so this is how long a continuation may take before ccresu gives
+  # up on it and records the attempt as a deadline. The default is 30m.
+  turn_timeout: 30m
   max_concurrent_recoveries: 3
-  # PRD 5 guardrails. Every knob is optional, and an unset knob means the
-  # behaviour ccresu had before it existed: no flag added, no check performed.
+  # PRD 5 guardrails. Both knobs are optional, and an unset knob means the
+  # behaviour ccresu had before it existed: no check performed.
   guardrails:
     # The two spend caps are ccresu's own checks, not CLI flags: the flags that
     # would express them (--max-budget-usd, --max-turns) are print mode only and
-    # cannot ride a `--bg` handoff. Both default to 0 (off), because a non-zero
-    # default would change behaviour on an upgrade nobody asked to change.
+    # cannot ride a resume. Both default to 0 (off), because a non-zero default
+    # would change behaviour on an upgrade nobody asked to change.
     #
     # They sum the costs the CLI reported across this session's attempts, which
     # is the same client-side estimate the CLI itself uses — it can differ from
     # the bill, and spend can pass the cap, so leave headroom.
     max_cost_usd_per_session: 0    # e.g. 5.00: refuse a new attempt at $5
     max_cost_usd_per_attempt: 0    # e.g. 2.00: stop recovery after one attempt over $2
-    # The four flags a background handoff accepts. Unset means the CLI's own
-    # configured value.
-    model: ""                      # --model
-    effort: ""                     # --effort
-    fallback_model: ""             # --fallback-model, comma-separated chain
-    # --permission-mode. `dontAsk` is the recommended unattended value: it denies
-    # anything that would prompt, so a resume never queues behind a human who is
-    # not there. `bypassPermissions` is accepted but is ignored by a background
-    # session unless the operator has accepted the bypass warning, so ccresu warns
-    # at load time rather than at resume time.
-    permission_mode: ""            # e.g. dontAsk
 
 telegram:
   enabled: false

@@ -93,7 +93,7 @@ func TestNextAttemptForEveryState(t *testing.T) {
 			wantWhy: ReasonUnrecoverable,
 		},
 		{
-			name:    "resumed reports that it is already done",
+			name:    "resumed reports that it awaits the next limit",
 			session: storage.Session{State: storage.StateResumed, Enabled: true},
 			wantWhy: ReasonResumed,
 		},

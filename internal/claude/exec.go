@@ -35,6 +35,13 @@ type RunOptions struct {
 	// the child with an immediately-closed stdin, so no terminal is ever
 	// attached.
 	Stdin io.Reader
+	// Detach runs the child in its own session and process group.
+	//
+	// It is what keeps a resume out of the daemon's signal path: a SIGINT or a
+	// SIGHUP aimed at the daemon's group does not reach a turn that is already
+	// under way, and the child acquires no controlling terminal of its own. The
+	// call still waits for the process — detaching is not abandoning.
+	Detach bool
 	// MaxOutputBytes caps each captured stream. Zero means DefaultMaxOutputBytes.
 	MaxOutputBytes int
 }
@@ -87,6 +94,9 @@ func (OSExecer) Run(ctx context.Context, name string, args []string, opts RunOpt
 	// leak; the cancel is deferred below.
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = opts.Dir
+	if opts.Detach {
+		detach(cmd)
+	}
 	// A descendant that inherited the output pipes must not be able to hold the
 	// call open past its deadline (see DefaultWaitDelay).
 	cmd.WaitDelay = DefaultWaitDelay

@@ -1,3 +1,6 @@
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
+
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
@@ -18,6 +21,61 @@ function allText(): string {
   return `${pages}\n${landingText}`;
 }
 
+/**
+ * Where the Go sources live, so a page that cites a test can be held to it.
+ *
+ * The recovery page names the guards a reader is expected to run. Asserting only
+ * that the page contains some particular name pins the copy to whatever string
+ * was typed when it was written: an invented test, or one that was since renamed,
+ * passes that check happily. Resolving the citations against the tree cannot rot
+ * — it is the difference between documenting a guard and documenting a wish.
+ */
+function findRepoRoot(): string {
+  let dir = process.cwd();
+  for (let i = 0; i < 6; i += 1) {
+    if (
+      existsSync(path.join(dir, "docs")) &&
+      existsSync(path.join(dir, "web")) &&
+      existsSync(path.join(dir, "internal"))
+    ) {
+      return dir;
+    }
+    dir = path.dirname(dir);
+  }
+  throw new Error(`could not locate the repository root from ${process.cwd()}`);
+}
+
+function goTestSources(directory: string): string[] {
+  const sources: string[] = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const full = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      sources.push(...goTestSources(full));
+    } else if (entry.name.endsWith("_test.go")) {
+      sources.push(readFileSync(full, "utf8"));
+    }
+  }
+  return sources;
+}
+
+const repoRoot = findRepoRoot();
+const goTests = [
+  ...goTestSources(path.join(repoRoot, "internal")),
+  ...goTestSources(path.join(repoRoot, "tests")),
+];
+
+/** The body of one Go test function, or null when no test has that name. */
+function goTestBody(name: string): string | null {
+  for (const source of goTests) {
+    const start = source.indexOf(`func ${name}(`);
+    if (start < 0) continue;
+    const rest = source.slice(start + 1);
+    const end = rest.indexOf("\nfunc ");
+    return end < 0 ? rest : rest.slice(0, end);
+  }
+  return null;
+}
+
 const text = allText();
 
 describe("content integrity", () => {
@@ -27,27 +85,28 @@ describe("content integrity", () => {
     }
   });
 
-  it("documents the handoff that is executed, not the retired print-mode resume", () => {
-    // `claude.HandoffArgs` builds `claude --bg --resume <id> --name <label>
-    // <message>`. Print mode was retired with the supervisor handoff, so a
-    // `-p --resume` string anywhere in the copy is drift, not documentation.
-    // This assertion used to demand that stale string, which is how the
-    // landing page kept advertising a command the binary no longer runs.
-    expect(text).toContain("claude --bg --resume");
+  it("documents the resume that is executed, and no retired flag", () => {
+    // `claude.ResumeArgs` builds `claude --resume <id> <message>`. Print mode
+    // and the background handoff are both gone, so any of those strings left
+    // in the copy is drift rather than documentation.
+    expect(text).toContain("claude --resume <session-id>");
     expect(text).toContain("claude agents --json");
     expect(text).not.toContain("claude -p --resume");
     expect(text).not.toContain("--output-format");
+    expect(text).not.toContain("--bg");
+    expect(text).not.toContain("backgrounded");
     expect(text).not.toContain("claude --resume-fork");
   });
 
-  it("describes the handoff on the landing copy, not only in the docs", () => {
+  it("describes the resume on the landing copy, not only in the docs", () => {
     // The landing surfaces are the ones a reader sees before the docs, so they
-    // have to carry the same contract: the invocation, the acceptance block,
-    // and no claim that a longer transcript is the proof.
-    expect(landingText).toContain("claude --bg --resume");
-    expect(landingText).toContain("--name ccresu-<hex>");
-    expect(landingText).toContain("backgrounded");
-    expect(landingText).toContain("supervisor");
+    // have to carry the same contract: the invocation, the exit status as the
+    // verdict, and no claim that a longer transcript is the proof.
+    expect(landingText).toContain("claude --resume");
+    expect(landingText).toContain("exit status");
+    expect(landingText).not.toContain("--bg");
+    expect(landingText).not.toContain("backgrounded");
+    expect(landingText).not.toContain("supervisor");
     expect(landingText).not.toContain("transcript grew before");
     expect(landingText).not.toMatch(/longer transcript/);
     expect(landingText).not.toContain("-p --resume");
@@ -70,26 +129,37 @@ describe("content integrity", () => {
     );
     // The vector that is executed, in that order, message last.
     expect(code).toContain(
-      '"--name", HandoffLabel(sessionID),',
+      'claude --resume <session-id> "<continuation message>"',
     );
-    expect(code).toContain("return append(args, message)");
-    // The audit preview must put the message where the real one goes: last.
-    expect(code + JSON.stringify(doc?.blocks)).toContain(
-      "--name ccresu-<hex> <N-byte continuation message>",
+
+    // Every guard the page names has to be a test that exists, and has to do
+    // what the page says it does. Pinning one name would accept any string that
+    // was typed; resolving the citations cannot.
+    const cited = Array.from(
+      new Set(
+        JSON.stringify(doc?.blocks ?? []).match(/Test[A-Z][A-Za-z0-9]*/g) ?? [],
+      ),
     );
-    expect(code + JSON.stringify(doc?.blocks)).toContain("TestHandoffArgsExact");
+    expect(cited.length).toBeGreaterThan(0);
+    const bodies = cited.map((name) => {
+      const body = goTestBody(name);
+      expect(body, `${name} is cited but no Go test defines it`).not.toBeNull();
+      return body ?? "";
+    });
+    // One compares the argument vector, and one forbids print mode beside it.
+    expect(bodies.some((body) => body.includes('"--resume"'))).toBe(true);
+    expect(bodies.some((body) => body.includes('"--print"'))).toBe(true);
   });
 
-  it("narrates the handoff and the operator reset", () => {
+  it("narrates the outcome and what an operator can still do", () => {
     const body = JSON.stringify(getDoc("recovery")?.blocks ?? []);
 
-    expect(body).toContain("backgrounded · <short-id> · <name>");
-    expect(body).toContain("DISCOVERED");
-    expect(body).toContain("ccresu retry");
-    expect(body).toContain("keeps the attempt row");
-    // The end-to-end figure is published again, now that the harness drives the
-    // handoff: the page must show it rather than describe it as withheld.
-    expect(body).toContain('"kind":"capture","id":"e2e"');
+    // The verdict is the exit status, the bound is the turn timeout, and the
+    // next pass re-reads a session that is still stopped rather than holding a
+    // separate state for it.
+    expect(body).toContain("The exit status is the verdict");
+    expect(body).toContain("recovery.turn_timeout");
+    expect(body).toContain("still stopped when the next pass runs");
     expect(body).not.toContain("withheld");
   });
 

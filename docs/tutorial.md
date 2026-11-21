@@ -290,9 +290,14 @@ shows `unknown reset: yes`.
 
 ## Step 9 — Watch the resume happen
 
-When the reset time arrives, ccresu re-checks the session, checks that the limit
-has actually cleared, resumes **the same** session ID, and verifies the
-conversation grew afterwards. `ccresu history` is the audit trail:
+When the reset time arrives, ccresu resumes **the same** session ID in that
+session's own directory with one blocking command:
+`claude --resume <session-id> "<continuation message>"`. Its exit status is the
+verdict — 0 means the turn ran to the end and the session is `RESUMED`. Nothing
+checks the limit before the resume: a usage window can only be learned from
+`claude`, so the resume is the check, and a refusal parks the session on the
+reset the refusal names without spending an attempt. The transcript is measured
+afterwards as a diagnostic, not as a proof. `ccresu history` is the audit trail:
 
 ```console
 $ ccresu history 3f9d1c07-1111-4222-8333-444455556666
@@ -300,12 +305,12 @@ session:       3f9d1c07-1111-4222-8333-444455556666
 state:         RESUMED
 
 #  STATE    STARTED                  FINISHED                 RESULT     ERROR
-1  RESUMED  2026-11-05 03:29:03 +08  2026-11-05 03:29:03 +08  succeeded
+1  RESUMED  2026-11-05 03:29:03 +08  2026-11-05 03:31:40 +08  succeeded
 
 WHEN                     TRANSITION                                REASON
 2026-11-05 03:28:16 +08  DISCOVERED -> WAITING_FOR_RESET           waiting until 2026-11-04T19:29:00Z
 2026-11-05 03:29:03 +08  WAITING_FOR_RESET -> RESUMING             resuming the original session
-2026-11-05 03:29:03 +08  RESUMING -> RESUMED                       the supervisor accepted the continuation as 3f9d1c07 (ccresu-3f9d1c07)
+2026-11-05 03:31:40 +08  RESUMING -> RESUMED                       the resume finished its turn and the transcript grew
 ```
 
 `--limit N` caps the number of transitions shown (default 50; the newest are
@@ -397,17 +402,16 @@ finds the next reset time and schedules another attempt with a fresh budget, so
 recovery resumes on its own. `ccresu retry <id>` and
 `ccresu recover <id> --force` are there if you would rather it happened now.
 
-One failure is not the session's fault at all: a handoff refuses while
-the session is still attached to a Claude Code background agent
-(`That session is running in the background (837eaaea) …`). ccresu treats that as
-"busy", not "gone". In the same attempt it runs `claude stop <job-id>` — the
-eight-hex job name that refusal prints, not the session UUID; `claude stop`
-answers a UUID with `No job matching` and exit 1 — and then repeats the
-*identical* handoff once, so the session ends up `RESUMED` instead of failing
-without you doing anything. The conversation is untouched — same session id, same
-transcript — and the stop appears in the log, not in the attempt row. If the stop
-fails, or the second handoff refuses again, the original error is reported
-unchanged and the session returns to `DISCOVERED` like any other failed attempt.
+One failure is not the session's fault at all: the CLI refuses to run in a
+directory it does not trust (`workspace not trusted`). ccresu reports that
+refusal as its own outcome instead of retrying it, because trusting the directory
+is your decision. Two more are worth recognising: a turn that outlives
+`recovery.turn_timeout` is killed and recorded as a failed attempt, and a session
+whose recorded directory has been deleted cannot be resumed at all, because the
+resume is always issued in the session's own directory and never the daemon's.
+The conversation is untouched in every one of those cases — same session id, same
+transcript — and the session returns to `DISCOVERED` like any other failed
+attempt, with its exit code and stderr recorded.
 
 
 ## Step 12 — Turn on Telegram notifications (optional)

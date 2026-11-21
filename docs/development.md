@@ -25,6 +25,7 @@ go test ./...             # the whole suite, no network, no fixtures to install
 | `make cover` | Writes `coverage.out` and prints the total. |
 | `make cover-check` | The gate: fails below `COVERAGE_MIN` (80%). |
 | `make ci` | `fmt-check vet test race cover-check` in that order. |
+| `make e2e` | `tests/scripts/background-resume-e2e.sh`: drives `claude --resume <session-id> "<message>"` against a stub CLI and takes the verdict from the exit status — no network and no real Claude run. |
 | `make web-*` | `web-install`, `web-lint`, `web-typecheck`, `web-test`, `web-build`. |
 | `make lint` | `golangci-lint run` (v2 config in `.golangci.yml`). |
 | `make clean` | Removes the binary, `bin/`, `dist/` and coverage artifacts. |
@@ -42,7 +43,8 @@ internal/storage/      SQLite store, embedded migrations, repositories
 internal/claude/       the only package that talks to Claude Code
 internal/detector/     normalisation and usage-limit patterns
 internal/scheduler/    reset-time parsing, schedules, unknown-reset backoff
-internal/recovery/     the state machine, locking, backoff, verifier
+internal/recovery/     the state machine, locking, backoff, and how a resume is judged:
+                       the exit status as the verdict, the transcript as a measurement
 internal/telegram/     Bot API client, templates, persistent queue
 internal/server/       REST + SSE API, auth, limits
 tests/support/         shared fixtures: fake clock, real SQLite, fake provider
@@ -87,15 +89,16 @@ the `-race` run meaningful.
 - **`tests/e2e`** replays the canonical interruption end to end: the
   `You've hit your 5-hour limit · resets 12pm (Europe/Berlin)` banner plus the
   paused-goal companion message, through detection, scheduling, the real state
-  machine, a fake `claude`, verification and the notification queue, asserting
-  the session id is preserved, no new conversation is started, the state reaches
-  `RESUMED`, and the Telegram message says so.
+  machine, a fake `claude`, the verdict taken from the exit status and the
+  notification queue, asserting the session id is preserved, no new conversation
+  is started, the state reaches `RESUMED`, and the Telegram message says so.
 - **Failures are part of the suite**: `ErrLimitNotCleared` (the limit is still in
   force), `ErrSessionNotPreserved`, an exhausted attempt budget, a restart in the
   middle of a wait.
 
 ```bash
-go test ./internal/recovery/ -run TestVerifier -v
+# The post-resume diagnostic: growth recorded, the exit status deciding, one read.
+go test ./internal/recovery/ -run TestMeasure -v
 go test ./tests/e2e/ -v
 go test -race -count=1 ./...
 ```

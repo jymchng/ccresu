@@ -38,14 +38,12 @@ func Defaults() Config {
 			PollInterval:                NewDuration(30e9),
 			UnknownResetInitialInterval: NewDuration(5 * 60e9),
 			UnknownResetMaxInterval:     NewDuration(30 * 60e9),
-			RecheckBeforeResume:         true,
 		},
-		// Recovery's StartupTimeout default is deliberately the timeout the
-		// handoff invocation used before the key had a reader:
-		// claude.DefaultHandoffTimeout, two minutes. Wiring the key must not
-		// shorten the wait for a configuration that never set it, and
-		// TestStartupTimeoutDefaultMatchesTheHandoffDefault pins the pair so the
-		// two cannot drift into a silent behaviour change.
+		// Recovery's TurnTimeout default is the timeout the resume invocation
+		// uses: claude.DefaultTurnTimeout, half an hour. The resume runs the whole
+		// turn, so the bound has to cover the work; pinning the default to the
+		// package constant keeps a configuration that never set the key from
+		// silently shortening it.
 		Recovery: Recovery{
 			Enabled:                 true,
 			MaxAttempts:             10,
@@ -53,9 +51,7 @@ func Defaults() Config {
 			MaxDelay:                NewDuration(15 * 60e9),
 			Multiplier:              2.0,
 			Jitter:                  0.15,
-			StartupTimeout:          NewDuration(120e9),
-			VerificationTimeout:     NewDuration(120e9),
-			HealthCheckInterval:     NewDuration(10e9),
+			TurnTimeout:             NewDuration(30 * 60e9),
 			MaxConcurrentRecoveries: 3,
 			// Every guardrail is off: no cap, no flag. An upgrade must not
 			// change what a resume does or what it may cost (PRD 5 R1, R12).

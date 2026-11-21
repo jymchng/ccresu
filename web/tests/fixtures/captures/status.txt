@@ -9,5 +9,5 @@ telegram:      no
 recovery:      yes (max attempts 10)
 now:           (captured-at)
 
-STATE               SESSIONS
-RESET_TIME_REACHED  1
+STATE              SESSIONS
+WAITING_FOR_RESET  1

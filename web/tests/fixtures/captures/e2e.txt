@@ -7,66 +7,67 @@ session:       aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa
 state:         RESUMED
 resumed:       yes
 attempt:       1
-verification:  proven: the continuation was handed to the background supervisor
+verification:  proven: the resume finished its turn and the transcript grew
 when:          (captured-at)
 --- recover bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb
-ccresu: recover bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb: recovery: session bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb ended its cycle in DISCOVERED: resume session bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb: claude --bg --resume failed (exit 1): Invalid API key · Please run /login: claude: exit status 1
+ccresu: recover bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb: recovery: session bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb ended its cycle in DISCOVERED: resume session bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb: claude --resume failed (exit 1): Invalid API key · Please run /login: claude: exit status 1
 --- recover cccccccc-3333-4333-8333-cccccccccccc
-ccresu: recover cccccccc-3333-4333-8333-cccccccccccc: recovery: session cccccccc-3333-4333-8333-cccccccccccc ended its cycle in DISCOVERED: resume session cccccccc-3333-4333-8333-cccccccccccc: claude: the handoff printed no backgrounded block: Starting background service…
-ok    the handoff vector is --bg --resume <id> --name <label> <message>
-ok    no call carried a print-mode flag
+session:       cccccccc-3333-4333-8333-cccccccccccc
+state:         RESUMED
+resumed:       yes
+attempt:       1
+verification:  proven: the resume finished its turn
+when:          (captured-at)
+ok    the resume vector is --resume <id> "<message>" and nothing else
+ok    every resume was exactly three arguments
+ok    no call carried a retired flag
 ok    no stop was issued
+ok    no supervisor was asked for
 ok    recover A exits 0
 ok    session A ends RESUMED
-ok    recover A is proven by the supervisor's acceptance
-ok    the handoff ran exactly once for A
+ok    recover A is proven by the exit status
+ok    the resume ran exactly once for A
 ok    recover B is refused (exit 1)
+ok    the refused resume was attempted exactly once for B
 ok    session B is rediscovered
-ok    recover C is refused (exit 1)
-ok    session C is rediscovered
-ok    the silent handoff ran exactly once for C
-ok    history records the handoff as the success
-ok    history does not credit transcript growth for the handoff
-ok    the audit row keeps the handoff command
-ok    the audit row keeps the supervisor's state id
-ok    the audit row keeps the handoff label
-ok    the audit row keeps the session id
-ok    the audit row does not claim growth proved the handoff
-ok    the reason names the acceptance, not the growth
-ok    C records the missing block verbatim
+ok    the refusal records the exit status
+ok    the refusal keeps the stub's stderr
+ok    recover C exits 0
+ok    session C ends RESUMED without the transcript growing
+ok    C's verdict is the exit status
+ok    C's verification does not claim growth
+ok    the resume ran exactly once for C
+ok    history records the resume as the success
+ok    the audit row keeps the resume command
+ok    the audit row records the growth the measurement found
+ok    the audit row carries no handoff state id
+ok    the audit row carries no handoff label
+ok    the audit row carries no supervisor acceptance
+ok    C's audit row says the transcript did not grow
 
 == the stub claude call log
 CALL --version
 CALL agents --json --all
 CALL --version
 CALL agents --json --all
-CALL daemon status
 CALL --version
 CALL agents --json --all
 CALL agents --json --all
+CALL --resume aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa continue the existing goal
 CALL agents --json --all
-CALL --bg --resume aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa --name ccresu-aaaaaaaa continue the existing goal
-CALL agents --json --all
-CALL daemon status
 CALL --version
 CALL agents --json --all
 CALL agents --json --all
+CALL --resume bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb continue the existing goal
 CALL agents --json --all
-CALL --bg --resume bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb --name ccresu-bbbbbbbb continue the existing goal
-CALL agents --json --all
-CALL daemon status
 CALL --version
 CALL agents --json --all
 CALL agents --json --all
+CALL --resume cccccccc-3333-4333-8333-cccccccccccc continue the existing goal
 CALL agents --json --all
-CALL --bg --resume cccccccc-3333-4333-8333-cccccccccccc --name ccresu-cccccccc continue the existing goal
-CALL agents --json --all
-CALL daemon status
-CALL daemon status
-CALL daemon status
 
 == pass 2: the retired commands are gone
 ok    ccresu reset is an unknown command
 ok    ccresu sessions clear is an unknown subcommand
 
-PASSED: the session was handed to the supervisor once, and the block it printed is the proof
+PASSED: one resume per session, and its exit status is the verdict

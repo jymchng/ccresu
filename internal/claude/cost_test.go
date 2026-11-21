@@ -17,9 +17,9 @@ func TestParseReportedCostReadsOnlyAUsableFigure(t *testing.T) {
 		want   *float64
 	}{
 		{"result object", `{"type":"result","total_cost_usd":0.42}`, floatPtr(0.42)},
-		{"block then result", testHandoffBlock + "\n" + `{"type":"result","total_cost_usd":0.42}`, floatPtr(0.42)},
+		{"block then result", testResumeOutput + "\n" + `{"type":"result","total_cost_usd":0.42}`, floatPtr(0.42)},
 		{"integer figure", `{"total_cost_usd":2}`, floatPtr(2)},
-		{"absent", testHandoffBlock, nil},
+		{"absent", testResumeOutput, nil},
 		{"empty", "", nil},
 		{"null", `{"total_cost_usd":null}`, nil},
 		{"negative", `{"total_cost_usd":-1}`, nil},
@@ -40,14 +40,14 @@ func TestParseReportedCostReadsOnlyAUsableFigure(t *testing.T) {
 }
 
 // TestResumeRecordsTheCostTheCLIReported is R4 end to end: the figure the CLI
-// printed on the handoff's stdout reaches ResumeResult, which is what the
+// printed on the resume's stdout reaches ResumeResult, which is what the
 // recovery engine persists.
 func TestResumeRecordsTheCostTheCLIReported(t *testing.T) {
 	t.Parallel()
 
 	cli, _ := newTestCLI(t,
 		Output{Stdout: []byte(testVersionOutput)},
-		Output{Stdout: []byte(testHandoffBlock + "\n" + `{"type":"result","total_cost_usd":0.42}`)},
+		Output{Stdout: []byte(testResumeOutput + "\n" + `{"type":"result","total_cost_usd":0.42}`)},
 	)
 	result, err := cli.Resume(context.Background(), testSessionID, "keep going", testSessionDir)
 	if err != nil {
@@ -61,14 +61,14 @@ func TestResumeRecordsTheCostTheCLIReported(t *testing.T) {
 	}
 }
 
-// TestResumeLeavesAnUnreportedCostUnknown is the other half of R10: a handoff
+// TestResumeLeavesAnUnreportedCostUnknown is the other half of R10: a resume
 // that reports no price does not look free.
 func TestResumeLeavesAnUnreportedCostUnknown(t *testing.T) {
 	t.Parallel()
 
 	cli, _ := newTestCLI(t,
 		Output{Stdout: []byte(testVersionOutput)},
-		Output{Stdout: []byte(testHandoffBlock)},
+		Output{Stdout: []byte(testResumeOutput)},
 	)
 	result, err := cli.Resume(context.Background(), testSessionID, "keep going", testSessionDir)
 	if err != nil {

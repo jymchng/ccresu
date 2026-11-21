@@ -91,17 +91,23 @@ describe("captured command output", () => {
     expect(help).toContain("Exit codes:");
     expect(status).toContain("sessions:");
     expect(status).toContain("recovery:");
-    expect(history).toContain("USAGE_LIMIT_DETECTED -> WAITING_FOR_RESET");
-    // The proof is one handoff: the block the supervisor answered with, and the
-    // call log that shows no print-mode flag, no stop and no second resume.
-    expect(e2e).toContain("CALL --bg --resume");
-    expect(e2e).toContain("backgrounded");
-    expect(e2e).toContain("the handoff ran exactly once for A");
+    // The recorded lap: discovery lands directly on the wait now that the
+    // separate detection state is gone.
+    expect(history).toContain("DISCOVERED -> WAITING_FOR_RESET");
+    // The proof is one blocking resume per session: the exit status is the
+    // verdict, and the call log shows no print-mode flag, no background flag,
+    // no session label, no stop and no second resume.
+    expect(e2e).toContain("CALL --resume");
+    expect(e2e).toContain("recover A is proven by the exit status");
+    expect(e2e).toContain("the resume ran exactly once for A");
+    expect(e2e).toContain("session C ends RESUMED without the transcript growing");
     expect(e2e).toContain("no stop was issued");
     expect(e2e).toContain("PASSED");
     expect(e2e).not.toContain("CALL -p");
     expect(e2e).not.toContain("--output-format");
     expect(e2e).not.toContain("CALL stop");
+    expect(e2e).not.toContain("--bg");
+    expect(e2e).not.toContain("backgrounded");
 
     for (const capture of captureList) {
       expect(capture.output.length).toBeGreaterThan(40);

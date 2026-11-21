@@ -59,14 +59,17 @@ const testAgentsJSON = `[
   }
 ]`
 
-// testSessionDir is the directory a handoff is given. It is never the test
+// testSessionDir is the directory a resume is given. It is never the test
 // process's own directory, because a recovery that ran in the daemon's cwd would
 // continue the wrong tree.
 const testSessionDir = "/root/project"
 
-// testHandoffBlock is the verified `backgrounded` block shape: a short ID and
-// the label the handoff asked for, separated by middle dots.
-const testHandoffBlock = "backgrounded \u00b7 3f1e2c7a \u00b7 ccresu-3f1e2c7a\n"
+// testResumeOutput is ordinary resume stdout.
+//
+// Nothing is parsed out of it: `claude --resume` reports the continuation by
+// exiting zero, so the fixture only has to be output that is not a refusal and
+// not a cost block.
+const testResumeOutput = "Continuing the conversation.\n"
 
 // newTestCLI builds a CLI backed by a scripted execer.
 func newTestCLI(t *testing.T, outputs ...Output) (*CLI, *FakeExecer) {
@@ -433,8 +436,10 @@ func TestFakeProviderBehaviour(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResumeSession() error = %v", err)
 	}
-	if !result.Backgrounded || result.StateID == "" || result.SessionID != testSessionID {
-		t.Errorf("fake handoff not acknowledged: %+v", result)
+	// The fake runs the turn to completion, so the verdict is the exit status
+	// rather than a supervisor's acknowledgement.
+	if result.ExitCode != 0 || result.RequestedSessionID != testSessionID {
+		t.Errorf("fake resume not recorded as a completed turn: %+v", result)
 	}
 
 	if got := len(fake.Calls()); got != 5 {

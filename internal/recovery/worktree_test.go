@@ -82,7 +82,7 @@ type resumerStub struct {
 }
 
 // newResumerStub returns a resumer whose status checks report a grown transcript
-// and whose handoff is acknowledged.
+// and whose resume runs its turn to the end.
 func newResumerStub() *resumerStub {
 	return &resumerStub{providerStub: growthProvider(10, 12)}
 }
@@ -96,10 +96,10 @@ func (r *resumerStub) ResumeSessionIn(_ context.Context, sessionID, _, dir strin
 	if err != nil {
 		return claude.ResumeResult{}, err
 	}
-	return handoffResult(sessionID), nil
+	return resumeResult(sessionID), nil
 }
 
-// resumeDirs returns the directories the handoffs were told to run in.
+// resumeDirs returns the directories the resumes were told to run in.
 func (r *resumerStub) resumeDirs() []string {
 	r.dirMu.Lock()
 	defer r.dirMu.Unlock()
@@ -144,10 +144,10 @@ func TestRecoveryRunsInTheRecordedWorktree(t *testing.T) {
 	}
 	dirs := provider.resumeDirs()
 	if len(dirs) != 1 {
-		t.Fatalf("handoffs = %d, want exactly 1", len(dirs))
+		t.Fatalf("resumes = %d, want exactly 1", len(dirs))
 	}
 	if dirs[0] != worktree {
-		t.Errorf("handoff ran in %q, want the recorded worktree %q (project is %q)", dirs[0], worktree, repo)
+		t.Errorf("resume ran in %q, want the recorded worktree %q (project is %q)", dirs[0], worktree, repo)
 	}
 }
 
@@ -165,15 +165,15 @@ func TestRecoveryFallsBackToProjectPath(t *testing.T) {
 	}
 	dirs := provider.resumeDirs()
 	if len(dirs) != 1 {
-		t.Fatalf("handoffs = %d, want exactly 1", len(dirs))
+		t.Fatalf("resumes = %d, want exactly 1", len(dirs))
 	}
 	if dirs[0] != repo {
-		t.Errorf("handoff ran in %q, want the project directory %q", dirs[0], repo)
+		t.Errorf("resume ran in %q, want the project directory %q", dirs[0], repo)
 	}
 	// The failure this guards against: an empty Dir, which inherits the process
 	// working directory.
 	if cwd, err := os.Getwd(); err == nil && dirs[0] == cwd {
-		t.Errorf("handoff ran in the process cwd %q, want the project directory", cwd)
+		t.Errorf("resume ran in the process cwd %q, want the project directory", cwd)
 	}
 }
 
@@ -193,7 +193,7 @@ func TestEmptyWorkingDirectoryIsANamedError(t *testing.T) {
 		t.Error("error wraps ErrUnrecoverable, want a failed attempt: a directory can come back")
 	}
 	if dirs := provider.resumeDirs(); len(dirs) != 0 {
-		t.Errorf("handoffs = %d, want 0: nothing may run without a directory", len(dirs))
+		t.Errorf("resumes = %d, want 0: nothing may run without a directory", len(dirs))
 	}
 	if outcome.State == StateResumed {
 		t.Error("state = RESUMED, want the attempt recorded as failed")
@@ -231,7 +231,7 @@ func TestMissingRunDirectoryFallsBackAndProceeds(t *testing.T) {
 	}
 	dirs := provider.resumeDirs()
 	if len(dirs) != 1 || dirs[0] != repo {
-		t.Fatalf("handoffs = %v, want exactly one in the project directory %q", dirs, repo)
+		t.Fatalf("resumes = %v, want exactly one in the project directory %q", dirs, repo)
 	}
 	if !strings.Contains(logs.String(), "recorded run directory is gone") {
 		t.Errorf("logs = %q, want the fallback announced", logs.String())
@@ -254,7 +254,7 @@ func TestObservationBeatsThePersistedRow(t *testing.T) {
 	seedSession(t, store, worktreeSession(sessionA, repo, persisted))
 
 	provider := newResumerStub()
-	// Report growth (so the pass reaches the handoff) *and* a run directory that
+	// Report growth (so the pass reaches the resume) *and* a run directory that
 	// disagrees with the stored one.
 	calls := 0
 	provider.statusFn = func(_ int, sessionID string) (claude.SessionStatus, error) {
@@ -274,10 +274,10 @@ func TestObservationBeatsThePersistedRow(t *testing.T) {
 	}
 	dirs := provider.resumeDirs()
 	if len(dirs) != 1 {
-		t.Fatalf("handoffs = %d, want exactly 1", len(dirs))
+		t.Fatalf("resumes = %d, want exactly 1", len(dirs))
 	}
 	if dirs[0] != observed {
-		t.Errorf("handoff ran in %q, want the newer observation %q (persisted row was %q)", dirs[0], observed, persisted)
+		t.Errorf("resume ran in %q, want the newer observation %q (persisted row was %q)", dirs[0], observed, persisted)
 	}
 }
 
@@ -302,7 +302,7 @@ func TestRecoveryIsWorktreeNeutral(t *testing.T) {
 		}
 		dirs := provider.resumeDirs()
 		if len(dirs) != 1 || dirs[0] != worktree {
-			t.Fatalf("attempt %d: handoffs = %v, want one in %q", attempt, dirs, worktree)
+			t.Fatalf("attempt %d: resumes = %v, want one in %q", attempt, dirs, worktree)
 		}
 	}
 

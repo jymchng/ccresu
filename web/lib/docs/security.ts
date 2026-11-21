@@ -14,12 +14,12 @@ export const securityDoc: DocPage = {
     },
     {
       kind: "h2",
-      text: "How the handoff is executed",
+      text: "How the resume is executed",
     },
     {
       kind: "ul",
       items: [
-        "Exactly one command is ever built: `claude --bg --resume <session-id> --name ccresu-<first 8 hex> \"<message>\"`, with the session id and message passed as separate arguments, never through a shell.",
+        "Exactly one command is ever built: `claude --resume <session-id> \"<message>\"`, with the session id and message passed as separate arguments, never through a shell.",
         "No pty is allocated and no keystrokes are injected, so ccresu cannot type into a terminal you are using.",
         "A session id is validated before use, so a crafted id cannot become a flag or a path traversal.",
         "The API has no endpoint that executes a command: recovery goes through the recovery manager, and settings are validated configuration fields.",

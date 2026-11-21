@@ -8,7 +8,7 @@ export const limitationsDoc: DocPage = {
   blocks: [
     {
       kind: "p",
-      text: "This project is honest about its boundaries: it hands a limited session back to Claude Code's background supervisor, and it reports what it cannot do rather than guessing.",
+      text: "This project is honest about its boundaries: it continues a limited session with one blocking `claude` command, and it reports what it cannot do rather than guessing.",
     },
     {
       kind: "h2",
@@ -18,23 +18,23 @@ export const limitationsDoc: DocPage = {
       kind: "ul",
       items: [
         "It does not lift, reset or bypass usage limits. It waits for the reset time the message reports, and nothing more.",
-        "It cannot hand off a session type the CLI cannot resume. Such a session is marked UNRECOVERABLE and left alone.",
-        "A recovery is a handoff, not a run: `claude --bg --resume` gives the continuation to Claude Code's background supervisor, and `--bg` cannot be combined with `-p`/`--print`, so there is no print-mode fallback to switch to. If you want to keep typing in that conversation, run `claude attach <short-id>` yourself.",
+        "It cannot resume a session type the CLI cannot continue. Such a session is marked UNRECOVERABLE and left alone.",
+        "A recovery is a blocking run: `claude --resume <session-id> \"<message>\"` runs the whole turn in the foreground of the pass, and ccresu records the attempt only when that process exits. Nothing runs in the background, so there is no second process to attach to or stop afterwards.",
         "It is a local tool: one machine, one user, one home directory. Session discovery reads that machine's Claude Code state.",
         "It ships no web dashboard. The interfaces are the CLI and the REST/SSE API, and this site is documentation only.",
       ],
     },
     {
       kind: "h2",
-      text: "The handoff itself",
+      text: "The resume itself",
     },
     {
       kind: "ul",
       items: [
-        "The CLI refuses to background a session in a directory it does not trust. ccresu reports that refusal as its own outcome instead of retrying it, because trusting the directory is your decision.",
-        "The handoff needs the session's own working directory. ccresu never inherits the daemon's, so a session whose recorded directory has been deleted cannot be handed off.",
-        "One handoff invocation is bounded by `recovery.startup_timeout`, two minutes by default. That bound covers acceptance only: the work runs under the supervisor afterwards and is no longer ccresu's process, which is exactly why the two phases no longer share a timeout.",
-        "If the CLI prints no `backgrounded` block, the handoff is an error rather than an unproven success: without the block ccresu cannot name the state it created, so it records nothing as recovered.",
+        "The CLI refuses to resume in a directory it does not trust. ccresu reports that refusal as its own outcome instead of retrying it, because trusting the directory is your decision.",
+        "The resume needs the session's own working directory. ccresu never inherits the daemon's, so a session whose recorded directory has been deleted cannot be resumed.",
+        "One resume is bounded by `recovery.turn_timeout`, thirty minutes by default. The bound covers the whole turn, because the turn is what ccresu runs; a resume that overruns it is killed and recorded as a failed attempt.",
+        "A resume that exits non-zero is a failed attempt, not an unproven success: the exit code and stderr are recorded and the session is scheduled again with backoff and jitter.",
       ],
     },
     {
@@ -56,11 +56,11 @@ export const limitationsDoc: DocPage = {
     {
       kind: "ul",
       items: [
-        "A handoff is proven by acceptance, not by completion. The supervisor's block says the continuation is under way in a known conversation; it cannot say the model finished the original goal, and ccresu does not pretend otherwise.",
-        "Transcript growth is recorded as a diagnostic only. Once print mode is gone, growth alone is not proof that the conversation continued.",
-        "The supervisor's published state is what a non-handoff verification rests on. `blocked` means the agent is waiting for a human, so it is never recorded as RESUMED; an unknown published state is reported rather than read as success.",
-        "A continuation may be a copy rather than the same conversation. That is an expected outcome and the recovery is reported against it, but the copy is a new session id: the original conversation did not advance, and if the CLI names no copy id, the new conversation cannot be addressed yet.",
-        "If the acceptance block carries no short state id, `claude attach`, `claude logs` and `claude stop` cannot be pointed at the session. ccresu says so instead of leaving you to hunt for arguments that do not exist.",
+        "The exit status is the verdict, and it is not the completion of the work. Status 0 says the conversation continued in the same session; it cannot say the model finished the original goal, and ccresu does not pretend otherwise.",
+        "Transcript growth is recorded as a diagnostic only: it is measured after a successful exit and never used to decide success, so a resume that grew nothing is still reported as recovered.",
+        "A session that exits 0 and is still stopped when the next pass runs is simply eligible again: there is no separate state to reconcile between the resume and the next detection.",
+        "A resume killed at the turn timeout may leave the turn half done. The transcript keeps what was written, the attempt is recorded as a failure, and the next pass resumes the same session again.",
+        "Nothing is left running after a recovery. There is no background process to attach to, to read logs from, or to stop: the turn ended when the command exited.",
       ],
     },
     {

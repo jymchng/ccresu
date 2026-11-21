@@ -100,11 +100,13 @@ func (v Version) AtLeast(other Version) bool { return v.Compare(other) >= 0 }
 
 // MinimumVersion is the oldest Claude Code release ccresu is verified against.
 //
-// The floor moved to the release that makes `--resume <id> --bg` continue the
-// session in place, or start a copy and say so on a `note:` line. Recovery has
-// no print-mode path any more, so a CLI below this release cannot perform a
-// recovery at all, and saying so once is better than probing flags that are not
-// there.
+// The floor is the release the verified interfaces were last exercised against:
+// `claude agents --json` for discovery, and `claude --resume <id> "<message>"`
+// for continuing a session, which runs the whole turn in place and reports the
+// outcome as its exit status. There is no narrower fallback underneath it -- no
+// print mode and no background dispatch -- so a CLI below this release cannot
+// perform a recovery at all, and saying so once is better than probing flags
+// that are not there.
 var MinimumVersion = Version{Major: 2, Minor: 1, Patch: 257, Parsed: true}
 
 // Supported reports whether the interpreter is new enough for the verified

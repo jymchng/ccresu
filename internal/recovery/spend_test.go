@@ -17,7 +17,7 @@ import (
 func seedSpentAttempt(t *testing.T, store *storage.Store, sessionID string, cost float64) storage.RecoveryAttempt {
 	t.Helper()
 	ctx := context.Background()
-	attempt, err := store.StartAttempt(ctx, sessionID, 0, "claude --bg --resume <id>")
+	attempt, err := store.StartAttempt(ctx, sessionID, 0, "claude --resume <id>")
 	if err != nil {
 		t.Fatalf("start attempt: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestAttemptCapStopsRecoveryAfterTheAttempt(t *testing.T) {
 	seedSession(t, store, recoverableSession(sessionA))
 	provider := growthProvider(10, 12)
 	provider.resumeFn = func(sessionID, _ string) (claude.ResumeResult, error) {
-		result := handoffResult(sessionID)
+		result := resumeResult(sessionID)
 		cost := 0.42
 		result.TotalCostUSD = &cost
 		return result, nil

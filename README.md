@@ -305,8 +305,7 @@ is the thing to fix; `--json` gives the same rows as objects for monitoring.
 ### Step 4 — Run the watchdog
 
 `ccresu daemon` is the program that does the work: discover, detect, schedule,
-resume, verify, repeat. Run it in the foreground the first time so you can watch
-the log.
+resume, repeat. Run it in the foreground the first time so you can watch the log.
 
 ```bash
 ccresu daemon                 # until you press Ctrl-C (exit code 130)
@@ -421,7 +420,7 @@ state:         WAITING_FOR_RESET
 enabled:       yes
 recoverable:   yes
 project:       -
-runs in:       unknown (no observation has recorded one; the project directory is used)
+runs in:       unknown (not recorded yet; the project directory is used)
 transcript:    /home/you/.claude/projects/-home-you-projects-demo/3f9d1c07-1111-4222-8333-444455556666.jsonl
 type:          unknown
 last seen:     2026-11-05 03:28:16 +08
@@ -503,9 +502,15 @@ shows `unknown reset: yes`.
 
 ### Step 9 — Watch the resume happen
 
-When the reset time arrives, ccresu re-checks the session, checks the limit has
-actually cleared, resumes **the same** session ID, and verifies the conversation
-grew afterwards. `ccresu history` is the audit trail:
+When the instant the banner named arrives, ccresu resumes **the same** session ID
+in that session's own directory with one blocking command:
+`claude --resume <session-id> "<continuation message>"`. Its exit status is the
+verdict — 0 means the turn ran to the end and the session is `RESUMED` — and the
+transcript is measured afterwards as a diagnostic, never as the verdict. Nothing
+checks the limit before the resume: a usage window can only be learned from
+`claude`, so the resume *is* the check, and a refusal parks the session on the
+reset the refusal names without spending an attempt. `ccresu history` is the
+audit trail:
 
 ```console
 $ ccresu history 3f9d1c07-1111-4222-8333-444455556666
@@ -518,7 +523,7 @@ state:         RESUMED
 WHEN                     TRANSITION                                REASON
 2026-11-05 03:28:16 +08  DISCOVERED -> WAITING_FOR_RESET           waiting until 2026-11-04T19:29:00Z
 2026-11-05 03:29:03 +08  WAITING_FOR_RESET -> RESUMING             resuming the original session
-2026-11-05 03:29:03 +08  RESUMING -> RESUMED                       the supervisor accepted the continuation as 3f9d1c07 (ccresu-3f9d1c07)
+2026-11-05 03:29:03 +08  RESUMING -> RESUMED                       the resume finished its turn and the transcript grew
 ```
 
 `--limit N` caps the number of transitions shown (default 50; the newest are
@@ -614,17 +619,15 @@ finds the next reset time and schedules another attempt with a fresh budget, so
 recovery resumes on its own. `ccresu retry <id>` and
 `ccresu recover <id> --force` are there if you would rather it happened now.
 
-One failure is not the session's fault at all: a handoff refuses while the
-session is still attached to a Claude Code background agent
+One failure is not the session's fault at all: the resume fails while the session
+is still attached to a Claude Code background agent
 (`That session is running in the background (837eaaea) …`). ccresu treats that as
-"busy", not "gone". In the same attempt it runs `claude stop <job-id>` — the
-eight-hex job name that refusal prints, not the session UUID; `claude stop`
-answers a UUID with `No job matching` and exit 1 — and then repeats the
-*identical* handoff once, so the session ends up `RESUMED` instead of failing
-without you doing anything. The conversation is untouched — same session id, same
-transcript — and the stop appears in the log, not in the attempt row. If the stop
-fails, or the second handoff refuses again, the original error is reported
-unchanged and the session returns to `DISCOVERED` like any other failed attempt.
+"busy", not "gone" — and does nothing about it. The refusal is neither a limit nor
+an authentication failure, so it is classified as an ordinary retryable failure:
+the CLI's words become the attempt's error, the next attempt is scheduled under
+the usual backoff, and the session returns to `DISCOVERED` when the budget runs
+out. Releasing the agent is your call; ccresu issues no lifecycle command to do it
+for you.
 
 ### Step 12 — Turn on Telegram notifications (optional)
 
@@ -728,10 +731,11 @@ The full route table, error codes, rate limiting and CORS rules are in
 
 ### Step 14 — Bound what recovery may cost
 
-A resume is a `claude --bg` handoff, and the flags that bound what a run costs —
-`--max-budget-usd` and `--max-turns` — are documented as print mode only, so they
-cannot ride it. What ccresu can bound is the series of attempts. Two optional caps
-under `recovery.guardrails` do that, and both default to off so an upgrade changes
+A resume is one blocking `claude --resume <session-id> "<message>"` run, and it
+carries no flags at all: there is no `--max-budget-usd` and no `--max-turns` on
+the vector, so nothing ccresu can send bounds what a single turn spends. What
+ccresu can bound is the series of attempts. Two optional caps under
+`recovery.guardrails` do that, and both default to off so an upgrade changes
 nothing:
 
 ```yaml
@@ -763,15 +767,15 @@ recorded and the override is logged.
 A cost the CLI did not report is recorded as *unknown*, not as zero — it neither
 counts toward a cap nor blocks a resume. The figure is the CLI's own client-side
 estimate, so it can differ from the bill and spend can pass the cap; leave
-headroom. The honest limitation is stated rather than papered over: a single
-background turn that spends heavily cannot be stopped by ccresu, because the flag
-that would bound it cannot ride the handoff.
+headroom. The honest limitation is stated rather than papered over: a single turn
+that spends heavily cannot be stopped by ccresu, because no flag it could send
+bounds one turn.
 
-The same section carries the four flags a handoff *does* accept — `model`,
-`effort`, `fallback_model` and `permission_mode` — which are appended only when
-configured. `permission_mode: dontAsk` is the recommended unattended value: it
-denies anything that would prompt instead of queueing behind a human who is not
-there. See [docs/configuration.md](docs/configuration.md#recoveryguardrails).
+`claude.default_model` and `claude.default_effort` are still accepted and
+validated, but they no longer change anything: a resume carries the session id and
+the continuation message, and nothing else, so a continuation inherits the
+session's own model and effort. See
+[docs/configuration.md](docs/configuration.md#claude).
 
 ### Where to go next
 
@@ -907,40 +911,41 @@ ccresu only uses interfaces that exist in the installed CLI (inspected with
 | Purpose | Interface |
 |---|---|
 | Discover sessions | `claude agents --json` (`--all`, `--cwd <path>`) |
-| Read what the supervisor published | `claude agents --json --all` (one read per recovery pass, keyed by `sessionId`) |
 | Session transcripts | `~/.claude/projects/<slugified-cwd>/<session-id>.jsonl` |
 | Per-session environment | `~/.claude/session-env/<session-id>/` |
-| Continue the original session | `claude --bg --resume <session-id> --name ccresu-<first-8-hex> "<continuation message>"` |
-| Release a session a background agent still holds | `claude stop <job-id>` (the eight-hex job name the refusal prints) |
-| Read the supervisor's health and version | `claude daemon status` (once per recovery pass; exit 1 is the documented "no supervisor") |
-| Read a session's or the supervisor's recent output | `claude logs <state-id>`, `claude daemon logs` (on demand, for `ccresu inspect`) |
+| Continue the original session | `claude --resume <session-id> "<continuation message>"` (runs the whole turn; the exit status is the verdict) |
 
-`--bg --resume` is the command ccresu lives on. It is a **handoff**, not a run:
-the invocation returns as soon as the supervisor accepts the session, and the
-supervisor — not `ccresu` — owns the process afterwards, which is why a resume
-survives `ccresu` exiting and appears in agent view. Acceptance is proven by the
-`backgrounded · <short-id> · <name>` block the CLI prints; the session id is the
-same conversation UUID as before, and the label is derived from it, so two
-handoffs of one session cannot produce two names. There is no print mode
-(`-p --resume`, `--output-format json`) and no transcript-growth proof: `--bg`
-cannot be combined with `-p`, and the published state is what the decision reads.
-`claude stop` is the one exception to "no lifecycle commands", and it exists for
-one situation: a handoff refuses while the session is still attached to a
-background agent, so ccresu stops that agent and repeats the identical handoff.
-The job name is taken from the refusal itself ("or `claude stop 837eaaea`
-first"); the session UUID is never passed, because `claude stop` resolves only
-eight-hex job names and answers anything else with `No job matching` and exit 1.
-The conversation is untouched — same session id, same transcript. There is no
-`--fork-session` (it would continue a copy instead of your conversation), no new
-session id, no TTY and no keystroke injection, and if the stop fails the original
-refusal is reported unchanged. See
-[docs/recovery.md](docs/recovery.md) for the exact mechanism and its limitations.
+`claude --resume` is the only command ccresu issues that changes anything, and it
+is a **run**, not a dispatch: the invocation stays alive for the whole turn and
+returns when the continuation has finished. That is why the exit status is the
+verdict — zero means the continuation ran, non-zero means it did not — and why
+there is no acknowledgement or JSON block to parse. The vector carries the session
+id and the message and nothing else: no background flag, no session label, no
+model, effort, budget or permission flag. Nor is it a print-mode invocation, so
+nothing is asked of the CLI that would have to be parsed rather than run.
 
-The handoff also runs **where the session runs**, not where `ccresu` runs. A
+Because the turn runs inside the invocation, ccresu has no lifecycle commands at
+all: it never stops, attaches to or reads the log of a background agent. A session
+still held by one simply fails its attempt with the CLI's refusal recorded
+verbatim, and keeps failing under the backoff until the operator releases it.
+`recovery.turn_timeout` (default `30m`, matching `claude.DefaultTurnTimeout`) is
+the one bound: a turn that outlives it is killed and recorded as a failed attempt,
+not as a crash. The conversation is untouched throughout — same session id, same
+transcript, no `--fork-session` (it would continue a copy instead of yours), no
+new session id, no TTY and no keystroke injection.
+
+The transcript is still measured — snapshotted before the resume and read once
+after it — but strictly as a diagnostic. `TranscriptGrew` says whether the
+conversation advanced while the turn ran; it never overturns the exit status,
+because a session can be continued without the transcript ccresu watches changing
+shape. See [docs/recovery.md](docs/recovery.md) for the exact mechanism and its
+limitations.
+
+The resume also runs **where the session runs**, not where `ccresu` runs. A
 session keeps two directories: `project` — where it started, recorded once — and
 `runs in` — where it actually is, refreshed from every observation. They differ
 when a background session has moved into its own git worktree under
-`.claude/worktrees/`, and in that case the handoff re-enters the worktree. A
+`.claude/worktrees/`, and in that case the resume re-enters the worktree. A
 recorded directory that has since been deleted falls back to the project
 directory and says so once; a session with neither is a named failure, never an
 inherited working directory (under the shipped systemd unit that would be
@@ -964,19 +969,25 @@ first attempt.
 go build ./...
 go test ./... && go test -race ./...
 make cover-check     # enforces the 80% statement-coverage gate
-make e2e             # the `claude --bg --resume` handoff against a stub `claude` CLI
+make e2e             # the resume driven end to end against a stub `claude` CLI
 ```
 
 `make e2e` runs `tests/scripts/background-resume-e2e.sh`. It builds the real
-binary, puts a stub `claude` on `PATH` and drives the handoff end to end: one
-`--bg --resume <session-id> --name ccresu-<first-8-hex> <message>` invocation,
-the `backgrounded · <short-id> · <name>` block the supervisor answers with, and
-the audit row that keeps the state id and the label. The stub records every call
-with its argv, so the run also proves what was *not* sent: no print-mode flag, no
-`claude stop`, no second resume. Two sessions are refused on purpose -- one that
-fails authentication and one whose handoff prints no block -- and both end
-`DISCOVERED`, because a continuation that failed is not a verdict on the
-conversation.
+binary, puts a stub `claude` on `PATH` and drives three recoveries end to end, one
+per session: the `--resume <session-id> <message>` invocation, the attempt row
+that records that command, and the transcript measurement taken after it. The stub
+records every call with its argv, so the run also proves what was *not* sent: no
+background flag, no session label, no print-mode flag, no lifecycle command, and
+no second resume.
+
+The three sessions are the three answers the exit status can give. One resume
+exits `0` and grows the transcript, so the session ends `RESUMED`. One exits `1`
+with an authentication refusal, so it ends `DISCOVERED` — a failed continuation is
+not a verdict on the conversation, so the next discovery pass re-reads the
+transcript and decides afresh rather than the session being abandoned. The third
+exits `0` and leaves the transcript untouched, and it still ends `RESUMED`, because
+growth is recorded and never required: the exit status is the only verdict there
+has ever been.
 
 `scripts/web-captures.sh` runs the same harness and publishes its log verbatim as
 the end-to-end figure on the documentation site, so a change in the invocation

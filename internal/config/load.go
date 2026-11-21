@@ -139,6 +139,30 @@ var retiredKeys = [][]string{
 	// 0.9.0: a `blocked` session is resumed rather than announced, so no
 	// needs-input message exists and nothing reads its switch.
 	{"telegram", "notify_needs_input"},
+	// 0.10.0: a usage window is only ever learned from the resume itself, so
+	// there is no pre-resume recheck to switch on. Nothing read this key even
+	// while it was documented, and the shipped daemon never installed a limit
+	// recheck, so dropping it changes no behaviour — it only stops the file
+	// from claiming one.
+	{"scheduler", "recheck_before_resume"},
+	// 0.10.0: the three timeouts bounded a handshake that no longer happens —
+	// watching a child start, polling a transcript for growth, and the gap
+	// between the polls. A resume is one blocking command bounded by
+	// recovery.turn_timeout, so each of these outlived the pass that read it.
+	// They are pruned rather than left as dead fields because a timeout in a
+	// file reads as a promise that something is still being watched.
+	{"recovery", "startup_timeout"},
+	{"recovery", "verification_timeout"},
+	{"recovery", "health_check_interval"},
+	// 0.10.0: the four guardrail flags rode the handoff vector, and a resume now
+	// carries no flags at all. They are pruned by name rather than by dropping
+	// `recovery.guardrails`, because the two spend caps in the same section keep
+	// their meaning: those are ccresu's own checks over the series of attempts,
+	// not CLI flags, so an operator's caps must survive the upgrade.
+	{"recovery", "guardrails", "model"},
+	{"recovery", "guardrails", "effort"},
+	{"recovery", "guardrails", "fallback_model"},
+	{"recovery", "guardrails", "permission_mode"},
 }
 
 // pruneRetiredKeys returns data without the retiredKeys it carries, and the

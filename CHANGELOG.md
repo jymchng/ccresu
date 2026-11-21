@@ -4,6 +4,112 @@ All notable changes to ccresu are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-11-21
+
+The release that stopped pretending a resume is a handoff.
+
+ccresu used to start `claude --bg --resume <id> --name <label> "<message>"` and
+then wait for the CLI to print a `backgrounded · <short-id> · <name>` block
+before it would call the continuation proven. That handshake never did the work,
+and the work was the only thing anybody cared about. A recovery is now one
+command — `claude --resume <session-id> "<continuation message>"` — which runs
+the turn in the session's own directory and returns when the turn is over, and
+its **exit status is the only verdict** ccresu takes.
+
+This is a breaking release for configuration: the three recovery timeouts are
+gone, replaced by one, and the four guardrail flags are gone with the vector
+that carried them.
+
+### Changed
+
+- **A recovery is one blocking run, and the exit status decides it.** `ccresu`
+  builds `--resume <session-id> <message>` and nothing else: no background flag,
+  no session label, no guardrail flags, no print mode, no bare `--` separator
+  (the message is positional, and a separator would change how a leading dash in
+  it is read). The command runs the whole turn — worktree included — and the
+  process exits when the turn does. Exit `0` is the continuation and leaves the
+  session `RESUMED`; any other status is a failed attempt, recorded with its exit
+  code and stderr and retried on the backoff schedule. `recovery.turn_timeout`
+  (default `30m`, `claude.DefaultTurnTimeout`) bounds that whole turn: a resume
+  that outlives it is killed and recorded as a failed attempt rather than left to
+  run forever.
+- **The transcript measurement survives as a diagnostic, not as evidence.** After
+  a successful exit ccresu reads the session once and records whether the
+  transcript grew, with the line and byte counts either side of it and a note
+  whenever a measurement could not be taken. Nothing waits for it and nothing can
+  be revised by it: a session can continue without the file ccresu watches
+  changing shape, and a file can grow without the original conversation being the
+  one that advanced. Missing growth is reported, never treated as a failure.
+- **The pass no longer reads the published listing before or after a resume.**
+  Before the turn it reads the session only to establish that it is recoverable
+  and to snapshot the transcript for the measurement; there is no published state
+  to consult, no "already resumed" or "already completed" branch to take, and no
+  observation recorded afterwards.
+- **`ccresu inspect` and the TUI show the attempt, not a supervisor.** The
+  Supervisor section of the detail screen is gone, along with the reader that
+  filled it: an attempt is now its exit code, its timings, its cost and the
+  transcript measurement.
+- **Telegram messages describe the blocking run.** The recovery-started message
+  names `claude --resume <session-id>` instead of a background dispatch, and the
+  success message says the resume exited `0` rather than claiming a supervisor
+  accepted the work.
+- **`claude.default_model` and `claude.default_effort` are accepted and validated
+  but not applied.** They select flags a resume no longer carries, so the
+  session's own model and effort stand.
+
+### Removed
+
+- **The background supervisor and its handoff.** Gone with it: the `--bg` and
+  `--name` flags, the `backgrounded` acceptance block and the parser that read it
+  (including its `note:` line for a continuation that landed in a copy), the
+  `claude stop <job-id>` retry, the `blocked`-publication branch that treated a
+  session as already continued, and the `ccresu inspect` Supervisor section.
+- **The three recovery timeouts.** `recovery.startup_timeout`,
+  `recovery.verification_timeout` and `recovery.health_check_interval` described a
+  handshake — watching a child start, polling a transcript for growth, and the
+  gap between the polls. One blocking command needs one bound:
+  `recovery.turn_timeout`. The retired keys are reported as no longer a
+  configuration key, ignored rather than rejected, so a file written for 0.9.x
+  still starts.
+- **`scheduler.recheck_before_resume`.** It promised a pre-resume recheck of the
+  usage window, and no release ever performed one: `internal/app` never installed
+  a limit recheck, so the value was parsed, defaulted and read by nothing. The
+  engine-side hook it would have driven (`recovery.Config.LimitRecheck`) is gone
+  too. It cannot be implemented either — a window is only ever learned from a
+  `claude` run, so the resume *is* the recheck, and a refusal parks the session
+  on the reset its banner named without spending an attempt. The key is retired:
+  an old file still loads, and the line is reported as no longer a configuration
+  key.
+- **The four guardrail flags.** `recovery.guardrails.model`, `effort`,
+  `fallback_model` and `permission_mode` existed to ride the handoff. A resume
+  carries no flags at all, so there is nothing to pass through. The two spend
+  caps — `max_cost_usd_per_session` and `max_cost_usd_per_attempt` — stay: they
+  are ccresu's own checks over the series of attempts, not CLI flags.
+- **Nine attempt columns.** Migration `0015_drop_attempt_handoff_observation.sql`
+  drops `handoff_state_id`, `handoff_name`, `handoff_at`, `handoff_copied`,
+  `observed_state`, `observed_status`, `observed_waiting_for`, `observed_at` and
+  `observed_listed`. Nothing can write them any more, and a column no writer fills
+  is worse than no column because the next reader believes it. `transcript_grew`,
+  the one measurement that is still taken, stays.
+- **`session_id_preserved` and `running` from the `/recover` payload.** The
+  verification object now carries what the resume actually measured and decided:
+  `proven`, `exit_code`, `transcript_grew`, `lines_before`, `lines_after`,
+  `size_before`, `size_after` and `notes`.
+
+### Upgrade notes
+
+- **Claude Code 2.1.257 or newer is required**, and has been since 0.7.0. There is
+  no print-mode or background path underneath that floor, so an older CLI cannot
+  perform a recovery at all.
+- **Delete the retired keys from `~/.config/ccresu/config.yaml`.** The three
+  timeout keys, the four guardrail flags and `scheduler.recheck_before_resume`
+  are tolerated for one release — reported, ignored, never read — so an old file
+  still starts. Running `ccresu config validate` names them.
+- **Do not downgrade across the migration.** The first start of 0.10.0 runs
+  `0015`, and a 0.9.x binary cannot read a schema with columns it expects removed
+  — although the down migration restores them empty, which is the honest
+  restore: what was in them is gone.
+
 ## [0.9.2] - 2026-11-20
 
 A documentation release. The installation guides no longer walk a reader through

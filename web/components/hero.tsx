@@ -32,13 +32,13 @@ export function Hero() {
           <p className="max-w-xl text-pretty text-base leading-relaxed text-muted-foreground sm:text-lg">
             {site.name} watches your sessions, recognises the usage-limit
             message, waits for the reset time in the right timezone, then
-            hands <strong className="text-foreground">the same</strong>{" "}
-            conversation to the supervisor with {" "}
+            continues <strong className="text-foreground">the same</strong>{" "}
+            conversation with {" "}
             <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em]">
-              claude --bg --resume
+              claude --resume
             </code>{" "}
             — preserving history, working directory and active goal — and
-            records the resume only once the handoff is accepted.
+            waits for the turn, recording the resume only when it exits 0.
           </p>
 
           <div className="flex flex-wrap items-center gap-3">
@@ -96,10 +96,9 @@ pending:       1
 schedules:     1
 recovery:      yes (max attempts 10)
 
-$ ccresu history 4d1f9c2a\nWAITING_FOR_RESET  reset at 12:00 Europe/Berlin
-RESET_TIME_REACHED  limit cleared
-RESUMING            claude --bg --resume --name ccresu-4d1f9c2a
-RESUMED             accepted as 8f2a1c · ccresu-4d1f9c2a`}</code>
+$ ccresu history 4d1f9c2a\nWAITING_FOR_RESET  waiting until 2025-11-05T11:00:00Z
+RESUMING            claude --resume 4d1f9c2a "continue the goal"
+RESUMED             the resume finished its turn and the transcript grew`}</code>
             </pre>
           </div>
         </div>

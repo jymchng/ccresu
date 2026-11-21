@@ -41,10 +41,19 @@ export const telegramDoc: DocPage = {
       rows: [
         ["limit detected", "A usage-limit banner was matched and recorded."],
         ["waiting", "The session is waiting for its reset time (off by default: it is the noisiest event)."],
-        ["recovery started", "A resume attempt is about to run."],
-        ["recovery success", "The continuation is under way: the supervisor accepted it, so the attempt carries the state id and the label it answered with."],
+        [
+          "recovery started",
+          "A resume attempt is about to run. The message names the command, because the resume runs the whole turn and its exit status decides the outcome.",
+        ],
+        [
+          "recovery success",
+          "The resume exited 0, so the original conversation continued in its own session.",
+        ],
         ["recovery failure", "An attempt failed and another one is scheduled."],
-        ["permanent failure", "The attempt budget is spent or the error is not retryable."],
+        [
+          "permanent failure",
+          "A failure ccresu will not retry — an authentication failure, a missing binary, or a session id the CLI refuses — or a spend cap that stops the session.",
+        ],
         ["session completed", "The session finished normally, so no recovery is needed."],
       ],
     },

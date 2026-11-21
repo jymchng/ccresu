@@ -156,8 +156,9 @@ capture history "$ccresu" history "$session"
 
 if [ "$with_e2e" -eq 1 ]; then
 	# The real proof, including the stub's call log: it is the only honest way to
-	# show the single `--bg --resume` handoff, the block the supervisor answered
-	# with, and the absence of any print-mode flag, stop or retry.
+	# show the single blocking `claude --resume <id> "<message>"` run per session,
+	# the exit status ccresu takes as the verdict, and the absence of any
+	# print-mode flag, background flag, session label, stop or second resume.
 	# Two kinds of line are dropped so the figure is the report and not the
 	# plumbing: module-download chatter from the build, and the daemon's JSON
 	# log lines, which repeat what the report already states.
@@ -225,7 +226,7 @@ manifest = [
     ("history", "The audit trail for one session", "ccresu history <session-id>",
      "The audit trail: discovery, detection, the wait and the reset instant, each recorded as it happened."),
     ("e2e", "The end-to-end proof", "make e2e",
-     "The end-to-end proof, verbatim: the stub claude CLI accepts one `--bg --resume` handoff, prints the `backgrounded` block ccresu judges it on, and the call log shows that single invocation -- no print mode, no stop, no second resume."),
+     "The end-to-end proof, verbatim: each session gets one blocking `claude --resume <session-id> \"<message>\"` and nothing else, a stub that exits 0 marks the session recovered, a stub that exits 1 records the failure, and one whose turn leaves the transcript untouched is still recovered -- because the exit status is the verdict, not the growth."),
 ]
 
 

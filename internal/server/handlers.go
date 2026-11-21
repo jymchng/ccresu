@@ -257,8 +257,9 @@ func toTransitionDTOs(transitions []storage.Transition) []transitionDTO {
 // recoverRequest is the optional body of POST /sessions/{id}/recover.
 //
 // Note what is absent: there is no field naming a command, a binary or an
-// argument vector. The continuation message is data handed to the provider, which
-// issues the fixed `claude --bg --resume` handoff.
+// argument vector, and nothing that could set a flag. The message is data handed
+// to the provider, which issues the fixed `claude --resume <session-id>
+// "<message>"` run and reports the exit status it came back with.
 type recoverRequest struct {
 	Message string `json:"message"`
 }

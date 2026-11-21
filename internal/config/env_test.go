@@ -31,23 +31,16 @@ var everyEnvSetterSamples = map[string]string{
 	"CCRESU_SCHEDULER__POLL_INTERVAL":                       "1m",
 	"CCRESU_SCHEDULER__UNKNOWN_RESET_INITIAL_INTERVAL":      "2m",
 	"CCRESU_SCHEDULER__UNKNOWN_RESET_MAX_INTERVAL":          "40m",
-	"CCRESU_SCHEDULER__RECHECK_BEFORE_RESUME":               "false",
 	"CCRESU_RECOVERY__ENABLED":                              "false",
 	"CCRESU_RECOVERY__MAX_ATTEMPTS":                         "4",
 	"CCRESU_RECOVERY__INITIAL_DELAY":                        "10s",
 	"CCRESU_RECOVERY__MAX_DELAY":                            "20m",
 	"CCRESU_RECOVERY__MULTIPLIER":                           "3",
 	"CCRESU_RECOVERY__JITTER":                               "0.2",
-	"CCRESU_RECOVERY__STARTUP_TIMEOUT":                      "90s",
-	"CCRESU_RECOVERY__VERIFICATION_TIMEOUT":                 "180s",
-	"CCRESU_RECOVERY__HEALTH_CHECK_INTERVAL":                "15s",
+	"CCRESU_RECOVERY__TURN_TIMEOUT":                         "90s",
 	"CCRESU_RECOVERY__MAX_CONCURRENT_RECOVERIES":            "5",
 	"CCRESU_RECOVERY__GUARDRAILS__MAX_COST_USD_PER_SESSION": "2.5",
 	"CCRESU_RECOVERY__GUARDRAILS__MAX_COST_USD_PER_ATTEMPT": "0.75",
-	"CCRESU_RECOVERY__GUARDRAILS__MODEL":                    "claude-sonnet-4",
-	"CCRESU_RECOVERY__GUARDRAILS__EFFORT":                   "medium",
-	"CCRESU_RECOVERY__GUARDRAILS__FALLBACK_MODEL":           "claude-haiku-4",
-	"CCRESU_RECOVERY__GUARDRAILS__PERMISSION_MODE":          "dontAsk",
 	"CCRESU_TELEGRAM__ENABLED":                              "true",
 	"CCRESU_TELEGRAM__BOT_TOKEN":                            "123456789:abcdefghijklmnopqrstuvwxyz",
 	"CCRESU_TELEGRAM__CHAT_ID":                              "-100200300",
@@ -118,9 +111,7 @@ func TestEnvSettersRejectInvalidValuesDirectly(t *testing.T) {
 			"CCRESU_TELEGRAM__BOT_TOKEN", "CCRESU_TELEGRAM__CHAT_ID", "CCRESU_TELEGRAM__PARSE_MODE",
 			"CCRESU_SERVER__HOST", "CCRESU_SERVER__TOKEN_PATH", "CCRESU_STORAGE__DRIVER",
 			"CCRESU_STORAGE__PATH", "CCRESU_CLAUDE__MONITORED_SESSIONS",
-			"CCRESU_SERVER__ALLOWED_ORIGINS",
-			"CCRESU_RECOVERY__GUARDRAILS__MODEL", "CCRESU_RECOVERY__GUARDRAILS__EFFORT",
-			"CCRESU_RECOVERY__GUARDRAILS__FALLBACK_MODEL", "CCRESU_RECOVERY__GUARDRAILS__PERMISSION_MODE":
+			"CCRESU_SERVER__ALLOWED_ORIGINS":
 			continue
 		}
 		if err := setter.set(&cfg, "definitely-not-a-value"); err == nil {

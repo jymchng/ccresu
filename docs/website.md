@@ -12,39 +12,48 @@ isn't one — `ccresu` in a terminal, or `curl` against `127.0.0.1:8787`.
 ## What the site says a recovery does
 
 The site documents **one** resume vector, and it is the one the binary runs: a
-handoff to Claude Code's background supervisor.
+single blocking command.
 
 ```text
-claude --bg --resume <session-id> --name ccresu-<first 8 hex of the id> "<continuation message>"
+claude --resume <session-id> "<continuation message>"
 ```
 
-That is `claude.HandoffArgs` (`internal/claude/handoff.go`) argument for
-argument — `--bg`, `--resume <id>`, `--name <label>`, message last — and the
-copy is written to match it rather than to a remembered version of it:
+That is `claude.ResumeArgs` (`internal/claude/resume.go`) argument for argument
+— `--resume <session-id>`, then the message as a positional argument, last — and
+the copy is written to match it rather than to a remembered version of it:
 
-- **Acceptance, not a child process.** The CLI prints one
-  `backgrounded · <short-id> · <name>` block when the supervisor has taken the
-  session and returns. `claude.ParseHandoff` reads that block; the block *is* the
-  acceptance — the supervisor has taken the session — and the short id in it is
-  what `claude attach`, `claude logs` and `claude stop` take.
-- **Verification is the acceptance or the published state.** A handoff returns
-  through `acceptHandoff` the moment the `backgrounded` block is printed, so the
-  verifier never waits on the supervisor's schedule; the supervisor's published
-  listing is the only evidence that can establish a continuation. Transcript
-  growth is a diagnostic — measured on the non-handoff path and recorded, never
-  read as proof — and the transcript itself is only read for discovery and, when
-  a recovery fails, to explain why.
+- **The exit status is the verdict.** The command runs the whole turn and returns
+  when the continuation is finished. Status 0 marks the attempt recovered; a
+  non-zero status is a failed attempt recorded with its exit code and stderr.
+  There is no acceptance block to parse and no second source of truth.
+- **Growth is a diagnostic.** The transcript is measured once after a successful
+  exit and the reading is stored — `proven`, `exit_code`, `transcript_grew`, the
+  line and size readings — but it never decides anything. The transcript itself
+  is read for discovery and, when a recovery fails, to explain why.
 - **No print mode, no stop-then-resume.** `claude -p --resume`,
   `--output-format json` and the retry loop that stopped a session to start it
-  again are all gone from the binary and from every page. The one print-mode
-  sentence that survives is a negation — "`--bg` cannot be combined with
-  `-p`/`--print`, so print mode is not a fallback" — because it is true and it
-  explains why there is no second path.
+  again are all gone from the binary and from every page. Nor is there a
+  background flag or a session label: the vector above is the whole command.
 
-`web/tests/handoff-contract.test.ts` is what keeps that honest: it reads the
-copy modules and the diagram, not a list of remembered phrases, and fails if a
-mention reorders the arguments, if a retired claim comes back, or if the scope
-boundary below is crossed. See [Tests](#tests).
+`web/tests/handoff-contract.test.ts` is what keeps that honest, and it checks the
+artefacts rather than a remembered sentence:
+
+1. `internal/claude/resume.go` must name **one** flag and one only: `--resume`.
+2. `web/lib/docs/recovery.ts` and `docs/recovery.md` must both carry the
+   invocation above character for character, and the page must state that the
+   exit status is the verdict.
+3. No file a reader can reach — `README.md`, every `docs/*.md`, the `web/lib/docs`
+   modules, the landing and static-page copy, the captures module and the
+   components (the diagram included) — may still carry one of the retired
+   markers the test names: the background flag, the session label, the printed
+   status block, the stop command, the print-mode and guardrail flags, and the
+   dropped field of the `/recover` payload. The markers exist only inside the
+   test file, which is deliberately outside the corpus it scans, so the list
+   cannot quietly turn into an exemption list.
+
+The scope boundary is asserted next door, not there: `seo.test.ts` pins the
+route table at 15, and `static-pages.test.tsx` pins the privacy page's "no
+analytics, one build-time GitHub call" claim. See [Tests](#tests).
 
 ## Stack
 
@@ -126,11 +135,11 @@ Nineteen test files under `web/tests`, driven by Vitest with jsdom:
 | --- | --- |
 | `backdrop.test.ts` | The CSS page gradient exists in both themes and costs no contrast. |
 | `captures.test.tsx` | Captured command output: the renderer shows the captured bytes exactly, and the capture module still matches the fixtures. |
-| `content.test.tsx` | The content modules: no empty sections, no duplicate slugs. |
+| `content.test.tsx` | The copy itself: no placeholder text, the executed `claude --resume …` vector with no retired flag, the landing surfaces stating the exit status as the verdict, the message-last ordering argued on the recovery page, the "no web UI" line, the GitHub Pages base path, the pre-paint theme bootstrap, and a usable 404. |
 | `copy-button.test.tsx` | Copy-to-clipboard, including the failure path. |
 | `doc-figures.test.tsx` | The two figure blocks: a capture renders the captured bytes, a diagram is inline SVG with an accessible name, and every figure id resolves. |
 | `docs.test.tsx` | Every documentation page renders its headings and body blocks. |
-| `handoff-contract.test.ts` | The handoff contract, read from the artefacts: the documented invocation is `claude --bg --resume <id> --name <label> <message>` in that order and agrees with `claude.HandoffArgs` in the Go source; no doc, landing or diagram module carries `-p --resume`, `--output-format`, a stop-then-resume retry or a positive print-mode claim; and the scope boundary holds — 15 routes, no dashboard/auth/analytics dependency, and one build-time GitHub call as the site's entire network surface. |
+| `handoff-contract.test.ts` | The resume contract, read from the artefacts: `internal/claude/resume.go` builds `--resume` and no other flag; `web/lib/docs/recovery.ts` and `docs/recovery.md` both carry `claude --resume <session-id> "<continuation message>"`, and the page says the exit status is the verdict; and no file in the corpus — the manual, the site's doc, landing and static-page modules, the captures module and the components — still carries one of the retired markers the test names (the background flag, the session label, its status block, the stop command, the print-mode and guardrail flags, the dropped `/recover` field), which live only in the test file, deliberately outside the corpus it scans. |
 | `install-commands.test.tsx` | The install snippets and their exact release asset names. |
 | `install-one-liner.test.ts` | The site and CI agree about what a documented command is, by rendering the commands the way CI does. |
 | `landing.test.tsx` | Hero copy, the eight feature cards, the how-it-works steps. |
@@ -139,8 +148,8 @@ Nineteen test files under `web/tests`, driven by Vitest with jsdom:
 | `nav.test.tsx` | Header/footer links and the documentation sidebar. |
 | `release.test.ts` | The version the install commands name: release resolution, normalisation and the fallback. |
 | `responsive.test.tsx` | What markup can prove about "usable at 320px": the 44px control floor, a table that scrolls in its own region, breakable long URLs. |
-| `seo.test.ts` | The SEO contract: route metadata, parsed structured data, and the exported sitemap and `robots.txt`. |
-| `static-pages.test.tsx` | The about, privacy and terms pages, and the links they share with the docs. |
+| `seo.test.ts` | The SEO contract: the route table — home, the docs index, ten doc pages and three static pages, fifteen in all, each exactly once — route metadata, parsed structured data, and the exported sitemap and `robots.txt`. |
+| `static-pages.test.tsx` | The about, privacy and terms pages, the links they share with the docs, and the privacy page's real data-flow claims: no analytics, one build-time GitHub call, and Telegram as the binary's only outbound host. |
 | `terms-liability.test.tsx` | The liability limitation, asserted as things a reader must be able to find on `/terms/`. |
 | `theme-toggle.test.tsx` | Dark-first default, toggling, and persistence. |
 

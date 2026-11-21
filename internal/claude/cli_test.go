@@ -318,70 +318,67 @@ func TestCLIAgentsErrors(t *testing.T) {
 	})
 }
 
-func TestHandoffArgsExact(t *testing.T) {
+// TestResumeArgsIsExactlyTheVerifiedOne pins the whole state-changing command.
+//
+// There is one vector and it is the verified one: `--resume <session-id>
+// <message>`. No `--bg`, no `--name` (a label only existed to name a
+// supervisor's job), no guardrail flags, and no bare `--` separator, which
+// would change how a message beginning with a dash is read.
+func TestResumeArgsIsExactlyTheVerifiedOne(t *testing.T) {
 	t.Parallel()
 
-	got := strings.Join(HandoffArgs(testSessionID, "continue"), " ")
-	want := "--bg --resume " + testSessionID + " --name ccresu-3f1e2c7a continue"
-	if got != want {
-		t.Fatalf("HandoffArgs() = %q, want %q", got, want)
+	for _, message := range []string{"continue", "-p", "--print --resume x", "$(whoami) `id`", "line\nbreak"} {
+		want := []string{"--resume", testSessionID, message}
+		got := ResumeArgs(testSessionID, message)
+		if len(got) != len(want) {
+			t.Fatalf("ResumeArgs(%q) = %q, want %q", message, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("ResumeArgs(%q)[%d] = %q, want %q (full vector %q)", message, i, got[i], want[i], got)
+			}
+		}
 	}
 }
 
 // TestNoRecoveryArgumentCarriesPrintMode is the guard on R1 and R12: print mode
-// is retired, not kept beside --bg. The two cannot be combined, so a vector
-// carrying both would be rejected before a session existed.
+// is retired, not kept beside --resume. The resume runs the turn and reports it
+// by exiting, so a vector that switched into print mode would replace the
+// verdict with a format nobody here parses.
 func TestNoRecoveryArgumentCarriesPrintMode(t *testing.T) {
 	t.Parallel()
 
-	vectors := map[string][]string{
-		"handoff": HandoffArgs(testSessionID, "keep going"),
-		"stop":    StopArgs("837eaaea"),
+	argv := ResumeArgs(testSessionID, "keep going")
+	for _, arg := range argv {
+		switch arg {
+		case "-p", "--print", "--output-format":
+			t.Errorf("argv = %q, want no print-mode flag", argv)
+		}
 	}
-	for name, argv := range vectors {
-		for _, arg := range argv {
-			switch arg {
-			case "-p", "--print", "--output-format":
-				t.Errorf("%s argv = %q, want no print-mode flag", name, argv)
-			}
-		}
-		if len(argv) > 1 && argv[0] == "--" {
-			t.Errorf("%s argv = %q, want no bare -- separator first", name, argv)
-		}
+	if len(argv) > 1 && argv[0] == "--" {
+		t.Errorf("argv = %q, want no bare -- separator first", argv)
 	}
 }
 
-func TestCLIHandoffSuccess(t *testing.T) {
+func TestCLIResumeSuccess(t *testing.T) {
 	t.Parallel()
 
 	cli, execer := newTestCLI(t,
 		Output{Stdout: []byte(testVersionOutput)},
-		Output{Stdout: []byte(testHandoffBlock)},
+		Output{Stdout: []byte(testResumeOutput)},
 	)
 	result, err := cli.Resume(context.Background(), testSessionID, "keep going", testSessionDir)
 	if err != nil {
 		t.Fatalf("Resume() error = %v", err)
 	}
-	if !result.Backgrounded {
-		t.Error("Backgrounded = false, want true")
+	if result.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0: the exit status is the verdict", result.ExitCode)
 	}
-	if result.Verified {
-		t.Error("Verified = true, want false: a handoff cannot prove the conversation continued")
-	}
-	if result.StateID != "3f1e2c7a" {
-		t.Errorf("StateID = %q, want 3f1e2c7a", result.StateID)
-	}
-	if result.Name != "ccresu-3f1e2c7a" {
-		t.Errorf("Name = %q, want ccresu-3f1e2c7a", result.Name)
-	}
-	if result.SessionID != testSessionID {
-		t.Errorf("SessionID = %q, want %q", result.SessionID, testSessionID)
+	if result.RequestedSessionID != testSessionID {
+		t.Errorf("RequestedSessionID = %q, want %q", result.RequestedSessionID, testSessionID)
 	}
 	if result.CWD != testSessionDir {
 		t.Errorf("CWD = %q, want %q", result.CWD, testSessionDir)
-	}
-	if result.Handoff.Raw == "" {
-		t.Error("Handoff.Raw = \"\", want the output the block was parsed from")
 	}
 
 	calls := execer.Calls()
@@ -389,7 +386,7 @@ func TestCLIHandoffSuccess(t *testing.T) {
 	if last.Name != "claude" {
 		t.Errorf("command name = %q, want claude", last.Name)
 	}
-	want := HandoffArgs(testSessionID, "keep going")
+	want := ResumeArgs(testSessionID, "keep going")
 	if strings.Join(last.Args, "\x00") != strings.Join(want, "\x00") {
 		t.Errorf("argv = %v, want %v", last.Args, want)
 	}
@@ -401,16 +398,24 @@ func TestCLIHandoffSuccess(t *testing.T) {
 	if message := last.Args[len(last.Args)-1]; message != "keep going" {
 		t.Errorf("message argv = %q, want %q", message, "keep going")
 	}
+	// Detached is not abandoned: the child is in its own session with no
+	// inherited stdin, and the caller still waits for its exit status.
+	if !last.Options.Detach {
+		t.Error("Detach = false, want true: a resume must not share the daemon's process group")
+	}
+	if last.Options.Stdin != nil {
+		t.Errorf("Stdin = %v, want nil: no terminal is ever attached to a resume", last.Options.Stdin)
+	}
 }
 
-// TestTheHandoffRunsInTheSessionsDirectory is R8: the cwd is chosen, never
-// inherited. A handoff issued from the daemon's cwd resumes the wrong tree.
-func TestTheHandoffRunsInTheSessionsDirectory(t *testing.T) {
+// TestTheResumeRunsInTheSessionsDirectory is R8: the cwd is chosen, never
+// inherited. A resume issued from the daemon's cwd continues the wrong tree.
+func TestTheResumeRunsInTheSessionsDirectory(t *testing.T) {
 	t.Parallel()
 
 	cli, execer := newTestCLI(t,
 		Output{Stdout: []byte(testVersionOutput)},
-		Output{Stdout: []byte(testHandoffBlock)},
+		Output{Stdout: []byte(testResumeOutput)},
 	)
 	if _, err := cli.Resume(context.Background(), testSessionID, "go", "/w/session-worktree"); err != nil {
 		t.Fatalf("Resume() error = %v", err)
@@ -433,62 +438,6 @@ func TestTheHandoffRunsInTheSessionsDirectory(t *testing.T) {
 	}
 }
 
-// TestACopiedContinuationIsRecorded is R4: a copy is an expected outcome, not a
-// failure, and the copy becomes the conversation the recovery is reported
-// against.
-func TestACopiedContinuationIsRecorded(t *testing.T) {
-	t.Parallel()
-
-	output := "backgrounded \u00b7 3f1e2c7a \u00b7 ccresu-3f1e2c7a\n" +
-		"note: started a copy of the conversation in session " + testOtherSessionID + "\n"
-	cli, _ := newTestCLI(t,
-		Output{Stdout: []byte(testVersionOutput)},
-		Output{Stdout: []byte(output)},
-	)
-	result, err := cli.Resume(context.Background(), testSessionID, "go", testSessionDir)
-	if err != nil {
-		t.Fatalf("Resume() error = %v, want nil: a copy is not a failure", err)
-	}
-	if !result.Copied {
-		t.Error("Copied = false, want true")
-	}
-	if result.CopySessionID != testOtherSessionID {
-		t.Errorf("CopySessionID = %q, want %q", result.CopySessionID, testOtherSessionID)
-	}
-	if result.SessionID != testOtherSessionID {
-		t.Errorf("SessionID = %q, want the copy %q: the recovery is reported against it", result.SessionID, testOtherSessionID)
-	}
-	if result.Note == "" {
-		t.Error("Note = \"\", want the CLI's explanation")
-	}
-	if !result.Backgrounded {
-		t.Error("Backgrounded = false, want true")
-	}
-}
-
-// TestAStartedSupervisorIsRecognised covers the missing-supervisor case: the CLI
-// prints `Starting background service...` above the block when it had to start
-// one first, and parsing must survive that line.
-func TestAStartedSupervisorIsRecognised(t *testing.T) {
-	t.Parallel()
-
-	output := "Starting background service\u2026\n" + testHandoffBlock
-	cli, _ := newTestCLI(t,
-		Output{Stdout: []byte(testVersionOutput)},
-		Output{Stdout: []byte(output)},
-	)
-	result, err := cli.Resume(context.Background(), testSessionID, "go", testSessionDir)
-	if err != nil {
-		t.Fatalf("Resume() error = %v", err)
-	}
-	if !result.SupervisorStarted {
-		t.Error("SupervisorStarted = false, want true")
-	}
-	if !result.Backgrounded || result.StateID != "3f1e2c7a" {
-		t.Errorf("the prefix line broke parsing: %+v", result.Handoff)
-	}
-}
-
 func TestCLIResumeRejectsBadInput(t *testing.T) {
 	t.Parallel()
 
@@ -504,7 +453,7 @@ func TestCLIResumeRejectsBadInput(t *testing.T) {
 		{"path traversal", "../session", "go", testSessionDir, ErrInvalidSessionID},
 		{"empty message", testSessionID, "   ", testSessionDir, ErrEmptyMessage},
 		{"long message", testSessionID, strings.Repeat("x", MaxMessageBytes+1), testSessionDir, ErrMessageTooLong},
-		{"no directory", testSessionID, "go", "  ", ErrHandoffDirectoryMissing},
+		{"no directory", testSessionID, "go", "  ", ErrResumeDirectoryMissing},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -518,7 +467,7 @@ func TestCLIResumeRejectsBadInput(t *testing.T) {
 	}
 }
 
-func TestCLIHandoffFailures(t *testing.T) {
+func TestCLIResumeFailures(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -530,11 +479,6 @@ func TestCLIHandoffFailures(t *testing.T) {
 		// and crashed, so it is neither a missing binary nor a named refusal.
 		wantNoSentinel bool
 	}{
-		{
-			name:    "no backgrounded block",
-			output:  Output{Stdout: []byte("resumed in place\n")},
-			wantErr: ErrHandoffNotAcknowledged,
-		},
 		{
 			name:    "workspace not trusted",
 			output:  Output{Stdout: []byte("Workspace not trusted. Run claude in this directory first.\n"), ExitCode: 1},
@@ -587,10 +531,10 @@ func TestCLIHandoffFailures(t *testing.T) {
 	}
 }
 
-// TestPreHandoffCLIIsANamedError is R12's blunt edge: there is no fallback, so a
+// TestPreResumeCLIIsANamedError is R12's blunt edge: there is no fallback, so a
 // CLI below 2.1.257 is a named, explainable refusal rather than a mystery
-// failure, and it is raised before the handoff is attempted.
-func TestPreHandoffCLIIsANamedError(t *testing.T) {
+// failure, and it is raised before the resume is attempted.
+func TestPreResumeCLIIsANamedError(t *testing.T) {
 	t.Parallel()
 
 	cli, execer := newTestCLI(t, Output{Stdout: []byte("2.1.223 (Claude Code)\n")})
@@ -660,30 +604,30 @@ func TestCLIRunAppliesTimeout(t *testing.T) {
 	}
 }
 
-// TestCLIHandoffTimeoutBoundsTheHandoffInvocation proves the other half of
-// recovery.startup_timeout's wiring: the value the composition root puts in
-// claude.Options.HandoffTimeout is the deadline the `claude --bg --resume`
+// TestCLITurnTimeoutBoundsTheResumeInvocation proves the other half of
+// recovery.turn_timeout's wiring: the value the composition root puts in
+// claude.CLIOptions.TurnTimeout is the deadline the `claude --resume`
 // invocation actually runs under, distinct from the query bound. The recorder
-// sees the last invocation, which is the handoff, so a 47s handoff bound beside
-// a 5s query bound cannot be confused for one another.
-func TestCLIHandoffTimeoutBoundsTheHandoffInvocation(t *testing.T) {
+// sees the last invocation, which is the resume, so a 47s turn bound beside a
+// 5s query bound cannot be confused for one another.
+func TestCLITurnTimeoutBoundsTheResumeInvocation(t *testing.T) {
 	t.Parallel()
 
-	execer := &deadlineRecorder{output: Output{Stdout: []byte(testVersionOutput + testHandoffBlock)}}
+	execer := &deadlineRecorder{output: Output{Stdout: []byte(testVersionOutput + testResumeOutput)}}
 	cli := NewCLI(CLIOptions{
-		Executable:     "claude",
-		Execer:         execer,
-		QueryTimeout:   5 * time.Second,
-		HandoffTimeout: 47 * time.Second,
+		Executable:   "claude",
+		Execer:       execer,
+		QueryTimeout: 5 * time.Second,
+		TurnTimeout:  47 * time.Second,
 	})
 	if _, err := cli.Resume(context.Background(), testSessionID, "continue", testSessionDir); err != nil {
 		t.Fatalf("Resume() error = %v", err)
 	}
 	if !execer.sawDeadline {
-		t.Fatal("the handoff ran with no deadline, so nothing bounds it")
+		t.Fatal("the resume ran with no deadline, so nothing bounds it")
 	}
 	if execer.timeout <= 30*time.Second || execer.timeout > 47*time.Second {
-		t.Fatalf("handoff deadline = %s, want at most 47s and clearly the handoff bound rather than the 5s query one", execer.timeout)
+		t.Fatalf("resume deadline = %s, want at most 47s and clearly the turn bound rather than the 5s query one", execer.timeout)
 	}
 }
 

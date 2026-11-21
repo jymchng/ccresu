@@ -286,13 +286,14 @@ func TestRecoverEndpoint(t *testing.T) {
 	if !body.Resumed {
 		t.Errorf("resumed = false: %+v", body)
 	}
-	if !body.Verification.Proven || !body.Verification.SessionIDPreserved {
-		t.Errorf("verification = %+v", body.Verification)
+	if !body.Verification.Proven {
+		t.Errorf("verification = %+v, want a proven resume", body.Verification)
 	}
-	// Growth is a diagnostic under PRD 2, so a handoff that was accepted must not
-	// claim the transcript it no longer owns grew.
-	if body.Verification.TranscriptGrew {
-		t.Errorf("verification = %+v, want no growth measured for a handoff", body.Verification)
+	// There is no session-id acknowledgement to carry any more: the resume runs
+	// the turn and its exit status is the whole verdict, so the only thing the
+	// wire form can add is the transcript diagnostic taken afterwards.
+	if body.Verification.ExitCode != 0 {
+		t.Errorf("verification = %+v, want the zero exit status that proved it", body.Verification)
 	}
 	if body.State != string(storage.StateResumed) {
 		t.Errorf("state = %q, want RESUMED", body.State)
@@ -716,11 +717,10 @@ func TestMapError(t *testing.T) {
 		{context.Canceled, http.StatusServiceUnavailable, codeUnavailable},
 		{context.DeadlineExceeded, http.StatusServiceUnavailable, codeUnavailable},
 		{errors.New("something unexpected"), http.StatusInternalServerError, codeInternal},
-		// A limit refusal reaches the mapping in two shapes and both are the
-		// same answer: the bare sentinel from the pre-resume limit check, and
-		// the refusal itself, which reports the sentinel through Is.
+		// A limit refusal is the only producer of the sentinel, and both shapes
+		// must reach the same answer: the sentinel itself, and the refusal
+		// type, which reports the sentinel through Is.
 		{recovery.ErrLimitNotCleared, http.StatusConflict, codeLimitNotCleared},
-		{fmt.Errorf("check usage limit: %w", recovery.ErrLimitNotCleared), http.StatusConflict, codeLimitNotCleared},
 		{&recovery.LimitInForceError{SessionID: sessionID, Banner: "usage limit reached"},
 			http.StatusConflict, codeLimitNotCleared},
 	}

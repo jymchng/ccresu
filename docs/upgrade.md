@@ -218,19 +218,20 @@ block, if that was the only hook). ccresu never needed the hook to function and
 never wrote your settings file, so nothing re-adds it for you — and nothing stops
 working once it is gone.
 
-### `recovery.startup_timeout` now has a reader
+### The three recovery timeouts collapse into `recovery.turn_timeout`
 
-The key used to be accepted, validated, defaulted and environment-overridable,
-and read by nothing: it dated from the print-mode resume, where ccresu watched a
-child process start, and a handoff has no child to watch. It now bounds the
-`claude --bg --resume` handoff call itself — how long ccresu waits for the CLI to
-accept the session — and nothing else: the resumed work runs under the
-supervisor and outlives ccresu.
+`recovery.startup_timeout`, `recovery.verification_timeout` and
+`recovery.health_check_interval` are gone. They described a handshake: a bound on
+watching a child start, a bound on polling a transcript for growth, and the gap
+between those polls. A resume now runs the whole turn in one blocking command, so
+there is exactly one bound to name — `recovery.turn_timeout`, default `30m`,
+matching `claude.DefaultTurnTimeout`. A turn that outlives it is killed and
+recorded as a failed attempt.
 
-Its default moved from `60s` to `2m`, which is the fixed timeout the handoff call
-used while the key did nothing, so a configuration that never set it behaves
-exactly as it did before. A configuration that *did* set it now gets that value:
-check it is enough for your host to start the background service.
+Leaving the old keys in a file is harmless: they are reported as no longer a
+configuration key — ignored, not rejected — so an older file still starts, and
+nothing reads them. Delete the three lines to keep the file honest, and set
+`turn_timeout` if the default is wrong for your work.
 
 ### Rolling back
 

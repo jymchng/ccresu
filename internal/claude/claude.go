@@ -91,30 +91,36 @@ var (
 	ErrUnsupportedVersion = errors.New("claude: unsupported claude code version")
 	// ErrUnrecognizedVersion reports a version string that cannot be parsed.
 	ErrUnrecognizedVersion = errors.New("claude: unrecognized claude code version")
-	// ErrMalformedOutput reports JSON that does not match the verified shape.
+	// ErrMalformedOutput reports JSON that does not match the verified shape:
+	// the `claude agents --json` listing, or one line of a transcript.
 	ErrMalformedOutput = errors.New("claude: malformed claude output")
-	// ErrNoSessionIDReported reports resume output without a session id. Without
-	// it ccresu cannot prove the original conversation was continued, so the
-	// attempt is treated as failed rather than assumed successful.
+	// ErrNoSessionIDReported reports a resume whose output named no session id.
+	//
+	// A blocking `claude --resume <session-id> "<message>"` names the session in
+	// its argument vector and prints the turn, not a reply, so there is no id to
+	// read back and nothing in this package returns this error any more. It is
+	// kept as the name for that condition, so a caller written against the
+	// earlier handshake still compiles and still says what it means.
 	ErrNoSessionIDReported = errors.New("claude: resume output reported no session id")
 	// ErrSessionNotPreserved reports a resume that produced a different session
 	// id, i.e. a new conversation instead of the original one.
+	//
+	// The same is true of it: with the id in the argument vector a substituted
+	// one cannot be observed, so the shipped path never returns it. recovery's
+	// non-retryable list still names it, because a session that came back as a
+	// different conversation is permanent rather than something to retry, and
+	// this is that condition's name.
 	ErrSessionNotPreserved = errors.New("claude: resumed session id did not match the requested session")
-	// ErrResumeFailed reports a resume whose JSON output carried is_error.
+	// ErrResumeFailed names a resume that ran and did not succeed.
+	//
+	// The verdict arrives as an exit status, not as a reply: CLI.Resume wraps a
+	// non-zero one in *CLIError, which carries the exit code and the captured
+	// streams, and whose Kind says whether the run was a usage-limit refusal or
+	// an unclassified crash. This sentinel is the bare name for the same verdict,
+	// for a caller that already holds the failure and has to say what it was.
+	// errors.Is against it answers only for errors that carry it explicitly; a
+	// *CLIError does not.
 	ErrResumeFailed = errors.New("claude: resume reported an error")
-	// ErrSessionRunningInBackground reports the CLI refusing to resume a
-	// session that is still attached to a background agent. It is the one
-	// condition ccresu answers with another command (`claude stop <job-id>`)
-	// before repeating the same resume.
-	ErrSessionRunningInBackground = errors.New("claude: session is running in the background")
-	// ErrStopFailed reports that `claude stop <job-id>` itself did not succeed,
-	// so the background session is still in the way.
-	ErrStopFailed = errors.New("claude: session stop failed")
-	// ErrInvalidBackgroundJobID reports a `claude stop` argument that is not the
-	// eight-hex background job name the CLI resolves. A session UUID belongs
-	// here: the CLI answers it with "No job matching" and exit 1, so passing it
-	// is refused locally instead of costing a failed recovery.
-	ErrInvalidBackgroundJobID = errors.New("claude: invalid background job id")
 )
 
 // sessionIDPattern matches the UUID form Claude Code uses for session ids.
@@ -298,74 +304,37 @@ type SessionStatus struct {
 	CheckedAt time.Time
 }
 
-// ResumeResult is the outcome of a handoff attempt.
+// ResumeResult is the outcome of one resume invocation.
 type ResumeResult struct {
 	// RequestedSessionID is the session id ccresu asked to resume.
 	RequestedSessionID string
-	// SessionID is the conversation the continuation landed in: the requested
-	// id when it continued in place, the copy's id when the CLI named one, and
-	// empty when a copy was made without being named.
-	SessionID string
-	// Verified reports that the original conversation provably continued. A
-	// handoff cannot prove that: the supervisor accepted the work and the proof
-	// arrives later, from the published session state. It is therefore false
-	// here on purpose rather than by omission.
-	Verified bool
-	// Backgrounded reports that the CLI accepted the handoff and printed its
-	// `backgrounded · <short-id> · <name>` block.
-	Backgrounded bool
-	// StateID is the short ID from that block. `claude attach`, `claude logs`
-	// and `claude stop` take it, and it is not the session UUID.
-	StateID string
-	// Name is the label the supervisor shows for the session.
-	Name string
-	// Handoff keeps the parsed block and the raw output it came from.
-	Handoff Handoff
-	// Copied reports that the CLI started a copy instead of continuing in place.
-	Copied bool
-	// CopySessionID is the copy's session id when the CLI named one.
-	CopySessionID string
-	// Note is the CLI's `note:` line, empty when the continuation was in place.
-	Note string
-	// SupervisorStarted reports that the CLI had to start a supervisor first.
-	SupervisorStarted bool
-	// CWD is the working directory the handoff was given.
+	// ExitCode is the process exit status of the resume.
+	//
+	// Zero is the verdict that the continuation ran. It is the only success
+	// signal the command has: `claude --resume <session-id> "<message>"` returns
+	// when the turn is over, and prints the turn rather than a reply, so there is
+	// no acknowledgement to parse and nothing else to compare against.
+	ExitCode int
+	// CWD is the working directory the resume was given.
 	CWD string
-	// Result is the final assistant text of the resumed turn.
-	Result string
-	// Subtype is the CLI result subtype ("success" or an error subtype).
-	Subtype string
-	// IsError reports whether the CLI flagged the turn as an error.
-	IsError bool
-	// NumTurns is the number of turns the CLI reported.
-	NumTurns int
-	// DurationMS is the CLI-reported turn duration.
-	DurationMS int
 	// TotalCostUSD is what the CLI reported the turn cost, in US dollars.
 	//
-	// Nil means *not reported*, which is the normal case for a `--bg` handoff:
-	// the handoff returns as soon as the supervisor accepts the session, so
-	// there is no finished turn to price. It is a pointer rather than a zero
-	// float because PRD 5 R10 requires an unreported cost to be recorded as
-	// unknown and to neither count toward a spend cap nor block a resume — a
-	// zero would make every unmeasured attempt look free.
+	// Nil means *not reported*, and that is the normal case: an interactive
+	// resume prints no cost block. It is a pointer rather than a zero float
+	// because PRD 5 R10 requires an unreported cost to be recorded as unknown
+	// and to neither count toward a spend cap nor block a resume — a zero would
+	// make every unmeasured attempt look free.
 	TotalCostUSD *float64
-	// Model is the model that produced the turn, when reported.
-	Model string
 	// Command is the exact argv that was executed.
 	Command []string
 }
 
-// SessionProvider discovers Claude Code sessions and hands a paused one to the
-// background supervisor.
+// SessionProvider discovers Claude Code sessions and resumes a paused one.
 //
 // Implementations must never invent a command: resuming uses
-// `claude --bg --resume <session-id> --name <label> "<message>"`, which returns
-// once the supervisor accepts the session. Print mode is not an option here and
-// not a fallback: `--bg` and `-p`/`--print` cannot be combined, so there is no
-// second vector to fall back to and no stop-then-resume dance to clear the way.
-// `claude stop <job-id>` still acts on a running agent, and its argument is the
-// eight-hex job name, never the session UUID.
+// `claude --resume <session-id> "<message>"` and nothing else. The command runs
+// the turn to its end, so the exit status — not a supervisor's acknowledgement —
+// is what a recovery is judged by.
 type SessionProvider interface {
 	// Discover lists known sessions, newest activity first.
 	Discover(ctx context.Context, filter DiscoverFilter) ([]Session, error)
@@ -373,16 +342,7 @@ type SessionProvider interface {
 	GetSession(ctx context.Context, sessionID string) (Session, error)
 	// GetSessionStatus returns the current status of one session.
 	GetSessionStatus(ctx context.Context, sessionID string) (SessionStatus, error)
-	// PublishedListing returns the supervisor's published state for every
-	// session it knows, in one query.
-	//
-	// It is separate from GetSessionStatus because the two answer different
-	// questions. Discovery answers "which conversations exist on this machine",
-	// merging the listing with the on-disk store; this answers "what does the
-	// supervisor say is happening", and the one thing it can say that discovery
-	// cannot is that a session is not in the listing at all.
-	PublishedListing(ctx context.Context) (PublishedListing, error)
-	// ResumeSession continues an existing session and verifies the session id.
+	// ResumeSession continues an existing session.
 	ResumeSession(ctx context.Context, sessionID, message string) (ResumeResult, error)
 }
 
@@ -416,13 +376,15 @@ func sortSessions(sessions []Session) {
 // ParseReportedCost reads the cost the CLI reported for a turn, or nil when it
 // reported none.
 //
-// The handoff's human block carries no price, so the only source is a JSON result
-// object the CLI prints alongside it — `{"type":"result","total_cost_usd":0.42}`.
-// It is scanned line by line rather than decoded as one document, because the
-// block and the result can share stdout. A value that is not a finite,
-// non-negative number reads as *unknown* rather than zero (R10): a zero would make
-// an unmeasured attempt look free, and a negative or absurd figure could move a
-// session past or below a cap.
+// The blocking resume prints the turn, and nothing in that output is priced, so
+// nil is the ordinary answer rather than a failure. The one shape worth scanning
+// for is a JSON result object printed alongside it —
+// `{"type":"result","total_cost_usd":0.42}` — because that is where the CLI has
+// ever stated a figure. It is scanned line by line rather than decoded as one
+// document, because the prose and the result can share stdout. A value that is
+// not a finite, non-negative number reads as *unknown* rather than zero (R10): a
+// zero would make an unmeasured attempt look free, and a negative or absurd
+// figure could move a session past or below a cap.
 func ParseReportedCost(stdout []byte) *float64 {
 	for _, line := range strings.Split(string(stdout), "\n") {
 		trimmed := strings.TrimSpace(line)

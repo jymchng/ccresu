@@ -7,16 +7,16 @@ import (
 	"testing"
 )
 
-// TestOneConfigDirIsUsedForReadAndHandoff is R9's acceptance test.
+// TestOneConfigDirIsUsedForReadAndResume is R9's acceptance test.
 //
 // CLAUDE_CONFIG_DIR makes separate Claude Code instances, each with its own
-// supervisor. ccresu reads one supervisor's listing and hands the continuation to
-// a supervisor, so if those two disagree it can observe a session nobody is
-// running and hand off to an instance that has never heard of it. The only fixed
-// point is the config directory, and it has to be the same value for both the
-// read and the handoff — resolved once, by the provider, and passed explicitly
-// rather than inherited from however the daemon happened to be started.
-func TestOneConfigDirIsUsedForReadAndHandoff(t *testing.T) {
+// session history. ccresu reads one instance's sessions and resumes through an
+// instance, so if those two disagree it can observe a session nobody owns and
+// resume into a store that has never heard of it. The only fixed point is the
+// config directory, and it has to be the same value for both the read and the
+// resume — resolved once, by the provider, and passed explicitly rather than
+// inherited from however the daemon happened to be started.
+func TestOneConfigDirIsUsedForReadAndResume(t *testing.T) {
 	home := t.TempDir()
 	resolved, err := filepath.Abs(home)
 	if err != nil {
@@ -31,8 +31,8 @@ func TestOneConfigDirIsUsedForReadAndHandoff(t *testing.T) {
 			return Output{Stdout: []byte("2.1.300 (Claude Code)\n")}, nil
 		case len(call.Args) > 0 && call.Args[0] == "agents":
 			return Output{Stdout: []byte("[]")}, nil
-		case len(call.Args) > 0 && call.Args[0] == "--bg":
-			return Output{Stdout: []byte("backgrounded · 837eaaea · ccresu-3f1e2c7a\n")}, nil
+		case len(call.Args) > 0 && call.Args[0] == "--resume":
+			return Output{Stdout: []byte(testResumeOutput)}, nil
 		}
 		return Output{}, nil
 	})
@@ -53,7 +53,7 @@ func TestOneConfigDirIsUsedForReadAndHandoff(t *testing.T) {
 		t.Fatalf("resume: %v", err)
 	}
 
-	readDir, handoffDir := "", ""
+	readDir, resumeDir := "", ""
 	for _, call := range seen {
 		if len(call.Args) == 0 {
 			continue
@@ -71,16 +71,16 @@ func TestOneConfigDirIsUsedForReadAndHandoff(t *testing.T) {
 		switch call.Args[0] {
 		case "agents":
 			readDir = envValue(call.Options.Env, EnvConfigDir)
-		case "--bg":
-			handoffDir = envValue(call.Options.Env, EnvConfigDir)
+		case "--resume":
+			resumeDir = envValue(call.Options.Env, EnvConfigDir)
 		}
 	}
-	if readDir == "" || handoffDir == "" {
-		t.Fatalf("read dir = %q, handoff dir = %q, want both recorded", readDir, handoffDir)
+	if readDir == "" || resumeDir == "" {
+		t.Fatalf("read dir = %q, resume dir = %q, want both recorded", readDir, resumeDir)
 	}
-	if readDir != handoffDir {
-		t.Errorf("the state read used %q and the handoff used %q: two supervisors, one of them wrong",
-			readDir, handoffDir)
+	if readDir != resumeDir {
+		t.Errorf("the state read used %q and the resume used %q: two Claude Code instances, one of them wrong",
+			readDir, resumeDir)
 	}
 }
 
