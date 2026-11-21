@@ -1,0 +1,341 @@
+2:"$Sreact.fragment"
+3:"/ccresu/_next/static/chunks/0dw1mf90hcdh9.js"
+4:"/ccresu/_next/static/chunks/3qa2i2132mew8.js"
+5:I[39756,["$3","$4"],"default"]
+6:I[37457,["$3","$4"],"default"]
+e:"/ccresu/_next/static/chunks/36op2qod1-5b_.js"
+f:"/ccresu/_next/static/chunks/3c8nlnkx-r9vh.js"
+10:I[22016,["$3","$4","$e","$f"],""]
+19:"ViewportBoundary"
+1a:I[97367,["$3","$4"],"$19"]
+1b:"MetadataBoundary"
+1c:I[97367,["$3","$4"],"$1b"]
+1d:"$Sreact.suspense"
+8:X
+8:C
+9:X
+d:T460,{"@context":"https://schema.org","@graph":[{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://jymchng.github.io/ccresu/"},{"@type":"ListItem","position":2,"name":"Documentation","item":"https://jymchng.github.io/ccresu/docs/"},{"@type":"ListItem","position":3,"name":"How recovery works","item":"https://jymchng.github.io/ccresu/docs/recovery/"}]},{"@context":"https://schema.org","@type":"TechArticle","headline":"How recovery works","description":"From the limit banner to a continued turn: what ccresu detects, what it runs, and how the result is decided.","url":"https://jymchng.github.io/ccresu/docs/recovery/","mainEntityOfPage":{"@type":"WebPage","@id":"https://jymchng.github.io/ccresu/docs/recovery/"},"inLanguage":"en","isPartOf":{"@type":"WebSite","name":"ccresu","url":"https://jymchng.github.io/ccresu/"},"author":{"@type":"Person","name":"jymchng","url":"https://github.com/jymchng"},"publisher":{"@type":"Person","name":"jymchng","url":"https://github.com/jymchng"},"license":"https://opensource.org/license/mit/"}]}c:[["children",{"s":"__PAGE__","h":160,"d":{"r":["$","$2","c",{"children":[["$","div",null,{"className":"mx-auto grid w-full max-w-6xl gap-10 px-4 py-10 sm:px-6 lg:grid-cols-[220px_1fr]","children":[["$","script",null,{"type":"application/ld+json","dangerouslySetInnerHTML":{"__html":"$d"}}],["$","aside",null,{"className":"hidden lg:block","children":["$","div",null,{"className":"sticky top-20","children":["$","nav",null,{"aria-label":"Documentation","className":"flex flex-col gap-1","children":[["$","p",null,{"className":"px-2 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground","children":"Documentation"}],[["$","$L10","installation",{"href":"/docs/installation/","className":"flex min-h-11 items-center rounded-md px-2 text-sm transition-colors text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground","children":"Installation"}],["$","$L10","tutorial",{"href":"/docs/tutorial/","className":"flex min-h-11 items-center rounded-md px-2 text-sm transition-colors text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground","children":"Tutorial: your first recovered session"}],["$","$L10","configuration",{"href":"/docs/configuration/","className":"flex min-h-11 items-center rounded-md px-2 text-sm transition-colors text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground","children":"Configuration"}],["$","$L10","cli",{"href":"/docs/cli/","className":"flex min-h-11 items-center rounded-md px-2 text-sm transition-colors text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground","children":"CLI reference"}],["$","$L10","recovery",{"href":"/docs/recovery/","aria-current":"page","className":"flex min-h-11 items-center rounded-md px-2 text-sm transition-colors bg-accent font-medium text-accent-foreground","children":"How recovery works"}],["$","$L10","telegram",{"href":"/docs/telegram/","className":"flex min-h-11 items-center rounded-md px-2 text-sm transition-colors text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground","children":"Telegram notifications"}],["$","$L10","deployment",{"href":"/docs/deployment/","className":"flex min-h-11 items-center rounded-md px-2 text-sm transition-colors text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground","children":"Deployment"}],["$","$L10","security",{"href":"/docs/security/","className":"flex min-h-11 items-center rounded-md px-2 text-sm transition-colors text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground","children":"Security"}],"$L11","$L12"]]}]}]}],"$L13","$L14"]}],["$L15","$L16"],"$L17"]}],"p":"$@18","v":null,"s":"$9"}}]]
+a:[["children",{"s":"recovery","h":96,"d":{"r":["$","$2","c",{"children":[null,["$","$L5",null,{"parallelRouterKey":"children","template":["$","$L6",null,{}]}]]}],"p":"$@b","v":"$8","s":"$9"},"c":"$Qc"}]]
+1:[["children",{"s":"docs","h":64,"d":{"r":["$","$2","c",{"children":[null,["$","$L5",null,{"parallelRouterKey":"children","template":["$","$L6",null,{}]}]]}],"p":"$@7","v":"$8","s":"$9"},"c":"$Qa"}]]
+0:{"t":{"t":{"s":"","h":16,"c":"$Q1"},"h":{"r":["$","$2","h",{"children":[null,["$","$L1a",null,{"children":[["$","meta","0",{"charSet":"utf-8"}],["$","meta","1",{"name":"viewport","content":"width=device-width, initial-scale=1"}]]}],["$","$L1c",null,{"children":[["$","div",null,{"hidden":true,"children":["$","$1d",null,{"name":"Next.Metadata","children":[["$","title","0",{"children":"How recovery works · ccresu"}],["$","meta","1",{"name":"description","content":"From the limit banner to a continued turn: what ccresu detects, what it runs, and how the result is decided."}],["$","meta","2",{"name":"application-name","content":"ccresu"}],["$","link","3",{"rel":"author","href":"https://github.com/jymchng/ccresu"}],["$","meta","4",{"name":"author","content":"jymchng"}],["$","meta","5",{"name":"keywords","content":"Claude Code,usage limit,session resume,developer tooling,ccresu"}],["$","meta","6",{"name":"referrer","content":"strict-origin-when-cross-origin"}],["$","meta","7",{"name":"creator","content":"jymchng"}],["$","meta","8",{"name":"robots","content":"index, follow"}],["$","link","9",{"rel":"canonical","href":"https://jymchng.github.io/ccresu/docs/recovery/"}],["$","link","10",{"rel":"alternate","hrefLang":"en","href":"https://jymchng.github.io/ccresu/docs/recovery/"}],["$","link","11",{"rel":"alternate","hrefLang":"x-default","href":"https://jymchng.github.io/ccresu/docs/recovery/"}],["$","meta","12",{"name":"format-detection","content":"telephone=no, address=no, email=no"}],["$","meta","13",{"property":"og:title","content":"How recovery works · ccresu"}],["$","meta","14",{"property":"og:description","content":"From the limit banner to a continued turn: what ccresu detects, what it runs, and how the result is decided."}],["$","meta","15",{"property":"og:url","content":"https://jymchng.github.io/ccresu/docs/recovery/"}],["$","meta","16",{"property":"og:site_name","content":"ccresu"}],["$","meta","17",{"property":"og:locale","content":"en"}],["$","meta","18",{"property":"og:type","content":"article"}],["$","meta","19",{"name":"twitter:card","content":"summary"}],["$","meta","20",{"name":"twitter:title","content":"How recovery works · ccresu"}],["$","meta","21",{"name":"twitter:description","content":"From the limit banner to a continued turn: what ccresu detects, what it runs, and how the result is decided."}]]}]}],null]}],null]}],"p":"$@1e","v":null,"s":"$9"}},"a":"$@1f","u":"$@20","b":"DJpguw-ZrB_0vneZx67Xu"}
+21:I[44913,["$3","$4","$e","$f"],"DocsMenu"]
+22:I[5014,["$3","$4","$e","$f"],"default"]
+23:I[90856,["$3","$4","$e","$f"],"CopyMarkdown"]
+27:I[97367,["$3","$4"],"OutletBoundary"]
+11:["$","$L10","troubleshooting",{"href":"/docs/troubleshooting/","className":"flex min-h-11 items-center rounded-md px-2 text-sm transition-colors text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground","children":"Troubleshooting"}]
+12:["$","$L10","limitations",{"href":"/docs/limitations/","className":"flex min-h-11 items-center rounded-md px-2 text-sm transition-colors text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground","children":"Known limitations"}]
+13:["$","$L21",null,{"activeSlug":"recovery"}]
+24:T2005,# How recovery works
+
+> From the limit banner to a continued turn: what ccresu detects, what it runs, and how the result is decided.
+
+ccresu watches the sessions Claude Code is running. When a session prints a limit banner, ccresu parses the reset time out of the banner, waits until that moment has passed, and then continues the same conversation with one `claude` command. The session keeps its own transcript, its own working directory and its own name; nothing is forked, copied or restarted under a new identity.
+
+## What a recovery actually runs
+
+A pass reads discovery (`claude agents --json`) and the session transcript to decide whether a live session is blocked on a limit, then issues a single command. Nothing else is invoked, and no new session is ever started in place of the original one.
+
+The resume command:
+
+```sh
+claude --resume <session-id> "<continuation message>"
+```
+
+- `--resume <session-id>` continues the conversation that already exists. The identifier is the one discovery reported for the blocked session.
+- The continuation message is a positional argument and comes last. It defaults to the configured `claude.continuation_message` and can be overridden per session.
+- The resume runs in the session's own working directory — a git worktree included — so relative paths and project configuration still apply.
+- The process runs to the end of the turn in the foreground of the pass. ccresu does not background it, name it, or leave another process holding it.
+
+**Figure: One resume, from the invocation to the verdict**
+
+Two steps and nothing in between: ccresu runs `claude --resume` in the session's own directory, waits for the turn, and reads the exit status as the verdict. There is no acceptance block and no separate observation afterwards.
+
+(An SVG diagram on the page; it is not reproduced in text. See https://jymchng.github.io/ccresu/docs/.)
+
+## Why the message is the last argument
+
+The prompt is a positional argument: no flag introduces it. Position is the only thing that says which invocation is being made, so the message closes the vector. Anything appended after it would be read by `claude` as part of the prompt.
+
+## How the outcome is decided
+
+The exit status is the verdict. A resume that finishes with status 0 has continued the session; there is no acceptance block to parse and no state to poll afterwards.
+
+- Exit status 0 marks the attempt as recovered and the session as running again.
+- A non-zero exit status is a failed attempt. The failure is recorded with its exit code and stderr, and the session is scheduled for another attempt with backoff and jitter.
+- `recovery.turn_timeout` (30m by default) bounds the whole turn. A resume that overruns it is killed and treated as a failed attempt.
+- The two spend caps, `recovery.guardrails.max_cost_usd_per_session` and `recovery.guardrails.max_cost_usd_per_attempt`, still apply. A session that reaches the per-session cap is not resumed again; an attempt that would exceed the per-attempt cap is refused before it starts.
+- A session that is still stopped when the next pass runs is simply eligible again: there is no separate state machine between the resume and the next detection.
+
+**Figure: The chain, the retry loop and the two ways out**
+
+Discovery leads to detection, then to the wait for the reset instant, then to one resume. A failed attempt returns to the session check while budget remains; a settled session, or one an operator disabled, leaves the chain.
+
+(An SVG diagram on the page; it is not reproduced in text. See https://jymchng.github.io/ccresu/docs/.)
+
+## Proving it end to end
+
+This is not only asserted against fakes. `make e2e` builds the binary, points it at a stub `claude` executable on `PATH`, and checks the exit status of the process ccresu started and the bytes that were written to the stub's argument log.
+
+- `TestResumeArgsIsExactlyTheVerifiedOne` (`internal/claude/cli_test.go`) compares the vector against `--resume <session-id> <message>` element by element for several messages — including `-p` and one containing a newline — so a reordering, an added flag or a dropped message fails a test instead of puzzling someone at runtime.
+- `TestNoRecoveryArgumentCarriesPrintMode` walks that same vector and fails on `-p`, `--print`, any output-format flag, or a leading bare `--`, so print mode cannot come back beside the resume.
+- The end-to-end run keeps three stub sessions: one that exits 0 and grows the transcript, one that exits 0 without growing anything, and one the API refuses with status 1. All three are judged by the exit status alone — a refusal is recorded as `failed (exit 1)` with the stub's stderr and returns the session to discovery, where the next pass re-reads the transcript instead of reading the failure as a verdict on the conversation.
+
+**The end-to-end proof** (from `make e2e`)
+
+```console
+
+== pass 1: discover, opt in, then `ccresu recover` each session
+reconcile pass complete (3 sessions)
+reconcile pass complete (3 sessions)
+--- recover aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa
+session:       aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa
+state:         RESUMED
+resumed:       yes
+attempt:       1
+verification:  proven: the resume finished its turn and the transcript grew
+when:          (captured-at)
+--- recover bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb
+ccresu: recover bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb: recovery: session bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb ended its cycle in DISCOVERED: resume session bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb: claude --resume failed (exit 1): Invalid API key · Please run /login: claude: exit status 1
+--- recover cccccccc-3333-4333-8333-cccccccccccc
+session:       cccccccc-3333-4333-8333-cccccccccccc
+state:         RESUMED
+resumed:       yes
+attempt:       1
+verification:  proven: the resume finished its turn
+when:          (captured-at)
+ok    the resume vector is --resume <id> "<message>" and nothing else
+ok    every resume was exactly three arguments
+ok    no call carried a retired flag
+ok    no stop was issued
+ok    no supervisor was asked for
+ok    recover A exits 0
+ok    session A ends RESUMED
+ok    recover A is proven by the exit status
+ok    the resume ran exactly once for A
+ok    recover B is refused (exit 1)
+ok    the refused resume was attempted exactly once for B
+ok    session B is rediscovered
+ok    the refusal records the exit status
+ok    the refusal keeps the stub's stderr
+ok    recover C exits 0
+ok    session C ends RESUMED without the transcript growing
+ok    C's verdict is the exit status
+ok    C's verification does not claim growth
+ok    the resume ran exactly once for C
+ok    history records the resume as the success
+ok    the audit row keeps the resume command
+ok    the audit row records the growth the measurement found
+ok    the audit row carries no handoff state id
+ok    the audit row carries no handoff label
+ok    the audit row carries no supervisor acceptance
+ok    C's audit row says the transcript did not grow
+
+== the stub claude call log
+CALL --version
+CALL agents --json --all
+CALL --version
+CALL agents --json --all
+CALL --version
+CALL agents --json --all
+CALL agents --json --all
+CALL --resume aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa continue the existing goal
+CALL agents --json --all
+CALL --version
+CALL agents --json --all
+CALL agents --json --all
+CALL --resume bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb continue the existing goal
+CALL agents --json --all
+CALL --version
+CALL agents --json --all
+CALL agents --json --all
+CALL --resume cccccccc-3333-4333-8333-cccccccccccc continue the existing goal
+CALL agents --json --all
+
+== pass 2: the retired commands are gone
+ok    ccresu reset is an unknown command
+ok    ccresu sessions clear is an unknown subcommand
+
+PASSED: one resume per session, and its exit status is the verdict
+```
+
+The end-to-end proof, verbatim: each session gets one blocking `claude --resume <session-id> "<message>"` and nothing else, a stub that exits 0 marks the session recovered, a stub that exits 1 records the failure, and one whose turn leaves the transcript untouched is still recovered -- because the exit status is the verdict, not the growth.
+
+Source: https://jymchng.github.io/ccresu/docs/recovery/
+14:["$","article",null,{"className":"min-w-0","children":[["$","nav",null,{"aria-label":"Breadcrumb","className":"mb-4 flex flex-wrap items-center gap-1 text-xs text-muted-foreground","children":[["$","$L10",null,{"href":"/docs/","className":"-ml-2 flex min-h-11 min-w-11 items-center px-2 hover:text-foreground","children":"Docs"}],["$","$L22",null,{"icon":{"name":"chevron-right","size":24,"node":[["path",{"d":"m9 18 6-6-6-6","key":"mthhwq"}]]},"className":"size-3","aria-hidden":"true"}],["$","span",null,{"aria-current":"page","className":"text-foreground","children":"How recovery works"}]]}],["$","h1",null,{"className":"text-3xl font-bold tracking-tight","children":"How recovery works"}],["$","p",null,{"className":"mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground","children":"From the limit banner to a continued turn: what ccresu detects, what it runs, and how the result is decided."}],["$","div",null,{"className":"mt-4","children":["$","$L23",null,{"markdown":"$24","filename":"ccresu-docs-recovery.md"}]}],"$L25","$L26"]}]
+15:["$","script","script-0",{"src":"/ccresu/_next/static/chunks/36op2qod1-5b_.js","async":true}]
+16:["$","script","script-1",{"src":"/ccresu/_next/static/chunks/3c8nlnkx-r9vh.js","async":true}]
+17:["$","$L27",null,{"children":["$","$1d",null,{"name":"Next.MetadataOutlet","children":"$@28"}]}]
+20:true
+29:I[3348,["$3","$4","$e","$f"],"CopyButton"]
+9:300
+25:["$","div",null,{"className":"mt-8","children":["$","div",null,{"className":"flex flex-col gap-5","children":[["$","p","0",{"className":"text-sm leading-relaxed text-muted-foreground","children":[["$","span","0",{"className":"[overflow-wrap:anywhere]","children":"ccresu watches the sessions Claude Code is running. When a session prints a limit banner, ccresu parses the reset time out of the banner, waits until that moment has passed, and then continues the same conversation with one "}],["$","code","1",{"className":"rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground [overflow-wrap:anywhere]","children":"claude"}],["$","span","2",{"className":"[overflow-wrap:anywhere]","children":" command. The session keeps its own transcript, its own working directory and its own name; nothing is forked, copied or restarted under a new identity."}]]}],["$","h2","1",{"className":"mt-4 scroll-mt-24 text-xl font-semibold tracking-tight","children":"What a recovery actually runs"}],["$","p","2",{"className":"text-sm leading-relaxed text-muted-foreground","children":[["$","span","0",{"className":"[overflow-wrap:anywhere]","children":"A pass reads discovery ("}],["$","code","1",{"className":"rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground [overflow-wrap:anywhere]","children":"claude agents --json"}],["$","span","2",{"className":"[overflow-wrap:anywhere]","children":") and the session transcript to decide whether a live session is blocked on a limit, then issues a single command. Nothing else is invoked, and no new session is ever started in place of the original one."}]]}],["$","figure","3",{"className":"overflow-hidden rounded-xl border border-border bg-card","children":[["$","figcaption",null,{"className":"flex items-center justify-between gap-3 border-b border-border bg-muted/40 px-4 py-2 text-xs font-medium text-muted-foreground","children":[["$","span",null,{"children":"The resume command"}],["$","$L29",null,{"value":"claude --resume <session-id> \"<continuation message>\""}]]}],["$","pre",null,{"className":"overflow-x-auto p-4 text-xs leading-relaxed","children":["$","code",null,{"className":"font-mono text-muted-foreground","children":"claude --resume <session-id> \"<continuation message>\""}]}]]}],["$","ul","4",{"className":"flex flex-col gap-2 pl-5","children":[["$","li","0",{"className":"list-disc text-sm leading-relaxed text-muted-foreground marker:text-border","children":[["$","span","0",{"className":"[overflow-wrap:anywhere]","children":""}],["$","code","1",{"className":"rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground [overflow-wrap:anywhere]","children":"--resume <session-id>"}],["$","span","2",{"className":"[overflow-wrap:anywhere]","children":" continues the conversation that already exists. The identifier is the one discovery reported for the blocked session."}]]}],["$","li","1",{"className":"list-disc text-sm leading-relaxed text-muted-foreground marker:text-border","children":[["$","span","0",{"className":"[overflow-wrap:anywhere]","children":"The continuation message is a positional argument and comes last. It defaults to the configured "}],["$","code","1",{"className":"rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground [overflow-wrap:anywhere]","children":"claude.continuation_message"}],["$","span","2",{"className":"[overflow-wrap:anywhere]","children":" and can be overridden per session."}]]}],["$","li","2",{"className":"list-disc text-sm leading-relaxed text-muted-foreground marker:text-border","children":[["$","span","0",{"className":"[overflow-wrap:anywhere]","children":"The resume runs in the session's own working directory — a git worktree included — so relative paths and project configuration still apply."}]]}],["$","li","3",{"className":"list-disc text-sm leading-relaxed text-muted-foreground marker:text-border","children":"$L2a"}]]}],"$L2b","$L2c","$L2d","$L2e","$L2f","$L30","$L31","$L32","$L33","$L34","$L35"]}]}]
+26:["$","div",null,{"className":"mt-12 flex flex-wrap justify-between gap-3 border-t border-border pt-6 text-sm","children":[["$","$L10",null,{"href":"/docs/cli/","className":"flex min-h-11 items-center text-muted-foreground hover:text-foreground","children":["← ","CLI reference"]}],["$","$L10",null,{"href":"/docs/telegram/","className":"flex min-h-11 items-center text-muted-foreground hover:text-foreground","children":["Telegram notifications"," →"]}]]}]
+28:null
+9:C
+2a:[["$","span","0",{"className":"[overflow-wrap:anywhere]","children":"The process runs to the end of the turn in the foreground of the pass. ccresu does not background it, name it, or leave another process holding it."}]]
+2b:["$","figure","5",{"aria-labelledby":"diagram-resume-caption","className":"overflow-hidden rounded-xl border border-border bg-card p-3 sm:p-4","children":[["$","div",null,{"className":"overflow-x-auto","children":["$","svg",null,{"role":"img","aria-labelledby":"diagram-resume-title","aria-describedby":"diagram-resume-desc","viewBox":"0 0 340 266","className":"mx-auto h-auto w-full max-w-[22rem]","preserveAspectRatio":"xMidYMid meet","children":[["$","title",null,{"id":"diagram-resume-title","children":"One resume, from the invocation to the verdict"}],["$","desc",null,{"id":"diagram-resume-desc","children":"Two steps and nothing in between: ccresu runs `claude --resume` in the session's own directory, waits for the turn, and reads the exit status as the verdict. There is no acceptance block and no separate observation afterwards."}],["$","defs",null,{"children":["$","marker",null,{"id":"diagram-resume-arrow","viewBox":"0 0 10 10","refX":"8","refY":"5","markerWidth":"6","markerHeight":"6","orient":"auto-start-reverse","children":["$","path",null,{"d":"M 0 0 L 10 5 L 0 10 z","fill":"var(--muted-foreground)"}]}]}],[["$","g","step-0",{"children":[["$","rect",null,{"x":20,"y":8,"width":300,"height":56,"rx":"8","fill":"var(--card)","stroke":"var(--border)"}],[["$","text","0",{"x":170,"y":28,"textAnchor":"middle","fontSize":"11.5","fill":"var(--foreground)","className":"font-mono","children":"claude --resume <session-id>"}],["$","text","1",{"x":170,"y":44,"textAnchor":"middle","fontSize":"11.5","fill":"var(--foreground)","className":"font-mono","children":"\"<continuation message>\""}]]]}],["$","line","arrow-0",{"x1":170,"y1":64,"x2":170,"y2":81,"stroke":"var(--muted-foreground)","strokeWidth":"1.25","markerEnd":"url(#diagram-resume-arrow)"}],["$","text","note-0-0",{"x":170,"y":94,"textAnchor":"middle","fontSize":"9.5","fill":"var(--muted-foreground)","children":"one invocation, in the session's own"}],["$","text","note-0-1",{"x":170,"y":107,"textAnchor":"middle","fontSize":"9.5","fill":"var(--muted-foreground)","children":"working directory, never the daemon's"}],["$","g","step-1",{"children":[["$","rect",null,{"x":20,"y":118,"width":300,"height":40,"rx":"8","fill":"var(--card)","stroke":"var(--border)"}],[["$","text","0",{"x":170,"y":138,"textAnchor":"middle","fontSize":"11.5","fill":"var(--foreground)","className":"font-mono","children":"exit status 0"}]]]}],["$","line","arrow-1",{"x1":170,"y1":158,"x2":170,"y2":175,"stroke":"var(--muted-foreground)","strokeWidth":"1.25","markerEnd":"url(#diagram-resume-arrow)"}],["$","text","note-1-0",{"x":170,"y":188,"textAnchor":"middle","fontSize":"9.5","fill":"var(--muted-foreground)","children":"the verdict, read from the process:"}],["$","text","note-1-1",{"x":170,"y":201,"textAnchor":"middle","fontSize":"9.5","fill":"var(--muted-foreground)","children":"nothing else is consulted"}]],["$","rect",null,{"x":20,"y":212,"width":300,"height":46,"rx":"8","fill":"var(--card)","stroke":"var(--primary)"}],["$","text",null,{"x":170,"y":232,"textAnchor":"middle","fontSize":"12","fill":"var(--primary)","className":"font-mono","children":"RESUMED"}],["$","text",null,{"x":170,"y":248,"textAnchor":"middle","fontSize":"9.5","fill":"var(--muted-foreground)","children":"the turn ran and exited zero"}]]}]}],["$","figcaption",null,{"id":"diagram-resume-caption","className":"mt-3 flex flex-col gap-1 border-t border-border pt-3","children":[["$","span",null,{"className":"text-xs font-semibold text-foreground","children":"One resume, from the invocation to the verdict"}],["$","span",null,{"className":"text-xs leading-relaxed text-muted-foreground","children":"Two steps and nothing in between: ccresu runs `claude --resume` in the session's own directory, waits for the turn, and reads the exit status as the verdict. There is no acceptance block and no separate observation afterwards."}]]}]]}]
+2c:["$","h2","6",{"className":"mt-4 scroll-mt-24 text-xl font-semibold tracking-tight","children":"Why the message is the last argument"}]
+2d:["$","p","7",{"className":"text-sm leading-relaxed text-muted-foreground","children":[["$","span","0",{"className":"[overflow-wrap:anywhere]","children":"The prompt is a positional argument: no flag introduces it. Position is the only thing that says which invocation is being made, so the message closes the vector. Anything appended after it would be read by "}],["$","code","1",{"className":"rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground [overflow-wrap:anywhere]","children":"claude"}],["$","span","2",{"className":"[overflow-wrap:anywhere]","children":" as part of the prompt."}]]}]
+2e:["$","h2","8",{"className":"mt-4 scroll-mt-24 text-xl font-semibold tracking-tight","children":"How the outcome is decided"}]
+2f:["$","p","9",{"className":"text-sm leading-relaxed text-muted-foreground","children":[["$","span","0",{"className":"[overflow-wrap:anywhere]","children":"The exit status is the verdict. A resume that finishes with status 0 has continued the session; there is no acceptance block to parse and no state to poll afterwards."}]]}]
+30:["$","ul","10",{"className":"flex flex-col gap-2 pl-5","children":[["$","li","0",{"className":"list-disc text-sm leading-relaxed text-muted-foreground marker:text-border","children":[["$","span","0",{"className":"[overflow-wrap:anywhere]","children":"Exit status 0 marks the attempt as recovered and the session as running again."}]]}],["$","li","1",{"className":"list-disc text-sm leading-relaxed text-muted-foreground marker:text-border","children":[["$","span","0",{"className":"[overflow-wrap:anywhere]","children":"A non-zero exit status is a failed attempt. The failure is recorded with its exit code and stderr, and the session is scheduled for another attempt with backoff and jitter."}]]}],["$","li","2",{"className":"list-disc text-sm leading-relaxed text-muted-foreground marker:text-border","children":[["$","span","0",{"className":"[overflow-wrap:anywhere]","children":""}],["$","code","1",{"className":"rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground [overflow-wrap:anywhere]","children":"recovery.turn_timeout"}],["$","span","2",{"className":"[overflow-wrap:anywhere]","children":" (30m by default) bounds the whole turn. A resume that overruns it is killed and treated as a failed attempt."}]]}],["$","li","3",{"className":"list-disc text-sm leading-relaxed text-muted-foreground marker:text-border","children":[["$","span","0",{"className":"[overflow-wrap:anywhere]","children":"The two spend caps, "}],["$","code","1",{"className":"rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground [overflow-wrap:anywhere]","children":"recovery.guardrails.max_cost_usd_per_session"}],["$","span","2",{"className":"[overflow-wrap:anywhere]","children":" and "}],["$","code","3",{"className":"rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground [overflow-wrap:anywhere]","children":"recovery.guardrails.max_cost_usd_per_attempt"}],["$","span","4",{"className":"[overflow-wrap:anywhere]","children":", still apply. A session that reaches the per-session cap is not resumed again; an attempt that would exceed the per-attempt cap is refused before it starts."}]]}],["$","li","4",{"className":"list-disc text-sm leading-relaxed text-muted-foreground marker:text-border","children":[["$","span","0",{"className":"[overflow-wrap:anywhere]","children":"A session that is still stopped when the next pass runs is simply eligible again: there is no separate state machine between the resume and the next detection."}]]}]]}]
+31:["$","figure","11",{"aria-labelledby":"diagram-state-machine-caption","className":"overflow-hidden rounded-xl border border-border bg-card p-3 sm:p-4","children":[["$","div",null,{"className":"overflow-x-auto","children":["$","svg",null,{"role":"img","aria-labelledby":"diagram-state-machine-title","aria-describedby":"diagram-state-machine-desc","viewBox":"0 0 340 310","className":"mx-auto h-auto w-full max-w-[22rem]","preserveAspectRatio":"xMidYMid meet","children":[["$","title",null,{"id":"diagram-state-machine-title","children":"The chain, the retry loop and the two ways out"}],["$","desc",null,{"id":"diagram-state-machine-desc","children":"Discovery leads to detection, then to the wait for the reset instant, then to one resume. A failed attempt returns to the session check while budget remains; a settled session, or one an operator disabled, leaves the chain."}],["$","defs",null,{"children":[["$","marker",null,{"id":"diagram-state-machine-solid","viewBox":"0 0 10 10","refX":"8","refY":"5","markerWidth":"6","markerHeight":"6","orient":"auto-start-reverse","children":["$","path",null,{"d":"M 0 0 L 10 5 L 0 10 z","fill":"var(--muted-foreground)"}]}],["$","marker",null,{"id":"diagram-state-machine-dashed","viewBox":"0 0 10 10","refX":"8","refY":"5","markerWidth":"6","markerHeight":"6","orient":"auto-start-reverse","children":["$","path",null,{"d":"M 0 0 L 10 5 L 0 10 z","fill":"var(--muted-foreground)"}]}]]}],[["$","g","DISCOVERED",{"children":[["$","rect",null,{"x":20,"y":8,"width":230,"height":34,"rx":"8","fill":"var(--card)","stroke":"var(--border)"}],["$","text",null,{"x":135,"y":29,"textAnchor":"middle","fontSize":"12","fill":"var(--foreground)","className":"font-mono","children":"DISCOVERED"}],["$","line",null,{"x1":135,"y1":42,"x2":135,"y2":57,"stroke":"var(--muted-foreground)","strokeWidth":"1.25","markerEnd":"url(#diagram-state-machine-solid)"}]]}],["$","g","WAITING_FOR_RESET",{"children":[["$","rect",null,{"x":20,"y":60,"width":230,"height":34,"rx":"8","fill":"var(--card)","stroke":"var(--border)"}],["$","text",null,{"x":135,"y":81,"textAnchor":"middle","fontSize":"12","fill":"var(--foreground)","className":"font-mono","children":"WAITING_FOR_RESET"}],["$","line",null,{"x1":135,"y1":94,"x2":135,"y2":109,"stroke":"var(--muted-foreground)","strokeWidth":"1.25","markerEnd":"url(#diagram-state-machine-solid)"}]]}],["$","g","RESUMING",{"children":[["$","rect",null,{"x":20,"y":112,"width":230,"height":34,"rx":"8","fill":"var(--card)","stroke":"var(--border)"}],["$","text",null,{"x":135,"y":133,"textAnchor":"middle","fontSize":"12","fill":"var(--foreground)","className":"font-mono","children":"RESUMING"}],null]}]],["$","polyline",null,{"points":"250,129 300,129 300,77 253,77","fill":"none","stroke":"var(--muted-foreground)","strokeWidth":"1.25","strokeDasharray":"5 4","markerEnd":"url(#diagram-state-machine-dashed)"}],["$","line",null,{"x1":135,"y1":146,"x2":72,"y2":165,"stroke":"var(--muted-foreground)","strokeWidth":"1.25","markerEnd":"url(#diagram-state-machine-solid)"}],["$","rect",null,{"x":20,"y":168,"width":104,"height":32,"rx":"8","fill":"var(--card)","stroke":"var(--primary)"}],["$","text",null,{"x":72,"y":188,"textAnchor":"middle","fontSize":"11.5","fill":"var(--primary)","className":"font-mono","children":"RESUMED"}],["$","line",null,{"x1":135,"y1":146,"x2":230,"y2":165,"stroke":"var(--muted-foreground)","strokeWidth":"1.25","strokeDasharray":"5 4","markerEnd":"url(#diagram-state-machine-dashed)"}],["$","rect",null,{"x":140,"y":168,"width":180,"height":32,"rx":"8","fill":"var(--card)","stroke":"var(--border)","strokeDasharray":"5 4"}],["$","text",null,{"x":230,"y":188,"textAnchor":"middle","fontSize":"11","fill":"var(--foreground)","className":"font-mono","children":"DISCOVERED"}],["$","line",null,{"x1":230,"y1":200,"x2":230,"y2":232,"stroke":"var(--muted-foreground)","strokeWidth":"1.25","strokeDasharray":"5 4","markerEnd":"url(#diagram-state-machine-dashed)"}],["$","text",null,{"x":222,"y":242,"textAnchor":"end","fontSize":"9.5","fill":"var(--muted-foreground)","className":"font-mono","children":"ccresu disable <id>"}],["$","rect",null,{"x":140,"y":244,"width":180,"height":32,"rx":"8","fill":"var(--card)","stroke":"var(--border)"}],["$","text",null,{"x":230,"y":264,"textAnchor":"middle","fontSize":"11","fill":"var(--foreground)","className":"font-mono","children":"DISABLED"}],["$","line",null,{"x1":20,"y1":294,"x2":52,"y2":294,"stroke":"var(--muted-foreground)","strokeWidth":"1.25","strokeDasharray":"5 4"}],["$","text",null,{"x":60,"y":297,"fontSize":"9.5","fill":"var(--muted-foreground)","children":"retry, or the operator edge"}]]}]}],["$","figcaption",null,{"id":"diagram-state-machine-caption","className":"mt-3 flex flex-col gap-1 border-t border-border pt-3","children":["$L36","$L37"]}]]}]
+32:["$","h2","12",{"className":"mt-4 scroll-mt-24 text-xl font-semibold tracking-tight","children":"Proving it end to end"}]
+33:["$","p","13",{"className":"text-sm leading-relaxed text-muted-foreground","children":[["$","span","0",{"className":"[overflow-wrap:anywhere]","children":"This is not only asserted against fakes. "}],["$","code","1",{"className":"rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground [overflow-wrap:anywhere]","children":"make e2e"}],["$","span","2",{"className":"[overflow-wrap:anywhere]","children":" builds the binary, points it at a stub "}],["$","code","3",{"className":"rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground [overflow-wrap:anywhere]","children":"claude"}],["$","span","4",{"className":"[overflow-wrap:anywhere]","children":" executable on "}],["$","code","5",{"className":"rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground [overflow-wrap:anywhere]","children":"PATH"}],["$","span","6",{"className":"[overflow-wrap:anywhere]","children":", and checks the exit status of the process ccresu started and the bytes that were written to the stub's argument log."}]]}]
+34:["$","ul","14",{"className":"flex flex-col gap-2 pl-5","children":[["$","li","0",{"className":"list-disc text-sm leading-relaxed text-muted-foreground marker:text-border","children":[["$","span","0",{"className":"[overflow-wrap:anywhere]","children":""}],["$","code","1",{"className":"rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground [overflow-wrap:anywhere]","children":"TestResumeArgsIsExactlyTheVerifiedOne"}],["$","span","2",{"className":"[overflow-wrap:anywhere]","children":" ("}],["$","code","3",{"className":"rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground [overflow-wrap:anywhere]","children":"internal/claude/cli_test.go"}],["$","span","4",{"className":"[overflow-wrap:anywhere]","children":") compares the vector against "}],["$","code","5",{"className":"rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground [overflow-wrap:anywhere]","children":"--resume <session-id> <message>"}],["$","span","6",{"className":"[overflow-wrap:anywhere]","children":" element by element for several messages — including "}],["$","code","7",{"className":"rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground [overflow-wrap:anywhere]","children":"-p"}],["$","span","8",{"className":"[overflow-wrap:anywhere]","children":" and one containing a newline — so a reordering, an added flag or a dropped message fails a test instead of puzzling someone at runtime."}]]}],["$","li","1",{"className":"list-disc text-sm leading-relaxed text-muted-foreground marker:text-border","children":[["$","span","0",{"className":"[overflow-wrap:anywhere]","children":""}],["$","code","1",{"className":"rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground [overflow-wrap:anywhere]","children":"TestNoRecoveryArgumentCarriesPrintMode"}],["$","span","2",{"className":"[overflow-wrap:anywhere]","children":" walks that same vector and fails on "}],["$","code","3",{"className":"rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground [overflow-wrap:anywhere]","children":"-p"}],["$","span","4",{"className":"[overflow-wrap:anywhere]","children":", "}],["$","code","5",{"className":"rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground [overflow-wrap:anywhere]","children":"--print"}],["$","span","6",{"className":"[overflow-wrap:anywhere]","children":", any output-format flag, or a leading bare "}],["$","code","7",{"className":"rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground [overflow-wrap:anywhere]","children":"--"}],["$","span","8",{"className":"[overflow-wrap:anywhere]","children":", so print mode cannot come back beside the resume."}]]}],["$","li","2",{"className":"list-disc text-sm leading-relaxed text-muted-foreground marker:text-border","children":[["$","span","0",{"className":"[overflow-wrap:anywhere]","children":"The end-to-end run keeps three stub sessions: one that exits 0 and grows the transcript, one that exits 0 without growing anything, and one the API refuses with status 1. All three are judged by the exit status alone — a refusal is recorded as "}],["$","code","1",{"className":"rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-foreground [overflow-wrap:anywhere]","children":"failed (exit 1)"}],["$","span","2",{"className":"[overflow-wrap:anywhere]","children":" with the stub's stderr and returns the session to discovery, where the next pass re-reads the transcript instead of reading the failure as a verdict on the conversation."}]]}]]}]
+38:Tb65,
+== pass 1: discover, opt in, then `ccresu recover` each session
+reconcile pass complete (3 sessions)
+reconcile pass complete (3 sessions)
+--- recover aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa
+session:       aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa
+state:         RESUMED
+resumed:       yes
+attempt:       1
+verification:  proven: the resume finished its turn and the transcript grew
+when:          (captured-at)
+--- recover bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb
+ccresu: recover bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb: recovery: session bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb ended its cycle in DISCOVERED: resume session bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb: claude --resume failed (exit 1): Invalid API key · Please run /login: claude: exit status 1
+--- recover cccccccc-3333-4333-8333-cccccccccccc
+session:       cccccccc-3333-4333-8333-cccccccccccc
+state:         RESUMED
+resumed:       yes
+attempt:       1
+verification:  proven: the resume finished its turn
+when:          (captured-at)
+ok    the resume vector is --resume <id> "<message>" and nothing else
+ok    every resume was exactly three arguments
+ok    no call carried a retired flag
+ok    no stop was issued
+ok    no supervisor was asked for
+ok    recover A exits 0
+ok    session A ends RESUMED
+ok    recover A is proven by the exit status
+ok    the resume ran exactly once for A
+ok    recover B is refused (exit 1)
+ok    the refused resume was attempted exactly once for B
+ok    session B is rediscovered
+ok    the refusal records the exit status
+ok    the refusal keeps the stub's stderr
+ok    recover C exits 0
+ok    session C ends RESUMED without the transcript growing
+ok    C's verdict is the exit status
+ok    C's verification does not claim growth
+ok    the resume ran exactly once for C
+ok    history records the resume as the success
+ok    the audit row keeps the resume command
+ok    the audit row records the growth the measurement found
+ok    the audit row carries no handoff state id
+ok    the audit row carries no handoff label
+ok    the audit row carries no supervisor acceptance
+ok    C's audit row says the transcript did not grow
+
+== the stub claude call log
+CALL --version
+CALL agents --json --all
+CALL --version
+CALL agents --json --all
+CALL --version
+CALL agents --json --all
+CALL agents --json --all
+CALL --resume aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa continue the existing goal
+CALL agents --json --all
+CALL --version
+CALL agents --json --all
+CALL agents --json --all
+CALL --resume bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb continue the existing goal
+CALL agents --json --all
+CALL --version
+CALL agents --json --all
+CALL agents --json --all
+CALL --resume cccccccc-3333-4333-8333-cccccccccccc continue the existing goal
+CALL agents --json --all
+
+== pass 2: the retired commands are gone
+ok    ccresu reset is an unknown command
+ok    ccresu sessions clear is an unknown subcommand
+
+PASSED: one resume per session, and its exit status is the verdict
+35:["$","figure","15",{"aria-labelledby":"capture-e2e-label","aria-describedby":"capture-e2e-description","data-capture":"e2e","className":"overflow-hidden rounded-xl border border-border bg-card","children":[["$","figcaption",null,{"id":"capture-e2e-label","className":"flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/40 px-3 py-2 sm:px-4","children":[["$","span",null,{"className":"text-xs font-medium text-muted-foreground","children":"The end-to-end proof"}],["$","span",null,{"className":"flex items-center gap-2","children":[["$","code",null,{"className":"rounded bg-background/60 px-1.5 py-0.5 font-mono text-[0.7rem] text-muted-foreground","children":"make e2e"}],["$","$L29",null,{"value":"$38"}]]}]]}],"$L39","$L3a"]}]
+36:["$","span",null,{"className":"text-xs font-semibold text-foreground","children":"The chain, the retry loop and the two ways out"}]
+37:["$","span",null,{"className":"text-xs leading-relaxed text-muted-foreground","children":"Discovery leads to detection, then to the wait for the reset instant, then to one resume. A failed attempt returns to the session check while budget remains; a settled session, or one an operator disabled, leaves the chain."}]
+3b:Tb65,
+== pass 1: discover, opt in, then `ccresu recover` each session
+reconcile pass complete (3 sessions)
+reconcile pass complete (3 sessions)
+--- recover aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa
+session:       aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa
+state:         RESUMED
+resumed:       yes
+attempt:       1
+verification:  proven: the resume finished its turn and the transcript grew
+when:          (captured-at)
+--- recover bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb
+ccresu: recover bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb: recovery: session bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb ended its cycle in DISCOVERED: resume session bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb: claude --resume failed (exit 1): Invalid API key · Please run /login: claude: exit status 1
+--- recover cccccccc-3333-4333-8333-cccccccccccc
+session:       cccccccc-3333-4333-8333-cccccccccccc
+state:         RESUMED
+resumed:       yes
+attempt:       1
+verification:  proven: the resume finished its turn
+when:          (captured-at)
+ok    the resume vector is --resume <id> "<message>" and nothing else
+ok    every resume was exactly three arguments
+ok    no call carried a retired flag
+ok    no stop was issued
+ok    no supervisor was asked for
+ok    recover A exits 0
+ok    session A ends RESUMED
+ok    recover A is proven by the exit status
+ok    the resume ran exactly once for A
+ok    recover B is refused (exit 1)
+ok    the refused resume was attempted exactly once for B
+ok    session B is rediscovered
+ok    the refusal records the exit status
+ok    the refusal keeps the stub's stderr
+ok    recover C exits 0
+ok    session C ends RESUMED without the transcript growing
+ok    C's verdict is the exit status
+ok    C's verification does not claim growth
+ok    the resume ran exactly once for C
+ok    history records the resume as the success
+ok    the audit row keeps the resume command
+ok    the audit row records the growth the measurement found
+ok    the audit row carries no handoff state id
+ok    the audit row carries no handoff label
+ok    the audit row carries no supervisor acceptance
+ok    C's audit row says the transcript did not grow
+
+== the stub claude call log
+CALL --version
+CALL agents --json --all
+CALL --version
+CALL agents --json --all
+CALL --version
+CALL agents --json --all
+CALL agents --json --all
+CALL --resume aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa continue the existing goal
+CALL agents --json --all
+CALL --version
+CALL agents --json --all
+CALL agents --json --all
+CALL --resume bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb continue the existing goal
+CALL agents --json --all
+CALL --version
+CALL agents --json --all
+CALL agents --json --all
+CALL --resume cccccccc-3333-4333-8333-cccccccccccc continue the existing goal
+CALL agents --json --all
+
+== pass 2: the retired commands are gone
+ok    ccresu reset is an unknown command
+ok    ccresu sessions clear is an unknown subcommand
+
+PASSED: one resume per session, and its exit status is the verdict
+39:["$","pre",null,{"className":"max-w-full overflow-x-auto p-3 text-[0.7rem] leading-relaxed sm:p-4 sm:text-xs","children":["$","code",null,{"className":"font-mono","children":"$3b"}]}]
+3a:["$","div",null,{"className":"flex flex-col gap-1 border-t border-border px-3 py-2 text-xs leading-relaxed text-muted-foreground sm:px-4","children":[["$","p",null,{"id":"capture-e2e-description","children":"The end-to-end proof, verbatim: each session gets one blocking `claude --resume <session-id> \"<message>\"` and nothing else, a stub that exits 0 marks the session recovered, a stub that exits 1 records the failure, and one whose turn leaves the transcript untouched is still recovered -- because the exit status is the verdict, not the growth."}],["$","p",null,{"className":"text-[0.7rem] text-muted-foreground","children":["Captured from the binary at"," ",["$","code",null,{"className":"font-mono","children":"03f3dfd"}]," on"," ","2026-11-21","; scratch paths and wall-clock columns are scrubbed, nothing else is edited."]}]]}]
+1f:0
+b:"$undefined"
+7:"$undefined"
+1e:"$undefined"
+18:"$undefined"

@@ -1,0 +1,5 @@
+User-Agent: *
+Allow: /
+
+Host: https://jymchng.github.io/ccresu
+Sitemap: https://jymchng.github.io/ccresu/sitemap.xml
