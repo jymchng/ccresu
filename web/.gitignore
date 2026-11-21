@@ -6,6 +6,9 @@ node_modules/
 out/
 next-env.d.ts
 
+# the release the pages advertise, written by `npm run build`'s prebuild step
+lib/generated/
+
 # test and type-check artifacts
 coverage/
 *.tsbuildinfo

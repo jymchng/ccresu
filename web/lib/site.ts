@@ -70,11 +70,11 @@ export function checksumsUrl(version: string): string {
  * The version every surface falls back to when the newest release cannot be
  * read from GitHub.
  *
- * It is **not** what the site normally shows: `lib/release.ts` resolves the
- * latest published tag at build time and the install commands use that. This
- * value only exists so an offline, rate-limited or misconfigured build still
- * renders a coherent page — and so the fallback is a single obvious constant to
- * bump rather than a number scattered through the content.
+ * It is **not** what the site normally shows: the build resolves the latest
+ * published tag before it starts (see `lib/release.ts`) and the install commands
+ * use that. This value only exists so an offline, rate-limited or misconfigured
+ * build still renders a coherent page — and so the fallback is a single obvious
+ * constant to bump rather than a number scattered through the content.
  */
 export const fallbackReleaseVersion = "0.10.0";
 

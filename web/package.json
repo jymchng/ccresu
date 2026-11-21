@@ -5,12 +5,16 @@
   "description": "Landing page and documentation site for ccresu",
   "scripts": {
     "dev": "next dev",
+    "predev": "node scripts/resolve-release.mjs",
     "build": "next build",
+    "prebuild": "node scripts/resolve-release.mjs",
+    "resolve-release": "node scripts/resolve-release.mjs",
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:export": "CCRESU_REQUIRE_EXPORT=1 vitest run tests/seo.test.ts",
+    "test:build-cache": "CCRESU_BUILD_CACHE_TEST=1 vitest run tests/build-cache.test.ts",
     "test:mobile": "node tests/mobile/gate.mjs",
     "test:mobile:audit": "node tests/mobile/audit.mjs",
     "test:watch": "vitest"

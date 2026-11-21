@@ -9,13 +9,50 @@ the notes — is produced by `.github/workflows/release.yml` from that tag.
 the tag without its leading `v`.
 
 ```bash
-git tag v0.1.0
+git tag -a v0.1.0 -m "v0.1.0"
 git push origin v0.1.0
 ```
+
+Tags are annotated, as every published tag is; the re-cut command below relies on
+that too.
 
 The workflow refuses a tag whose characters are not `[0-9A-Za-z.+-]`, so a typo
 cannot become a release name. There is no pre-release channel and no nightly
 build: a tag on the repository is the only thing that publishes.
+
+## Where the tag goes
+
+On a commit that is already on `main`: the **squash commit** of the pull request.
+Changes reach `main` by squash merge, so each PR lands as a single commit there,
+and `main` carries no merge commits at all:
+
+```bash
+git rev-list --merges main | wc -l   # 0
+gh pr view 3 --json mergeCommit      # 15fceba…, the commit v0.10.0 points at
+```
+
+`gh pr view` is how to find that commit. Do not match on the `(#N)` suffix squash
+merges add by default: the subject is whatever was typed when merging, and only
+PR #3 carries `(#3)` — PRs #1 and #2 kept their own subjects.
+
+Tag that commit, never the branch head: the head of the PR branch is a commit
+that never reaches `main`, so a release cut from it would ship a tree no `main`
+commit contains, and the version the binary reports would not be reachable from
+the branch anyone installs from.
+
+Nothing enforces the convention — the repository permits squash, merge-commit and
+rebase merges alike — so keep it, and check you kept it with the binary itself.
+Each build stamps the commit it was compiled from (`main.commit` is the runner's
+`GITHUB_SHA`, which on a tag push is the tagged commit), so `ccresu --version`
+has to agree with the tag:
+
+```bash
+git rev-parse v0.10.0^{commit}   # 15fceba57e1137c6149af60362e1257496fbc0d8
+ccresu --version                 # commit:        15fceba57e1137c6149af60362e1257496fbc0d8
+```
+
+Ask for `^{commit}`: for an annotated tag `git rev-parse v0.10.0` prints the tag
+object instead, which never matches the binary's `commit:` line.
 
 ## What a release contains
 
@@ -105,6 +142,46 @@ CCRESU_BASE_URL=http://127.0.0.1:8000 ./scripts/install.sh --version 0.1.0
   a newer schema; back up `~/.local/share/ccresu/ccresu.db` first.
 - **The service restarts you.** `systemctl --user restart ccresu.service` after
   an upgrade; an in-flight wait is a row in the database, so nothing is lost.
+- **The website republishes itself.** A published release triggers
+  `.github/workflows/deploy-website.yml`, which builds the site with
+  `CCRESU_RELEASE_TAG` set to that tag, so the install commands on the landing
+  page and the installation page name the release you just published. You do not
+  re-run anything by hand.
+
+## The website follows the release, not the merge
+
+The order is: merge the version bump, then tag it. Between those two moments the
+repository says one thing and GitHub says another — `web/package.json` declares
+the new version, and `releases/latest` still answers with the previous one — so
+the deploy that the **merge** starts builds a site that names the old release.
+That is how 0.10.0 shipped a page telling readers to install 0.9.2 until someone
+happened to look at the live site; the deploy was green, because nothing was
+checking.
+
+Two mechanisms make that visible instead of silent, and neither needs a decision
+from you:
+
+| Trigger | Version it names | What it means |
+| --- | --- | --- |
+| push to `main` | `releases/latest` | If the commit declares a version that is not published yet, the **version guard** fails the run and nothing is published. |
+| `release: published` | the tag that fired it | The site is rebuilt from the tagged commit and names that release. This is the run that puts the new version live. |
+
+So on a release you should expect **two** "Deploy website" runs: a red one on the
+merge commit, and a green one on the tag a few minutes later. The red one is not
+a broken site — it is the guard refusing to advertise a release that did not
+exist yet, and `scripts/check-site-version.mjs` is what fails it. The site keeps
+serving the last published version in the meantime, so the gap costs nothing but
+a red status; it closes as soon as the tag is pushed.
+
+To confirm what is actually deployed:
+
+```bash
+curl -sS https://jymchng.github.io/ccresu/ | grep -o 'ccresu_[0-9.]*_linux_amd64'
+ccresu --version    # the binary reports its own version and commit
+```
+
+A re-cut re-publishes the release, which fires the deploy again for the same tag,
+so the site is rebuilt without anyone remembering to re-run it.
 
 ## Re-cutting a version
 

@@ -164,12 +164,76 @@ than from Vitest.
 ## Deployment
 
 `.github/workflows/deploy-website.yml` publishes on **every push to `main`** (no
-`paths:` filter — a README- or docs-only change republishes too) and on manual
-dispatch:
+`paths:` filter — a README- or docs-only change republishes too), on manual
+dispatch, and on every **published release**:
 
 1. `npm ci`, lint, type-check, test, build — the same gates as CI.
-2. The exported `web/out` is force-pushed to the **`gh-pages` branch**, which is
+2. The version the install commands name must be the version this commit
+   declares (`web/package.json`), or the deploy stops. See below.
+3. The exported `web/out` is force-pushed to the **`gh-pages` branch**, which is
    what Pages actually serves.
+
+### Why a release triggers a deploy of its own
+
+The install commands name a release, and the site is a static export, so that
+version is decided once, when the workflow builds it. Left to the push trigger
+alone, the timing is wrong in exactly one window: changes reach `main` before
+the tag that releases them, so the deploy the merge starts asks
+`releases/latest` — the one GitHub call the build makes, described on the
+privacy page — while the *previous* release is still the newest one.
+
+That is not hypothetical. Deploy run 44883298831 built the 0.10.0 tree while the
+API still answered 0.9.2, and published an index.html telling every reader to
+install 0.9.2. Nothing failed, because nothing was checking.
+
+Two things stop it now, and they are complementary:
+
+- a deploy triggered by a **published release** is handed the tag it fired on
+  (`CCRESU_RELEASE_TAG`), so the build names that release and never asks the API
+  at all. It also checks out the tagged commit rather than whatever `main` holds
+  at that moment, because the tag is the tree the archives were built from;
+- a deploy triggered by a push still resolves the version from the API, and the
+  **version guard** (`scripts/check-site-version.mjs`) fails the job when a page
+  that shows install commands advertises a version `web/package.json` does not
+  declare. During the merge-to-tag window that is the expected outcome: the
+  merge-triggered run goes red and publishes nothing, then the release lands and
+  the release-triggered run publishes the right page seconds later.
+
+So a red "Deploy website" on a merge commit that bumped the version is not a
+broken site — it is the guard refusing to advertise a release that did not exist
+yet. The remedy is always the same one: push the tag.
+
+### Where the version comes from
+
+`npm run build` runs `scripts/resolve-release.mjs` first, as its `prebuild` step
+(`predev` does the same for the dev server). That script asks `releases/latest`
+once — or takes the tag a release-triggered deploy was handed — and writes
+`web/lib/generated/release.json`, which is git-ignored because it is a build
+artifact. The pages then read that file through `resolvedRelease()`; nothing in a
+render fetches anything.
+
+The ordering is the whole point, and it was learned the hard way. `fetch` called
+inside a page render is served out of **Next's build data cache**, so a build that
+inherited a warm `.next` reused the *first* build's answer: two consecutive builds
+against an endpoint answering `v0.9.0` and then `v0.10.0` both exported a page
+advertising 0.9.0, the second build made **zero** requests, and the deploy
+published it. Moving the request ahead of the build removes the cache from the
+path entirely.
+
+The file also records **how** the version was decided — `source` is `tag`,
+`github` or `unavailable`, with a `reason` when the release could not be read — so
+a fallback to the pinned `lib/site.ts` version is legible in the artifact and in
+the build log instead of indistinguishable from a real answer.
+
+Two tests hold this in place:
+
+- `web/tests/release-generation.test.ts` drives the real script twice against a
+  changing endpoint and asserts the second run asks again and writes the new
+  version (and that a handed tag costs no request at all);
+- `web/tests/build-cache.test.ts` (`npm run test:build-cache`, opt-in because it
+  builds the site twice) is the literal regression: build once with a warm
+  `.next` reused, change the release, build again, and assert the export names the
+  new one.
 
 Publishing a branch rather than calling `actions/deploy-pages` is deliberate.
 The artifact path was tried first and never worked here: the deployment stayed
