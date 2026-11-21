@@ -85,5 +85,23 @@ are listed in `docs/website.md`.
 ## Deployment
 
 `.github/workflows/deploy-website.yml` builds this directory and publishes
-`out/` with GitHub Pages. See `docs/deployment.md` in the repository root for the
-runtime deployment of the binary itself.
+`out/` with GitHub Pages, on a push to `main`, on a published release and on
+manual dispatch. The install commands name a release, and the build resolves that
+version before Next starts (see below), so two things keep the published page
+honest: a release-triggered build is handed the tag it fired on
+(`CCRESU_RELEASE_TAG`) and never asks the API, and
+`scripts/check-site-version.mjs` fails the job if a page advertises a version
+`web/package.json` does not declare. `tests/deploy-workflow.test.ts` asserts both
+are actually wired into the workflow. See `docs/deployment.md` in the repository
+root for the runtime deployment of the binary itself.
+
+### Where the version comes from
+
+`npm run build` runs `scripts/resolve-release.mjs` as its `prebuild` step (and
+`npm run dev` runs it as `predev`); the script writes `lib/generated/release.json`,
+git-ignored, and the pages read it with `resolvedRelease()`. Nothing fetches
+during a render on purpose: a `fetch` in a render is served out of Next's build
+data cache, so a warm `.next` made a second build reuse the first build's version
+and publish a stale download link. `npm run resolve-release` regenerates the file
+by hand; `npm run test:build-cache` proves two consecutive builds disagree when
+the release changes.

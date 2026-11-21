@@ -1,11 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   LATEST_RELEASE_API,
   latestReleaseApi,
   normalizeTag,
   parseLatestRelease,
-  resolveLatestRelease,
+  pinnedTag,
+  readGeneratedRelease,
+  releaseFromFile,
+  resolvedRelease,
   type ReleaseInfo,
 } from "@/lib/release";
 import { fallbackReleaseVersion, repo } from "@/lib/site";
@@ -15,22 +22,40 @@ import { fallbackReleaseVersion, repo } from "@/lib/site";
  *
  * Two things are being tested, and only one of them is the happy path:
  *
- *  1. a real GitHub answer is read correctly and the `v` is stripped, because
- *     the asset names use `x.y.z` while the tag is `vx.y.z`;
- *  2. **every** way the request can fail falls back instead of throwing. The
+ *  1. the record the prebuild step wrote is read correctly — the `v` is stripped
+ *     because the asset names use `x.y.z` while the tag is `vx.y.z`, and a
+ *     handed tag is believed without a request;
+ *  2. **every** way the resolution can fail falls back instead of throwing. The
  *     site is a static export built in CI: a 403 from the unauthenticated rate
- *     limit, a dead network, an HTML error page or a release without a tag must
- *     all still produce a page. A build that cannot run is a worse outcome than
- *     a page naming the last version we knew about.
+ *     limit, a dead network, an HTML error page, a release without a tag, or no
+ *     generated file at all must all still produce a page. A build that cannot
+ *     run is a worse outcome than a page naming the last version we knew about.
+ *
+ * What is deliberately *not* here any more is a `fetch` at render time: the
+ * resolution moved to `scripts/resolve-release.mjs`, because a `fetch` inside a
+ * page render is served from Next's build data cache and a warm `.next` made the
+ * second build reuse the first build's version. `tests/release-generation.test.ts`
+ * drives that script; `tests/build-cache.test.ts` proves two consecutive builds
+ * disagree when the release changes.
  */
 
-function jsonResponse(payload: unknown, init: { ok?: boolean; status?: number } = {}) {
-  return {
-    ok: init.ok ?? true,
-    status: init.status ?? 200,
-    statusText: init.status === 403 ? "Forbidden" : "OK",
-    json: async () => payload,
-  } as unknown as Response;
+const scratch = mkdtempSync(path.join(tmpdir(), "ccresu-release-"));
+
+afterAll(() => {
+  rmSync(scratch, { recursive: true, force: true });
+});
+
+beforeEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
+
+/** Write a generated record and point the loader at it. */
+function generated(name: string, record: unknown): string {
+  const file = path.join(scratch, `${name}.json`);
+  writeFileSync(file, JSON.stringify(record));
+  vi.stubEnv("CCRESU_RELEASE_FILE", file);
+  return file;
 }
 
 describe("release resolution", () => {
@@ -62,99 +87,138 @@ describe("release resolution", () => {
     expect(parseLatestRelease("v1.2.3")).toBeNull();
   });
 
-  it("returns the published version when GitHub answers", async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ tag_name: "v0.9.0" }));
-    const release = await resolveLatestRelease(fetchImpl as unknown as typeof fetch);
+  it("believes the tag a release-triggered build was handed", () => {
+    generated("tag", {
+      source: "tag",
+      version: "0.10.0",
+      tag: "v0.10.0",
+      endpoint: null,
+      reason: null,
+    });
 
-    expect(release).toEqual<ReleaseInfo>({
+    expect(resolvedRelease()).toEqual<ReleaseInfo>({
+      version: "0.10.0",
+      tag: "v0.10.0",
+      source: "tag",
+    });
+  });
+
+  it("returns the published version when GitHub answered", () => {
+    generated("github", {
+      source: "github",
+      version: "0.9.0",
+      tag: "v0.9.0",
+      endpoint: LATEST_RELEASE_API,
+      reason: null,
+    });
+
+    expect(resolvedRelease()).toEqual<ReleaseInfo>({
       version: "0.9.0",
       tag: "v0.9.0",
       source: "github",
     });
-
-    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe(LATEST_RELEASE_API);
-    expect((init.headers as Record<string, string>).Accept).toBe(
-      "application/vnd.github+json",
-    );
   });
 
-  it("falls back instead of throwing when the network fails", async () => {
+  it("falls back, and repeats the recorded reason, when the release could not be read", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const fetchImpl = vi.fn(async () => {
-      throw new Error("getaddrinfo ENOTFOUND api.github.com");
+    const file = generated("unavailable", {
+      source: "unavailable",
+      version: null,
+      tag: null,
+      endpoint: LATEST_RELEASE_API,
+      reason: `${LATEST_RELEASE_API} answered 403 Forbidden`,
     });
 
-    const release = await resolveLatestRelease(fetchImpl as unknown as typeof fetch);
-
-    expect(release.source).toBe("fallback");
-    expect(release.version).toBe(fallbackReleaseVersion);
-    expect(release.tag).toBeNull();
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("getaddrinfo ENOTFOUND api.github.com"),
-    );
-  });
-
-  it("falls back on a rate-limited or rejected request", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    const fetchImpl = vi.fn(async () => jsonResponse({ message: "rate limited" }, { ok: false, status: 403 }));
-
-    const release = await resolveLatestRelease(fetchImpl as unknown as typeof fetch);
+    const release = releaseFromFile(readGeneratedRelease(file));
 
     expect(release).toEqual<ReleaseInfo>({
       version: fallbackReleaseVersion,
       tag: null,
       source: "fallback",
     });
+    // The reason travels with the record, so a fallback is legible instead of
+    // indistinguishable from a real answer.
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("answered 403 Forbidden"),
+    );
   });
 
-  it("falls back when the payload has no usable tag", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    const fetchImpl = vi.fn(async () => jsonResponse({ message: "Not Found" }));
+  it("falls back when the prebuild step never ran", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const missing = path.join(scratch, "not-written.json");
+    vi.stubEnv("CCRESU_RELEASE_FILE", missing);
 
-    const release = await resolveLatestRelease(fetchImpl as unknown as typeof fetch);
-
-    expect(release.source).toBe("fallback");
-    expect(release.version).toBe(fallbackReleaseVersion);
+    expect(resolvedRelease().source).toBe("fallback");
+    expect(resolvedRelease().version).toBe(fallbackReleaseVersion);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("could not read"),
+    );
   });
 
-  it("falls back when the body is not JSON at all", async () => {
+  it("falls back rather than trusting a record it cannot make sense of", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const fetchImpl = vi.fn(async () => ({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      json: async () => {
-        throw new SyntaxError("Unexpected token < in JSON");
-      },
-    })) as unknown as typeof fetch;
 
-    const release = await resolveLatestRelease(fetchImpl);
+    // A version that is not the tag minus its `v` would put an arbitrary string
+    // into a download URL.
+    expect(releaseFromFile({ source: "github", version: "1.0.0", tag: "v2.0.0" }).source).toBe(
+      "fallback",
+    );
+    expect(releaseFromFile({ source: "unknown", version: "1.0.0", tag: "v1.0.0" }).source).toBe(
+      "fallback",
+    );
+    expect(releaseFromFile({ source: "github", version: null, tag: null }).source).toBe("fallback");
+    expect(releaseFromFile(null).source).toBe("fallback");
+    expect(releaseFromFile("v0.10.0").source).toBe("fallback");
+  });
 
-    expect(release.source).toBe("fallback");
+  it("reads the version exactly once per process", () => {
+    const file = generated("memo", {
+      source: "github",
+      version: "0.8.0",
+      tag: "v0.8.0",
+      endpoint: LATEST_RELEASE_API,
+      reason: null,
+    });
+
+    expect(resolvedRelease().version).toBe("0.8.0");
+
+    // Rewriting the file cannot change an answer this build already took; the
+    // memo is what keeps a single warning in the log rather than one per route.
+    writeFileSync(
+      file,
+      JSON.stringify({ source: "github", version: "9.9.9", tag: "v9.9.9", reason: null }),
+    );
+    expect(resolvedRelease().version).toBe("0.8.0");
   });
 
   it("the fallback is a version the asset naming accepts", () => {
     expect(normalizeTag(fallbackReleaseVersion)).toBe(fallbackReleaseVersion);
   });
 
-  it("lets a fork or a smoke test point the resolver elsewhere", async () => {
+  it("lets a fork or a smoke test point the resolver elsewhere", () => {
     vi.stubEnv("CCRESU_RELEASE_API", "https://example.test/releases/latest");
-    try {
-      expect(latestReleaseApi()).toBe("https://example.test/releases/latest");
+    expect(latestReleaseApi()).toBe("https://example.test/releases/latest");
 
-      const fetchImpl = vi.fn(async () => jsonResponse({ tag_name: "v3.1.4" }));
-      const release = await resolveLatestRelease(fetchImpl as unknown as typeof fetch);
-
-      expect(release.version).toBe("3.1.4");
-      expect((fetchImpl.mock.calls[0] as unknown as [string])[0]).toBe(
-        "https://example.test/releases/latest",
-      );
-    } finally {
-      vi.unstubAllEnvs();
-    }
-
+    vi.unstubAllEnvs();
     // Unset, the canonical endpoint comes back.
     expect(latestReleaseApi()).toBe(LATEST_RELEASE_API);
+  });
+
+  it("ignores a pinned value that is not a release tag, and says so", () => {
+    vi.stubEnv("CCRESU_RELEASE_TAG", "nightly-2026-11-21");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(pinnedTag()).toBeNull();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("CCRESU_RELEASE_TAG=nightly-2026-11-21"),
+    );
+  });
+
+  it("normalises a pinned tag the deploy was triggered by", () => {
+    vi.stubEnv("CCRESU_RELEASE_TAG", "v0.10.0");
+    expect(pinnedTag()).toBe("0.10.0");
+
+    vi.unstubAllEnvs();
+    expect(pinnedTag()).toBeNull();
   });
 });

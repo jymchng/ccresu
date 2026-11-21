@@ -202,10 +202,11 @@ export const licenseUrl = "https://opensource.org/license/mit/";
 /**
  * `SoftwareApplication` for the tool itself.
  *
- * The version is the one `lib/release.ts` resolved at build time, so the
- * structured data and the install command on the page can never disagree. The
- * download URL points at a real release asset for the current version rather
- * than at the repository root, which is what a "download" link means.
+ * The version is the one the build resolved before it started (see
+ * `lib/release.ts`), so the structured data and the install command on the page
+ * can never disagree. The download URL points at a real release asset for the
+ * current version rather than at the repository root, which is what a "download"
+ * link means.
  */
 export function softwareJsonLd(version: string): JsonLd {
   return {

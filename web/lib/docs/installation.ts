@@ -7,7 +7,7 @@ import type { DocPage } from "./types";
  * The installation page depends on a value the content cannot know: which
  * release is newest. Everything else in the documentation is static, so the
  * page is built by a function rather than exported as a constant — the caller
- * supplies the version that `lib/release.ts` resolved at build time.
+ * supplies the version the build resolved before it started (see `lib/release.ts`).
  *
  * The default exists so navigation, the docs index and the tests can hold a
  * page without a network round trip; the page itself always passes the real

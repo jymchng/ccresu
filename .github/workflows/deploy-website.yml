@@ -20,9 +20,24 @@ name: Deploy website
 # every push to the production branch now republishes. The build job runs the
 # same lint, type check, test and export gates as CI, so a broken site is still
 # never published, and a README- or docs-only change refreshes the site too.
+#
+# `release: published` is how the site catches up with a release. The version
+# the install commands name is resolved at build time, and the release order is
+# "merge the version bump, then tag it" — so the deploy the merge triggers asks
+# `releases/latest` before the tag exists and is told about the *previous*
+# release. That is not theory: run 44883298831 built the 0.10.0 tree while the
+# API still answered 0.9.2 and published a site advertising 0.9.2 on
+# 2026-11-21. A deploy triggered by the release itself names the tag it was
+# triggered by (`CCRESU_RELEASE_TAG`), which cannot race the API, and the guard
+# step below stops any deploy — merge-triggered or not — from publishing a site
+# whose install commands name a version the commit does not declare.
 on:
   push:
     branches: [main]
+  # Fires once the tag's release is public, i.e. after the archives and
+  # checksums.txt exist for the version the site is about to advertise.
+  release:
+    types: [published]
   # Manual re-publish (e.g. after a transient Pages outage).
   workflow_dispatch:
 
@@ -40,8 +55,11 @@ jobs:
   build:
     name: Build the static export
     # Only the production branch may publish, including via manual dispatch
-    # from another ref.
-    if: github.ref == 'refs/heads/main'
+    # from another ref. A published release is the one other allowed trigger:
+    # it checks out the tagged commit — the tree the archives were built from —
+    # and its ref is `refs/tags/<tag>`, which the first half of this condition
+    # would reject.
+    if: github.ref == 'refs/heads/main' || github.event_name == 'release'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -73,7 +91,28 @@ jobs:
         run: npm run test
 
       - name: Build static export
+        env:
+          # Set only on a `release: published` run, empty on a push. When it is
+          # set the build names this tag and never asks `releases/latest`, which
+          # can still answer with the previous release for a few seconds after
+          # this one goes public.
+          CCRESU_RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: npm run build
+
+      # The build resolves the version it advertises from GitHub, and a push to
+      # `main` reaches the API before the tag exists — so the page it produces
+      # can name the *previous* release. That is not hypothetical: deploy run
+      # 44883298831 built the 0.10.0 tree and published an index.html telling
+      # readers to install 0.9.2, and nothing failed. This step is the failure:
+      # every page that shows install commands must advertise the version
+      # `web/package.json` declares, and a mismatch stops the deploy instead of
+      # publishing the page.
+      #
+      # `working-directory: .` because the script resolves `web/out` from the
+      # repository root, while this job's default working directory is `web`.
+      - name: Check the export names the version this commit declares
+        working-directory: .
+        run: node scripts/check-site-version.mjs
 
       # The SEO cross-check reads the export, so it runs after the build: every
       # built index.html must appear in sitemap.xml, robots.txt must point at
