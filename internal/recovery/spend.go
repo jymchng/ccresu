@@ -11,11 +11,13 @@ import (
 
 // SpendLimits is PRD 5's pair of ccresu-enforced caps.
 //
-// They exist because the flag that used to bound a run's cost,
-// `--max-budget-usd`, is documented as print mode only and therefore cannot ride
-// a `--bg` handoff. What ccresu can bound is the series of attempts: it sums the
-// costs the CLI reported and refuses to start another attempt at the cap (R5),
-// and it stops when a single attempt overspends (R6).
+// They exist because the flag that would bound one run's cost,
+// `--max-budget-usd`, is documented as print mode only, and a resume that
+// continues an existing session is not a print-mode run: the flag cannot be put
+// on the invocation `claude --resume <id> "<message>"` at all. What ccresu can
+// bound is the series of attempts it starts: it sums the costs the CLI reported
+// and refuses to start another attempt at the cap (R5), and it stops when a
+// single attempt overspends (R6).
 //
 // Zero means off, and off means today's behaviour exactly: no sum is taken and no
 // check runs. A non-zero default would stop recovery on an upgrade nobody asked

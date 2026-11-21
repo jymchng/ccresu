@@ -53,17 +53,11 @@ func readyToResume(t *testing.T, h *harness) {
 		Session:    resumed,
 		Transcript: claude.TranscriptInfo{Path: "/tmp/t.jsonl", Size: 400, Lines: 9},
 	}
-	// A handoff, because print mode is retired (PRD 1): the CLI's `backgrounded`
-	// block is what proves the continuation (PRD 2 / R3).
+	// The resume exits zero, which is the whole verdict: the transcript read after
+	// it is a diagnostic (PRD 2 / R3).
 	h.provider.ResumeResults[canonicalSessionID] = claude.ResumeResult{
 		RequestedSessionID: canonicalSessionID,
-		SessionID:          canonicalSessionID,
-		Verified:           true,
-		Backgrounded:       true,
-		StateID:            claude.StateIDFor(canonicalSessionID),
-		Name:               claude.HandoffLabel(canonicalSessionID),
-		Result:             "backgrounded",
-		Subtype:            "success",
+		ExitCode:           0,
 	}
 }
 

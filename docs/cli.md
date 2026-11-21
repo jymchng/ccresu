@@ -32,7 +32,7 @@ resets), `130` interrupted.
 | `daemon` | `daemon [--once] [--interval DURATION]` | Runs the watchdog loop until interrupted. `--once` performs a single reconcile pass and exits; `--interval` overrides `claude.discovery_interval`. |
 | `status` | `status` | One screen of the persisted state: `config` and `database` (the paths actually in use), `sessions` (`N total, M enabled`), `listing` (what a bare `sessions` shows), `pending`, `schedules`, `next wake` when one is due, `telegram`, `recovery` (`yes (max attempts 10)`), `now`, then a `STATE`/`SESSIONS` histogram. The queued-notification count is `pending_notifications` in `--json`. |
 | `sessions` | `sessions [--all] [--state STATE]... [--limit N] [--tui] [--no-tui]` | Lists discovered sessions: `SESSION` (short id), `STATE`, `NEXT ATTEMPT`, `ENABLED`, `RECOVERABLE`, `PROJECT`, `RUNS IN`, `LAST SEEN`, `NOTE` (the session's reason, else its last error, truncated to 40). `PROJECT` is where the session started and `RUNS IN` is where it actually runs — they differ when a background session has moved into a git worktree, and `RUNS IN` shows `-` when the two agree rather than repeating one path in two columns. On a terminal this opens the interactive browser; a pipe, a redirect or `--json` gets the table exactly as before. A bare listing is **enabled only** and says so in the footer; `--all` includes disabled and settled ones; `--state` is repeatable; `--limit 0` means all. |
-| `sessions status` | `sessions status <session-id>` | Everything known about one session: state, paths (including `runs in` — where the session actually runs, marked `(same as the project)` when it has not moved, and `unknown` when no observation has recorded one), the recorded spend and the configured spend caps, the next attempt, the latest usage limit, the latest attempt (including what it cost), any pending wait and recent transitions. Identical to `inspect`, which is kept as an alias. |
+| `sessions status` | `sessions status <session-id>` | Everything known about one session: state, paths (including `runs in` — where the session actually runs, marked `(same as the project)` when it has not moved, and `unknown (not recorded yet; the project directory is used)` when none has been recorded), the recorded spend and the configured spend caps, the next attempt, the latest usage limit, the latest attempt (including what it cost), any pending wait and recent transitions. Identical to `inspect`, which is kept as an alias. |
 | `sessions delete` | `sessions delete <session-id>` | Removes the session from ccresu: the row, its attempts, transitions, usage limits, pending wait and notifications. Nothing under `~/.claude` is touched — the conversation stays where it is. A tombstone keeps discovery from re-creating the session; `ccresu enable <id>` undoes it. Deleting twice is a success, not an error. |
 | `inspect` | `inspect <session-id>` | Everything known about one session. The same code as `sessions status`. |
 | `recover` | `recover <session-id> [--message TEXT] [--force]` | Resumes one session now, optionally with a different continuation message. `--force` tries even when the attempt budget is spent. |
@@ -143,24 +143,19 @@ cancelled, so the `claude` call behind it is killed — and leaves the browser o
 on the list with `cancelled` on the status line; `q` cancels and quits.
 
 The commands are the ones that are slow, and their budgets are their own: a
-recovery is bounded by `recovery.startup_timeout` and
-`recovery.verification_timeout`, and a discovery pass by the CLI's query timeout.
-`ctrl-c` is the bound that always applies.
+recovery is bounded by `recovery.turn_timeout` — the whole `claude --resume`
+turn, which returns when the continuation has finished rather than when it is
+accepted — and a discovery pass by the CLI's query timeout. `ctrl-c` is the bound
+that always applies.
 
 #### The detail screen
 
-`enter` paints the page `ccresu sessions status <id>` prints, in two parts. The
-session's own facts come from ccresu's store and are painted from the keystroke;
-the supervisor block costs an invocation of `claude`, so it is read *behind* the
-page and filled in when it answers:
-
-```console
-reading the supervisor… (the page fills in)
-```
-
-If it does not answer within five seconds the block says so — `status: not read`
-with the call that did not answer — and the rest of the page is unaffected.
-Nothing else on that page waits for the CLI, and the block is never polled.
+`enter` paints the page `ccresu sessions status <id>` prints. Every field on that
+page is read from ccresu's own store, so it is painted from the keystroke: no
+part of it invokes `claude`, and nothing on it waits for one. That is deliberate
+— the page says what ccresu recorded, not what a second invocation would answer a
+second later — and it is why the screen fills in immediately instead of showing a
+placeholder first.
 
 The page scrolls, and its footer is its own key map:
 
@@ -360,56 +355,21 @@ Above that block are the session's own columns (`state`, `enabled`,
 `recoverable`, `reason`, `last error`, `project`, `transcript`, `type`,
 `last seen`); below it, in order, come `Latest usage limit` (`type`, `detected`,
 `resets`, `raw` — the phrase as the CLI wrote it, zone included — and
-`confidence`), `Latest attempt` (`number`, `state`, `started`, `finished`,
+`confidence`), `Latest attempt` (`number`, `state`, `cost`, `started`, `finished`,
 `command`, `error`), `Schedule` (`due`, `unknown reset`, `polls`, `phrase`) and
 the last five `Recent transitions` (`WHEN`, `TRANSITION`, `REASON`).
 
-Below the stored records comes the **Supervisor** block. It is the one part of
-`inspect` that is not read from ccresu's database: it runs `claude daemon status`
-and, when the latest attempt recorded the state id the handoff printed, `claude
-logs <state-id>` — on demand, only for `inspect`, and never polled, because the
-supervisor owns the process and a second reader of its socket would answer with a
-different snapshot one second later.
+Nothing below those records invokes `claude`. The page ends with the stored
+records — `Schedule`, then the last five `Recent transitions` — because a recovery
+leaves its evidence in ccresu's own rows rather than in a second opinion: the
+latest attempt's `command` is the exact resume that ran, and the attempt's
+`TranscriptGrew` measurement (`--json` only, not on the page) says whether the
+transcript grew while that turn ran. Neither is the verdict; the verdict was the
+resume's exit status, taken when the turn returned.
 
-```console
-Supervisor
-status:        running
-state:         running
-version:       2.1.300
-workers:       3
-socket dir:    /run/user/1000/claude
-command:       claude daemon status
-supervisor log: last 2 line(s) of `claude daemon logs`
-  supervisor started
-  respawned worker 1
-recent output: last 20 line(s) of `claude logs ab12cd34`
-  …
-```
-
-`supervisor log` is the tail of `claude daemon logs` — the supervisor's own log,
-which is where a restart, a failed handoff or a rotated worker explains itself.
-It is read only while the supervisor is running (a stopped supervisor has no log
-to follow), and a failed read is reported with its own words rather than shown as
-an empty log.
-
-`status` is one of four words, because four different facts lead to four
-different actions:
-
-| `status` | what it means | what to do |
-|---|---|---|
-| `running` | the supervisor answered; its `state`, `version`, `workers` and socket directory follow | nothing |
-| `not running` | the documented exit-1 answer: this machine has no supervisor yet | nothing — the next handoff starts one |
-| `unavailable` | this build's provider has no supervisor surface (a stub, or `--force` print mode) | nothing to ask; the rest of the page is still accurate |
-| `unreadable` | the command was run and failed for another reason (timeout, crash, a `claude` without the `daemon` subcommand); `error` carries its own words | read `error`; the supervisor's state is unknown, not empty |
-
-`recent output` is the last 20 lines of `claude logs <state-id>`, where
-`<state-id>` is the short id the handoff printed and ccresu stored on the
-attempt. When the latest attempt carries no supervisor state id, the block says
-so instead of printing an empty log, and when the session is not hosted by the
-supervisor at all (`status: not running`) no log read is attempted. With
-`--json`, the same read appears as a `supervisor` object: `status`, `state`,
-`version`, `workers`, `socket_dir`, `argv`, `log_target`, `recent_output`,
-`daemon_output`, `daemon_error` and `error` (all omitted when empty).
+With `--json`, the same page is one document of `session`, `usage_limit`,
+`attempt`, `schedule`, `transitions`, `next_attempt` and `spend` — the same
+fields with no formatting and no truncation.
 
 `sessions` carries the same answer as its `NEXT ATTEMPT` column: `in 2h14m` while
 a wait is pending, `none (<reason>)` when nothing is scheduled. Both read the
@@ -427,27 +387,24 @@ $ ccresu recover 4d1f9c2a-... --message "finish the migration and stop"
 $ ccresu recover 4d1f9c2a-... --force      # budget spent, try anyway
 ```
 
-A manual recovery goes through the same state machine, locking and verification
-as an automatic one: it is not a bypass.
+A manual recovery goes through the same state machine, the same per-session lock
+and the same verdict — the resume's exit status — as an automatic one: it is not a
+bypass.
 
-A resume can also be refused because the session is still attached to Claude
-Code's background agent
-(`That session is running in the background (837eaaea) …`). ccresu treats that as
-"the conversation is busy", not as "the conversation is gone": inside the same
-attempt it runs `claude stop <job-id>`, then repeats the *identical*
-`claude --bg --resume <session-id> …` handoff once. `<job-id>` is the eight lower-case
-hex job name the refusal itself prints (`837eaaea`), not the session UUID:
-`claude stop` resolves job names only, and answers a UUID with
-`No job matching` and exit 1. The stop keeps the conversation — same
-session id, same transcript — and it goes to the log rather than to the attempt
-row, so `ccresu history` still shows one resume command. If the stop fails or the
-second resume refuses again, the original error is reported unchanged, exactly as
-before. See [recovery.md](recovery.md).
+A resume can also fail because the session is still attached to Claude Code's
+background agent (`That session is running in the background (837eaaea) …`).
+ccresu does nothing about it. The refusal is not a limit and not an
+authentication failure, so it is classified as an ordinary retryable failure: the
+CLI's message is recorded verbatim as the attempt's error, the next attempt is
+scheduled under the usual backoff, and the operator decides whether to attach to
+that agent or stop it. ccresu never issues a lifecycle command of its own — the
+only thing it runs is the resume — so a session held by a background agent keeps
+failing until you release it. See [recovery.md](recovery.md).
 
 #### When the limit has not reset yet
 
-The other refusal is the one the limit itself causes: a
-`--bg --resume` handoff exits 1 with the banner the CLI prints.
+The other refusal is the one the limit itself causes: the resume exits non-zero
+with the banner the CLI prints.
 
 ```console
 Claude usage limit reached. Your limit will reset at 10am (Europe/Berlin).
@@ -459,8 +416,7 @@ banner is recorded as a usage limit (so `Latest usage limit` shows the CLI's own
 phrase next to the resolved instant), the next attempt is scheduled at the reset
 instant the banner named, and the session stays in `WAITING_FOR_RESET` until
 then. Nothing is retried in the meantime: five reconcile passes inside one window
-issue exactly one `--bg --resume` handoff, and the next one is issued after the
-reset.
+issue exactly one resume, and the next one is issued after the reset.
 
 ```console
 $ ccresu inspect 1347e5db-a9fb-42eb-b92a-82256bd5aa68
@@ -502,15 +458,17 @@ $ ccresu history 4d1f9c2a-... --limit 20
 ```
 
 Each transition carries the reason it was recorded with, which is the audit
-trail for a wait. The proof of a recovery lives on the attempt, not in the table:
-`ccresu recover` prints it as
-`verification: proven: the continuation was handed to the background supervisor`
-— or `proven: the supervisor published state "working" for the conversation`
-when a published state is what established it — and `not proven: …`, naming what
-is missing, otherwise. `ccresu history --json` carries the same evidence per
-attempt: `HandoffAccepted`/`HandoffStateID`, `PublishedState`, and the recorded
-observation (`ObservedState`, `ObservedStatus`, `ObservedWaitingFor`). The human
-attempt table shows `RESULT` (`in progress`, `succeeded`, `failed`) instead.
+trail for a wait. A recovery is judged by the resume's exit status, and
+`ccresu recover` prints the verdict it reached as
+`verification: proven: the resume finished its turn and the transcript grew`
+— or `proven: the resume finished its turn` when the transcript did not change
+shape. A resume that exited non-zero never reaches that line: the command exits
+non-zero and the failure, with its exit status and the CLI's own message, is on
+stderr. `ccresu history --json` carries the same record per attempt: the
+`Command` that actually ran, `Success`, the `Error` when it failed, and
+`TranscriptGrew`, the measurement taken after the turn — the diagnostic beside
+the verdict, never the verdict. The human attempt table shows `RESULT`
+(`in progress`, `succeeded`, `failed`) instead.
 
 ### Machine-readable output
 
@@ -551,8 +509,8 @@ $ ccresu --log-level debug --log-format text daemon --once
 `--log-format text` is for a terminal; `json` (the default) is for journald and
 log shippers. Secrets are redacted in both.
 
-## Supervising long runs
+## Running the daemon as a service
 
-`ccresu daemon` is meant to be supervised. Use the shipped user unit
-(`--systemd` in the installer), or run it under your own supervisor; see
+`ccresu daemon` is meant to run under a service manager. Use the shipped user
+unit (`--systemd` in the installer), or run it under your own; see
 [deployment.md](deployment.md).

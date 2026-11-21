@@ -48,23 +48,6 @@ type VersionReporter interface {
 	Version(ctx context.Context) (claude.VersionReport, error)
 }
 
-// SupervisorReader is the supervisor's read-only surface as `ccresu inspect`
-// uses it (PRD 3 R1, R10). *claude.Provider satisfies it.
-//
-// It is a narrow interface rather than part of SessionProvider because a provider
-// that cannot read the supervisor is still a usable provider: inspection then
-// says "unavailable" instead of refusing to show the session, and recovery runs
-// with no supervisor attached, which is the same answer as a machine that has
-// never started one.
-type SupervisorReader interface {
-	// DaemonStatus runs `claude daemon status`.
-	DaemonStatus(ctx context.Context) (claude.SupervisorStatus, error)
-	// SessionLogs runs `claude logs <state-id>`.
-	SessionLogs(ctx context.Context, stateID string) (claude.LogsResult, error)
-	// DaemonLogs runs `claude daemon logs`.
-	DaemonLogs(ctx context.Context) (claude.LogsResult, error)
-}
-
 // Runtime is everything the long-lived commands operate on.
 //
 // Every field is either a value a test can build in memory or an interface it can
@@ -212,45 +195,23 @@ func BuildRuntime(ctx context.Context, cfg *config.Config, clk clock.Clock, log 
 
 // claudeOptionsFromConfig maps the configuration onto the provider's options.
 //
-// It is a pure mapping, like guardrailsFromConfig and recoveryFromConfig below,
-// so what reaches the CLI can be asserted without a CLI to run:
-// TestClaudeOptionsFromConfigCarriesTheStartupTimeout fails if a field stops
-// being fed from the configuration it names.
+// It is a pure mapping, like recoveryFromConfig below, so what reaches the CLI
+// can be asserted without a CLI to run: TestClaudeOptionsFromConfigCarriesTheTurnTimeout
+// fails if a field stops being fed from the configuration it names, and
+// TestClaudeOptionsFromConfigFallsBackToTheDefaultTurnTimeout fails if an unset
+// recovery.turn_timeout stops falling back to claude.DefaultTurnTimeout.
 func claudeOptionsFromConfig(cfg *config.Config, clk clock.Clock, log *slog.Logger) claude.Options {
 	return claude.Options{
 		Executable: cfg.Claude.Executable,
 		Clock:      clk,
 		Logger:     log,
 		All:        cfg.Claude.DiscoverAllSessions,
-		// recovery.startup_timeout is the bound on the handoff invocation and
-		// nothing else: the resumed work runs under the supervisor, so the only
-		// wait ccresu can apply is the one for acceptance. Without this line the
-		// key is a knob with no reader again and the call is pinned at
-		// claude.DefaultHandoffTimeout, whatever the configuration says.
-		HandoffTimeout: cfg.Recovery.StartupTimeout.Duration,
-		// PRD 5 R2: the four handoff-safe flags ride every resume. An unset knob
-		// adds nothing, so a config with no guardrails produces the vector it did
-		// before this PRD.
-		Guardrails: guardrailsFromConfig(cfg),
-	}
-}
-
-// guardrailsFromConfig maps the configured guardrails onto the flags a handoff
-// may carry.
-//
-// The two spend caps are deliberately absent: they are ccresu's own checks, not
-// CLI flags, and the flags that would express them are print mode only (PRD 5
-// §6.1). What is left is the four flags a `--bg` handoff accepts.
-func guardrailsFromConfig(cfg *config.Config) claude.Guardrails {
-	if cfg == nil {
-		return claude.Guardrails{}
-	}
-	g := cfg.Recovery.Guardrails
-	return claude.Guardrails{
-		Model:          g.Model,
-		Effort:         g.Effort,
-		FallbackModel:  g.FallbackModel,
-		PermissionMode: g.PermissionMode,
+		// recovery.turn_timeout is the bound on one resume and nothing else: the
+		// command runs the whole turn, so this is how long a resumed conversation
+		// may take before ccresu gives up on it. Without this line the key is a
+		// knob with no reader again and every resume is pinned at
+		// claude.DefaultTurnTimeout, whatever the configuration says.
+		TurnTimeout: cfg.Recovery.TurnTimeout.Duration,
 	}
 }
 
@@ -262,15 +223,6 @@ func guardrailsFromConfig(cfg *config.Config) claude.Guardrails {
 // guard against the two drifting apart.
 func recoveryFromConfig(cfg *config.Config, store *storage.Store, provider claude.SessionProvider, clk clock.Clock, log *slog.Logger, park recovery.LimitPark, observer recovery.Observer) (*recovery.Manager, error) {
 	rec := cfg.Recovery
-	// The supervisor read (PRD 3 R1) goes through the same provider as the state
-	// read, so the pass cannot read one instance's sessions and ask a second
-	// instance about them. A provider with no supervisor surface leaves it nil,
-	// which the engine reports as "no supervisor" — the same answer as a machine
-	// that has never run `claude --bg`.
-	var supervisor recovery.SupervisorReader
-	if reader, ok := provider.(recovery.SupervisorReader); ok {
-		supervisor = reader
-	}
 	return recovery.New(recovery.Config{
 		Store:               store,
 		Provider:            provider,
@@ -281,8 +233,6 @@ func recoveryFromConfig(cfg *config.Config, store *storage.Store, provider claud
 		Backoff:             recovery.FromConfigValues(rec.InitialDelay.Duration, rec.MaxDelay.Duration, rec.Multiplier, rec.Jitter),
 		MaxConcurrent:       rec.MaxConcurrentRecoveries,
 		ContinuationMessage: cfg.Claude.ContinuationMessage,
-		VerificationTimeout: rec.VerificationTimeout.Duration,
-		HealthCheckInterval: rec.HealthCheckInterval.Duration,
 		Limits: recovery.SpendLimits{
 			PerSession: rec.Guardrails.MaxCostUSDPerSession,
 			PerAttempt: rec.Guardrails.MaxCostUSDPerAttempt,
@@ -292,8 +242,7 @@ func recoveryFromConfig(cfg *config.Config, store *storage.Store, provider claud
 		// built here so this function stays a pure mapping of configuration onto
 		// policy, and so a caller with no notifier passes nil and announces
 		// nothing.
-		Observer:   observer,
-		Supervisor: supervisor,
+		Observer: observer,
 	})
 }
 

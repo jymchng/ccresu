@@ -18,7 +18,7 @@ and documentation site that never talks to a running daemon.
 | Claude Code discovery and resume | `internal/claude` |
 | Usage-limit detection | `internal/detector` |
 | Reset-time parsing and schedules | `internal/scheduler` |
-| State machine, locking, backoff, verifier | `internal/recovery` |
+| State machine, locking, backoff, the exit-status verdict and the transcript measurement | `internal/recovery` |
 | Telegram Bot API client and queue | `internal/telegram` |
 | REST + SSE API | `internal/server` |
 | Tests | `internal/*_test.go`, `tests/support`, `tests/e2e` |
@@ -28,24 +28,26 @@ and documentation site that never talks to a running daemon.
 
 ## Verified Claude Code interfaces
 
-Only documented interfaces are used, all verified against Claude Code 2.1.223:
+Only documented interfaces are used, all verified against Claude Code 2.1.257:
 
 | Purpose | Interface |
 | --- | --- |
 | Discover sessions | `claude agents --json` (`--all`, `--cwd <path>`) |
 | Transcripts | `~/.claude/projects/<slugified-cwd>/<session-id>.jsonl` |
 | Per-session environment | `~/.claude/session-env/<session-id>/` |
-| Resume the original session | `claude --bg --resume <session-id> --name ccresu-<first-8-hex> "<message>"` |
-| Prove the resume | the CLI's `backgrounded · <short-id> · <name>` block, then the published `state` from `claude agents --json --all` |
+| Resume the original session | `claude --resume <session-id> "<continuation message>"` |
+| Prove the resume | the command's exit status: `0` is `RESUMED`, anything else is a failed attempt carrying its exit code and stderr |
 
-The resume argv is built in exactly one place (`claude.HandoffArgs`,
-`internal/claude/handoff.go`), is passed as separate argv elements with no shell,
-and forks nothing — the continuation goes to Claude Code's background supervisor,
-not to a process ccresu owns. The CLI answers a handoff with a
-`backgrounded · <short-id> · <name>` block; a handoff that prints no block is
-`ErrHandoffNotAcknowledged`, because ccresu could not then name what it created.
-`--bg` and `-p` cannot be combined, so the retired print-mode vector is absent by
-construction rather than by convention. A session type the CLI reports but ccresu
+The resume argv is built in exactly one place (`claude.ResumeArgs`,
+`internal/claude/resume.go`): exactly three elements — `--resume`, the session
+id, and the continuation message as the last positional argument. No other flag
+is added and no shell is involved. The command is started in the session's own
+working directory, resolved by `claude.ResolveWorkspace` (worktree-aware), never
+in the daemon's. It is a blocking call: ccresu waits for the whole turn, bounded
+by `recovery.turn_timeout` (30m by default), and `claude.DefaultQueryTimeout`
+(30s) covers only the `--version` and `agents --json` probes. Transcript growth
+is measured once after a successful exit and recorded as a diagnostic, never as
+the verdict. A session type the CLI reports but ccresu
 does not understand becomes `UNRECOVERABLE` with the reported type in the reason —
 never an invented command.
 
@@ -126,30 +128,32 @@ layer with only the process execution stubbed:
 3. Record the paused-goal companion message.
 4. Resolve 12:00 **Europe/Berlin** — not the host zone.
 5. Persist the schedule and wait.
-6. Reach the reset, recheck, and hand the continuation to the supervisor, exactly
-   once, for the same session id and under a `ccresu-<first-8-hex>` label derived
-   from it: `--bg` first, `--resume <session-id>`, `--name <label>`, the message
-   last, and no print-mode flag anywhere.
-7. Prove the handoff from the CLI's `backgrounded · <short-id> · <name>` block. The
-   test asserts the handoff was accepted, carries a state id, and — explicitly —
-   that verification did **not** claim transcript growth.
+6. Reach the reset and continue the session exactly once, for the same session
+   id, with one command and no other flags anywhere: `--resume
+   <session-id>` and the continuation message last.
+7. Take the verdict from the exit status alone — exit `0` means the turn finished.
+   The transcript is measured once, after that exit, and the test asserts the
+   growth it read is recorded as a diagnostic, never as the verdict.
 8. Reach `RESUMED`, persisted, with one session row and the same project path; the
-   attempt records the handoff state id, label, instant and copy flag, which is what
-   tells a restarting ccresu the work is the supervisor's.
+   attempt records when it finished and the transcript growth it measured.
 9. Queue and deliver exactly one Telegram success message.
 
-This scenario proves the *handoff*, because that is where its proof now lies: its
-provider returns an empty listing on purpose (`tests/support`), so the session is
-"not observed" and the published state decides nothing here. The mapping that
-reads the published state — one `claude agents --json --all` per pass, keyed by
-`sessionId`, total over every documented value plus absent and unknown — is proven
-where the listing is scripted: the `internal/recovery` acceptance tests. Those
-also cover the other branch, where a `blocked` publication with a handoff
-outstanding is read as a landed continuation — `RESUMED`, with the published
-`waitingFor` recorded verbatim — instead of a park that sent no continuation. (At
-the time of this report it parked the session in a needs-input state and raised a
-needs-input milestone; 0.9.0 removed both, because a blocked conversation is one
-waiting on a human, not a failed resume.)
+This scenario is where the contract is proven end to end. Its provider
+(`tests/support`) scripts the status and resume results, so every layer the real
+binary walks is exercised with process execution as the only stub: the invocation
+is compared against `claude.ResumeArgs`, the exit status decides, and the
+transcript growth that followed is asserted as the diagnostic recorded beside the
+attempt — never as a second verdict that could overrule the exit.
+
+The measurement itself is proven where the transcript is scripted, in the
+`internal/recovery` tests: `Recorder.Measure` reads once, records the line and byte
+counts either side of the turn, and explains an unmeasurable transcript rather than
+assuming it grew. There is no waiting step and nothing left to wait for, because
+the resume runs the turn before it returns; a read taken afterwards can report what
+happened but cannot revise it. (Before 0.10.0 this branch watched a detached run
+through its published state, and read a `blocked` publication as a landed
+continuation. The resume now ends when the turn ends, so that machinery, its
+mapping and its proof are gone with it.)
 
 Plus two tighter scenarios: a restart in the middle of the wait
 (`TestScenarioSurvivesRestartMidWait`) and `ErrLimitNotCleared` — the limit is
@@ -161,12 +165,13 @@ Rediscovery after a spent budget is covered by the `internal/recovery` unit test
 
 Tracked as open goals, not hidden:
 
-- `internal/recovery` is at 95.8%. The statements still uncovered are **not** all
-  unreachable, and calling them defensive was wrong: the `LimitInForceError`
-  message variants, the verification notes for a copied or unstamped handoff
-  (`verify.go`), the `state.move` and store-error returns in `manager.go`, and
-  `Reset` on a nil source are each reachable by a test that scripts them. They are
-  an open goal — coverage debt, not written off as unreachable.
+- `internal/recovery` is at 94.4%. The statements still uncovered are **not** all
+  unreachable, and calling them defensive was wrong: `search.go`'s `SearchLimit`
+  skip reasons and the `storedDueAt` branches, `limitpark.go`'s `Error()` message
+  variants, the store-error returns in `manager.go` (`announce`,
+  `recordTranscriptMetrics`, `park`, `absorbAttemptWrites`) and `spend.go`'s cap
+  notes are each reachable by a test that scripts them. They are an open goal —
+  coverage debt, not written off as unreachable.
 - `tests/integration` holds three test files and no non-test Go files, so it
   contributes no statements of its own; `cmd/ccresu` is a single test file over a
   two-statement `main`.

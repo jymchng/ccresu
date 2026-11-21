@@ -73,8 +73,8 @@ func TestSessionsMarksTheRunDirectoryWhenItMatchesTheProject(t *testing.T) {
 		t.Errorf("inspect output does not say the run directory is the project's:\n%s", stdout)
 	}
 
-	// A session no observation has recorded a run directory for is reported as
-	// unknown, never as "it runs where it started": the two are different claims.
+	// A session with no recorded run directory is reported as unknown, never as
+	// "it runs where it started": the two are different claims.
 	h2 := newHarness(t)
 	h2.seedSession(t, canonicalSessionID, func(s *storage.Session) {
 		s.ProjectPath = checkout
@@ -84,7 +84,7 @@ func TestSessionsMarksTheRunDirectoryWhenItMatchesTheProject(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("inspect exit = %d", code)
 	}
-	if !strings.Contains(stdout, "unknown (no observation has recorded one") {
+	if !strings.Contains(stdout, "unknown (not recorded yet") {
 		t.Errorf("inspect output claims a run directory nobody observed:\n%s", stdout)
 	}
 }

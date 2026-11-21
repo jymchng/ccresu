@@ -464,7 +464,7 @@ func (p *Provider) ResumeSessionIn(ctx context.Context, sessionID, message, dir 
 	}
 	session, err := p.GetSession(ctx, sessionID)
 	if err != nil {
-		// A session the CLI no longer lists is still resumable: the handoff is
+		// A session the CLI no longer lists is still resumable: the resume is
 		// addressed by id, and the caller has already resolved a directory. The
 		// zero Session is enough for the bookkeeping below — but not for the
 		// vector, which is why resumeIn takes the id as its own argument rather
@@ -474,11 +474,11 @@ func (p *Provider) ResumeSessionIn(ctx context.Context, sessionID, message, dir 
 	return p.resumeIn(ctx, sessionID, session, message, dir)
 }
 
-// resumeIn is the one place a handoff is issued, so the two entry points cannot
+// resumeIn is the one place a resume is issued, so the two entry points cannot
 // drift into running in different directories.
 //
 // sessionID is passed separately from session because session may be the zero
-// value (a session discovery does not report) while the handoff still has to
+// value (a session discovery does not report) while the resume still has to
 // name the conversation it continues. Reading the id off the session instead
 // built a `--resume ""` vector for exactly that case.
 func (p *Provider) resumeIn(ctx context.Context, sessionID string, session Session, message, dir string) (ResumeResult, error) {

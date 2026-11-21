@@ -265,31 +265,29 @@ func toNotificationDTO(notification storage.Notification) notificationDTO {
 	}
 }
 
-// verificationDTO is the wire form of the resume proof.
+// verificationDTO is the wire form of the post-resume measurement.
 type verificationDTO struct {
-	SessionIDPreserved bool     `json:"session_id_preserved"`
-	TranscriptGrew     bool     `json:"transcript_grew"`
-	Proven             bool     `json:"proven"`
-	LinesBefore        int64    `json:"lines_before"`
-	LinesAfter         int64    `json:"lines_after"`
-	SizeBefore         int64    `json:"size_before"`
-	SizeAfter          int64    `json:"size_after"`
-	Running            bool     `json:"running"`
-	Notes              []string `json:"notes,omitempty"`
+	Proven         bool     `json:"proven"`
+	ExitCode       int      `json:"exit_code"`
+	TranscriptGrew bool     `json:"transcript_grew"`
+	LinesBefore    int64    `json:"lines_before"`
+	LinesAfter     int64    `json:"lines_after"`
+	SizeBefore     int64    `json:"size_before"`
+	SizeAfter      int64    `json:"size_after"`
+	Notes          []string `json:"notes,omitempty"`
 }
 
 // toVerificationDTO converts a verification result.
 func toVerificationDTO(verification recovery.Verification) verificationDTO {
 	return verificationDTO{
-		SessionIDPreserved: verification.SessionIDPreserved,
-		TranscriptGrew:     verification.TranscriptGrew,
-		Proven:             verification.Proven,
-		LinesBefore:        verification.LinesBefore,
-		LinesAfter:         verification.LinesAfter,
-		SizeBefore:         verification.SizeBefore,
-		SizeAfter:          verification.SizeAfter,
-		Running:            verification.Running,
-		Notes:              verification.Notes,
+		Proven:         verification.Proven,
+		ExitCode:       verification.ExitCode,
+		TranscriptGrew: verification.TranscriptGrew,
+		LinesBefore:    verification.LinesBefore,
+		LinesAfter:     verification.LinesAfter,
+		SizeBefore:     verification.SizeBefore,
+		SizeAfter:      verification.SizeAfter,
+		Notes:          verification.Notes,
 	}
 }
 

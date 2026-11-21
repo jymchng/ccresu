@@ -23,9 +23,9 @@ func baselineFor(id string) Baseline {
 	return Baseline{SessionID: id, TranscriptPath: "/home/u/.claude/projects/p/" + id + ".jsonl", TranscriptLines: 5, TranscriptSize: 100}
 }
 
-// goodResult is a resume result that preserved the session id.
+// goodResult is a resume whose turn ran to its end: exit 0 is the whole verdict.
 func goodResult(id string) claude.ResumeResult {
-	return claude.ResumeResult{RequestedSessionID: id, SessionID: id, Verified: true, Result: "done"}
+	return claude.ResumeResult{RequestedSessionID: id, ExitCode: 0}
 }
 
 // statusFor builds a status reading with the given transcript measurement.
@@ -36,288 +36,125 @@ func statusFor(id string, lines, size int64) claude.SessionStatus {
 	}
 }
 
-func TestVerifierMeasuresGrowthByLineCount(t *testing.T) {
+// TestMeasureRecordsGrowthAsADiagnostic is R3: the transcript is measured after
+// the turn, the measurement is recorded, and it is never promoted into a second
+// opinion about work the exit status already settled.
+func TestMeasureRecordsGrowthAsADiagnostic(t *testing.T) {
 	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
 		return statusFor(sessionA, 9, 180), nil
 	}}
-	verifier := Verifier{Provider: provider, Timeout: -1, Interval: -1}
+	recorder := Recorder{Provider: provider}
 
-	got, err := verifier.Verify(context.Background(), baselineFor(sessionA), goodResult(sessionA))
-	if err != nil {
-		t.Fatalf("Verify = %v, want nil", err)
+	got := recorder.Measure(context.Background(), baselineFor(sessionA), goodResult(sessionA))
+	if !got.Proven {
+		t.Fatalf("Verification = %+v, want Proven: the resume exited zero", got)
 	}
-	// PRD 2 / R3: growth is measured, recorded and never believed.
-	if !got.SessionIDPreserved || !got.TranscriptGrew {
-		t.Fatalf("Verification = %+v, want the growth measured and the id preserved", got)
+	if !got.TranscriptGrew {
+		t.Errorf("TranscriptGrew = false, want true: the transcript advanced")
 	}
-	if got.Proven {
-		t.Fatal("Proven = true, want false: growth alone is not proof that the conversation continued")
+	if got.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0", got.ExitCode)
 	}
 	if got.LinesBefore != 5 || got.LinesAfter != 9 || got.SizeBefore != 100 || got.SizeAfter != 180 {
 		t.Errorf("measurements = %+v, want the before/after snapshots", got)
 	}
-	if !containsNote(got.Notes, "growth alone is not proof") {
-		t.Errorf("Notes = %v, want the diagnostic disclaimer", got.Notes)
-	}
-	if missing := got.Missing(); len(missing) != 1 {
-		t.Errorf("Missing = %v, want only the missing published state", missing)
+	if len(got.Notes) != 0 {
+		t.Errorf("Notes = %v, want none: every measurement was taken", got.Notes)
 	}
 }
 
-func TestVerifierMeasuresGrowthBySizeWhenLinesDoNotMove(t *testing.T) {
+// TestMeasureUsesTheExitStatusAsTheVerdict pins the split: a turn that failed
+// is not proven even when the transcript happened to grow, because the exit
+// status is the verdict and growth is only a record.
+func TestMeasureUsesTheExitStatusAsTheVerdict(t *testing.T) {
+	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
+		return statusFor(sessionA, 9, 180), nil
+	}}
+	recorder := Recorder{Provider: provider}
+
+	result := claude.ResumeResult{RequestedSessionID: sessionA, ExitCode: 3}
+	got := recorder.Measure(context.Background(), baselineFor(sessionA), result)
+	if got.Proven {
+		t.Fatal("Proven = true, want false: a non-zero exit is not a finished turn")
+	}
+	if got.ExitCode != 3 {
+		t.Errorf("ExitCode = %d, want the resume's own status 3", got.ExitCode)
+	}
+	if !strings.Contains(got.Reason(), "did not finish its turn") || !strings.Contains(got.Reason(), "exit 3") {
+		t.Errorf("Reason = %q, want it to name the exit status", got.Reason())
+	}
+}
+
+func TestMeasureGrowthBySizeWhenLinesDoNotMove(t *testing.T) {
 	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
 		return statusFor(sessionA, 5, 240), nil
 	}}
-	verifier := Verifier{Provider: provider, Timeout: -1, Interval: -1}
+	recorder := Recorder{Provider: provider}
 
-	got, err := verifier.Verify(context.Background(), baselineFor(sessionA), goodResult(sessionA))
-	if err != nil {
-		t.Fatalf("Verify = %v, want nil", err)
-	}
+	got := recorder.Measure(context.Background(), baselineFor(sessionA), goodResult(sessionA))
 	if !got.TranscriptGrew {
 		t.Fatalf("Verification = %+v, want the byte-count growth measured", got)
-	}
-	if got.Proven {
-		t.Fatal("Proven = true, want false: a byte count is not the supervisor's verdict")
 	}
 	if !containsNote(got.Notes, "size grew") {
 		t.Errorf("Notes = %v, want the byte-count explanation", got.Notes)
 	}
 }
 
-// TestVerificationProvenByPublishedState covers the one way a non-handoff resume
-// can be proven now that growth is a diagnostic: the supervisor publishes a
-// state that establishes the conversation continued.
-func TestVerificationProvenByPublishedState(t *testing.T) {
-	obs := StateObservation{SessionID: sessionA, State: "done", ObservedAt: time.Unix(1, 0).UTC(), InListing: true}
-	decision := Observe(obs, true, false)
-
-	verification := Verification{SessionIDPreserved: true, TranscriptGrew: true}
-	verification.ObservePublished(obs, decision)
-
-	if !verification.Proven {
-		t.Fatalf("Proven = false, want true for a handed-off session the supervisor reports as done: %+v", verification)
+func TestMeasureWithoutAProviderRecordsTheGap(t *testing.T) {
+	got := Recorder{}.Measure(context.Background(), baselineFor(sessionA), goodResult(sessionA))
+	if !got.Proven {
+		t.Error("Proven = false, want true: the verdict is the exit status, not the measurement")
 	}
-	if verification.PublishedState != "done" || !verification.ObservationRecorded {
-		t.Errorf("Verification = %+v, want the published state recorded verbatim", verification)
-	}
-	if missing := verification.Missing(); len(missing) != 0 {
-		t.Errorf("Missing = %v, want none", missing)
-	}
-
-	// The same observation with no handoff outstanding means the conversation
-	// had already finished, which is not a resumed one.
-	if decision := Observe(obs, false, false); decision.State != StateCompleted {
-		t.Errorf("decision = %+v, want COMPLETED for a done session with no handoff", decision)
-	}
-
-	// A blocked session is a landed continuation.
-	//
-	// The supervisor took the handoff and the conversation is now waiting for a
-	// human to answer a prompt, which is the operator's business and not
-	// evidence that the resume failed. Excluding it is what used to make a
-	// blocked session unresumable, so it must be proven here and its published
-	// value kept verbatim.
-	blocked := StateObservation{SessionID: sessionA, State: "blocked", WaitingFor: "permission prompt",
-		ObservedAt: time.Unix(1, 0).UTC(), InListing: true}
-	verification = Verification{SessionIDPreserved: true}
-	verification.ObservePublished(blocked, Observe(blocked, true, false))
-	if !verification.Proven {
-		t.Fatal("Proven = false for a blocked session with a handoff outstanding, want true")
-	}
-	if verification.PublishedState != "blocked" {
-		t.Errorf("PublishedState = %q, want the raw value", verification.PublishedState)
-	}
-}
-
-func TestVerifierReportsUnprovenResumeOnceChecked(t *testing.T) {
-	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
-		return statusFor(sessionA, 5, 100), nil
-	}}
-	verifier := Verifier{Provider: provider, Timeout: -1, Interval: -1}
-
-	got, err := verifier.Verify(context.Background(), baselineFor(sessionA), goodResult(sessionA))
-	if err != nil {
-		t.Fatalf("Verify = %v, want nil: an unproven resume is not an error", err)
-	}
-	if got.Proven || got.TranscriptGrew {
-		t.Fatalf("Verification = %+v, want an unproven resume", got)
-	}
-	if !containsNote(got.Notes, "checked once") {
-		t.Errorf("Notes = %v, want the single-check explanation", got.Notes)
-	}
-	if reason := got.Reason(); !strings.Contains(reason, "no session state") {
-		t.Errorf("Reason = %q, want it to name the missing observation", reason)
-	}
-}
-
-func TestVerifierTimesOutWaitingForGrowth(t *testing.T) {
-	var calls int
-	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
-		calls++
-		return statusFor(sessionA, 5, 100), nil
-	}}
-	// A real clock with a tiny budget exercises the polling loop and its
-	// deadline without a real wait.
-	verifier := Verifier{Provider: provider, Timeout: time.Millisecond, Interval: time.Millisecond}
-
-	got, err := verifier.Verify(context.Background(), baselineFor(sessionA), goodResult(sessionA))
-	if err != nil {
-		t.Fatalf("Verify = %v, want nil", err)
-	}
-	if got.Proven {
-		t.Fatalf("Verification = %+v, want it unproven", got)
-	}
-	if !containsNote(got.Notes, "did not grow within") {
-		t.Errorf("Notes = %v, want the timeout explanation", got.Notes)
-	}
-	if calls < 2 {
-		t.Errorf("provider was checked %d times, want it polled until the deadline", calls)
-	}
-}
-
-func TestVerifierNeverAcceptsARunningProcessAsProof(t *testing.T) {
-	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
-		status := statusFor(sessionA, 5, 100)
-		status.Running = true
-		return status, nil
-	}}
-	verifier := Verifier{Provider: provider, Timeout: -1, Interval: -1}
-
-	got, err := verifier.Verify(context.Background(), baselineFor(sessionA), goodResult(sessionA))
-	if err != nil {
-		t.Fatalf("Verify = %v, want nil", err)
-	}
-	if got.Proven {
-		t.Fatal("a live process must never be treated as proof that the conversation continued")
-	}
-	if !got.Running {
-		t.Error("Running should still be reported")
-	}
-	if !containsNote(got.Notes, "live process is not proof") {
-		t.Errorf("Notes = %v, want the live-process caveat", got.Notes)
-	}
-}
-
-func TestVerifierRejectsATranscriptThatChangedSession(t *testing.T) {
-	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
-		return statusFor(sessionB, 12, 300), nil
-	}}
-	verifier := Verifier{Provider: provider, Timeout: -1, Interval: -1}
-
-	got, err := verifier.Verify(context.Background(), baselineFor(sessionA), goodResult(sessionA))
-	if err != nil {
-		t.Fatalf("Verify = %v, want nil", err)
-	}
-	if got.SessionIDPreserved {
-		t.Fatal("a transcript that belongs to another session must not preserve identity")
-	}
-	if got.Proven {
-		t.Fatal("growth of a different conversation is not proof")
-	}
-	if !containsNote(got.Notes, "belongs to session "+sessionB) {
-		t.Errorf("Notes = %v, want the identity change to be explained", got.Notes)
-	}
-}
-
-func TestVerifierWithoutProviderCannotProveGrowth(t *testing.T) {
-	verifier := Verifier{Timeout: -1, Interval: -1}
-	got, err := verifier.Verify(context.Background(), baselineFor(sessionA), goodResult(sessionA))
-	if err != nil {
-		t.Fatalf("Verify = %v, want nil", err)
-	}
-	if !got.SessionIDPreserved {
-		t.Error("SessionIDPreserved = false, want true: the CLI did report the right id")
-	}
-	if got.Proven {
-		t.Fatal("without a provider the transcript cannot be measured, so the resume is unproven")
+	if got.TranscriptGrew {
+		t.Error("TranscriptGrew = true, want false: nothing was read")
 	}
 	if !containsNote(got.Notes, "no session provider") {
 		t.Errorf("Notes = %v, want the missing-provider explanation", got.Notes)
 	}
 }
 
-func TestVerifierRejectsAnEmptyBaselineSessionID(t *testing.T) {
-	verifier := Verifier{}
-	if _, err := verifier.Verify(context.Background(), Baseline{}, goodResult(sessionA)); err == nil {
-		t.Fatal("Verify = nil error, want a baseline requirement error")
+// TestMeasureNeverFailsTheRecovery is the point of returning no error: the turn
+// already finished, so a read taken afterwards cannot revise it.
+func TestMeasureNeverFailsTheRecovery(t *testing.T) {
+	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
+		return claude.SessionStatus{}, errors.New("transcript unreadable")
+	}}
+
+	got := Recorder{Provider: provider}.Measure(context.Background(), baselineFor(sessionA), goodResult(sessionA))
+	if !got.Proven {
+		t.Error("Proven = false, want true: an unreadable transcript does not undo a finished turn")
+	}
+	if got.TranscriptGrew {
+		t.Error("TranscriptGrew = true, want false: nothing was measured")
+	}
+	if !containsNote(got.Notes, "not measured") {
+		t.Errorf("Notes = %v, want the read failure recorded", got.Notes)
+	}
+	if got.LinesAfter != got.LinesBefore || got.SizeAfter != got.SizeBefore {
+		t.Errorf("measurements = %+v, want the baseline restated when nothing was read", got)
 	}
 }
 
-func TestVerifierHonoursACancelledContext(t *testing.T) {
+func TestMeasureHonoursACancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	verifier := Verifier{Provider: &providerStub{}, Timeout: -1, Interval: -1}
 
-	got, err := verifier.Verify(ctx, baselineFor(sessionA), goodResult(sessionA))
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("Verify error = %v, want context.Canceled", err)
+	got := Recorder{Provider: &providerStub{}}.Measure(ctx, baselineFor(sessionA), goodResult(sessionA))
+	if got.TranscriptGrew {
+		t.Error("TranscriptGrew = true, want false: no read was attempted")
 	}
-	if got.Proven {
-		t.Error("a cancelled verification must never be proven")
+	if !containsNote(got.Notes, "context canceled") {
+		t.Errorf("Notes = %v, want the cancellation recorded", got.Notes)
 	}
 }
 
-func TestVerifierReportsAnUnreadableStatus(t *testing.T) {
-	boom := errors.New("transcript unreadable")
+func TestMeasureReadsTheSessionOnce(t *testing.T) {
 	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
-		return claude.SessionStatus{}, boom
+		return statusFor(sessionA, 7, 140), nil
 	}}
-	verifier := Verifier{Provider: provider, Timeout: -1, Interval: -1}
-
-	_, err := verifier.Verify(context.Background(), baselineFor(sessionA), goodResult(sessionA))
-	if !errors.Is(err, boom) {
-		t.Fatalf("Verify error = %v, want the provider failure", err)
-	}
-	if !strings.Contains(err.Error(), "check session "+sessionA) {
-		t.Errorf("error = %q, want it to name the session", err)
-	}
-}
-
-func TestVerifierSessionIDChecks(t *testing.T) {
-	cases := []struct {
-		name   string
-		note   string
-		result claude.ResumeResult
-	}{
-		{
-			name:   "addressed another session",
-			note:   "asked to resume " + sessionA + " but the command addressed " + sessionB,
-			result: claude.ResumeResult{RequestedSessionID: sessionB, SessionID: sessionA, Verified: true},
-		},
-		{
-			name:   "no session id reported",
-			note:   "reported no session id",
-			result: claude.ResumeResult{RequestedSessionID: sessionA, Verified: true},
-		},
-		{
-			name:   "a different session was created",
-			note:   "reported session " + sessionB + " instead of " + sessionA,
-			result: claude.ResumeResult{SessionID: sessionB, Verified: false},
-		},
-		{
-			name:   "provider did not confirm",
-			note:   "did not confirm",
-			result: claude.ResumeResult{RequestedSessionID: sessionA, SessionID: sessionA, Verified: false},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			verifier := Verifier{Timeout: -1, Interval: -1}
-			got, err := verifier.Verify(context.Background(), baselineFor(sessionA), tc.result)
-			if err != nil {
-				t.Fatalf("Verify = %v, want nil", err)
-			}
-			if got.SessionIDPreserved {
-				t.Fatal("SessionIDPreserved = true, want false")
-			}
-			if got.Proven {
-				t.Fatal("Proven = true, want false")
-			}
-			if !containsNote(got.Notes, tc.note) {
-				t.Errorf("Notes = %v, want a note containing %q", got.Notes, tc.note)
-			}
-		})
+	_ = Recorder{Provider: provider}.Measure(context.Background(), baselineFor(sessionA), goodResult(sessionA))
+	if got := provider.statusCount(); got != 1 {
+		t.Errorf("status reads = %d, want 1: the turn is over, so there is nothing to wait for", got)
 	}
 }
 
@@ -347,24 +184,22 @@ func TestMeasureGrowthWithoutABaselineSnapshot(t *testing.T) {
 	}
 }
 
-func TestVerificationMissingAndReason(t *testing.T) {
-	empty := Verification{}
-	if got := empty.Missing(); len(got) != 2 {
-		t.Errorf("Missing() = %v, want both checks", got)
+func TestVerificationReason(t *testing.T) {
+	cases := []struct {
+		name         string
+		verification Verification
+		want         string
+	}{
+		{"unfinished turn", Verification{ExitCode: 1}, "the resume did not finish its turn (exit 1)"},
+		{"turn ran, transcript grew", Verification{Proven: true, TranscriptGrew: true}, "the resume finished its turn and the transcript grew"},
+		{"turn ran, transcript unchanged", Verification{Proven: true}, "the resume finished its turn"},
 	}
-	partial := Verification{SessionIDPreserved: true}
-	if got := partial.Missing(); len(got) != 1 {
-		t.Errorf("Missing() = %v, want only the missing published state", got)
-	}
-	// A preserved id and a handoff that was never proven: nothing is missing,
-	// because a handoff has no checks to miss, so the reason is the generic
-	// refusal to claim success.
-	unproven := Verification{SessionIDPreserved: true, HandoffAccepted: true}
-	if got := unproven.Reason(); got != "the resume could not be verified" {
-		t.Errorf("Reason() = %q, want the generic unproven message", got)
-	}
-	if got := empty.Reason(); !strings.Contains(got, "session id") || !strings.Contains(got, "no session state") {
-		t.Errorf("Reason() = %q, want both failures", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.verification.Reason(); got != tc.want {
+				t.Errorf("Reason() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -400,20 +235,6 @@ func TestBaselineFromSessionAndStatus(t *testing.T) {
 	}
 }
 
-func TestVerificationFailedError(t *testing.T) {
-	err := VerificationFailedError(sessionA, Verification{})
-	if !errors.Is(err, ErrVerificationFailed) {
-		t.Fatalf("error = %v, want ErrVerificationFailed", err)
-	}
-	if !strings.Contains(err.Error(), sessionA) {
-		t.Errorf("error = %q, want it to name the session", err)
-	}
-	proven := Verification{SessionIDPreserved: true, TranscriptGrew: true, Proven: true}
-	if err := VerificationFailedError(sessionA, proven); err != nil && !errors.Is(err, ErrVerificationFailed) {
-		t.Errorf("error = %v, want ErrVerificationFailed", err)
-	}
-}
-
 // containsNote reports whether any note contains want.
 func containsNote(notes []string, want string) bool {
 	for _, note := range notes {
@@ -422,4 +243,27 @@ func containsNote(notes []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestMeasureDoesNotWait pins the property the old verifier lacked: one read
+// and no polling. A handoff needed a poll because ccresu could not see the end
+// of the work; the resume now returns when the turn is over.
+func TestMeasureDoesNotWait(t *testing.T) {
+	var calls int
+	provider := &providerStub{statusFn: func(int, string) (claude.SessionStatus, error) {
+		calls++
+		return statusFor(sessionA, 5, 100), nil
+	}}
+
+	start := time.Now()
+	got := Recorder{Provider: provider}.Measure(context.Background(), baselineFor(sessionA), goodResult(sessionA))
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("Measure took %s, want it to return after a single read", elapsed)
+	}
+	if calls != 1 {
+		t.Errorf("provider was checked %d times, want exactly 1", calls)
+	}
+	if got.TranscriptGrew {
+		t.Error("TranscriptGrew = true, want false: nothing moved")
+	}
 }

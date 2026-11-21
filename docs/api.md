@@ -81,6 +81,55 @@ curl -s -X PUT -H "Authorization: Bearer $TOKEN" \
   localhost:8787/api/v1/settings
 ```
 
+## The `recover` response
+
+`POST /sessions/{id}/recover` answers when the turn is over, because the command
+it issues runs the whole turn and blocks. The body is the outcome: `session_id`,
+`state`, `resumed`, the persisted `attempt`, and the `verification` measured
+after the exit.
+
+```json
+{
+  "session_id": "4d1f9c2a-7e35-4b18-9a6f-2c8d0e1f3a45",
+  "state": "RESUMED",
+  "resumed": true,
+  "attempt": {
+    "id": 7,
+    "session_id": "4d1f9c2a-7e35-4b18-9a6f-2c8d0e1f3a45",
+    "attempt_number": 1,
+    "state": "RESUMED",
+    "command": "claude --resume 4d1f9c2a-7e35-4b18-9a6f-2c8d0e1f3a45 \"finish the migration and stop\"",
+    "started_at": "2026-11-04T19:24:45Z",
+    "finished_at": "2026-11-04T19:29:03Z",
+    "success": true,
+    "transcript_grew": true
+  },
+  "verification": {
+    "proven": true,
+    "exit_code": 0,
+    "transcript_grew": true,
+    "lines_before": 812,
+    "lines_after": 844,
+    "size_before": 190388,
+    "size_after": 199004
+  }
+}
+```
+
+`proven` restates the exit status of the resume process (`exit_code`): zero
+means the conversation continued. A resume that exits non-zero never produces
+this body. A usage window that has not reopened yet answers `409` with
+`limit_not_cleared` and the session stays parked in `WAITING_FOR_RESET`; any
+other failure answers `500` (`code: "internal"`) with the exit status and the
+CLI's stderr in the message, and the session is scheduled on the retry backoff,
+or returned to `DISCOVERED` when the failure is one ccresu will not retry.
+
+`transcript_grew` and the `lines_*`/`size_*` deltas are the post-turn
+diagnostic: they say whether the transcript ccresu watches changed shape, and
+they never change the verdict. A turn that finishes without the transcript
+growing is still `"resumed": true` — write a client against `proven` and
+`exit_code`, and treat the measurements as information for an operator.
+
 ## Errors
 
 ```json

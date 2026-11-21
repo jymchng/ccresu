@@ -3,6 +3,7 @@ package recovery
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -20,14 +21,12 @@ import (
 // providerStub is a claude.SessionProvider driven by functions, so each test
 // states exactly what the CLI reports and when.
 type providerStub struct {
-	mu           sync.Mutex
-	statusFn     func(call int, sessionID string) (claude.SessionStatus, error)
-	resumeFn     func(sessionID, message string) (claude.ResumeResult, error)
-	listingFn    func(call int) (claude.PublishedListing, error)
-	statusCalls  int
-	listingCalls int
-	resumes      []resumeCall
-	discovers    int
+	mu          sync.Mutex
+	statusFn    func(call int, sessionID string) (claude.SessionStatus, error)
+	resumeFn    func(sessionID, message string) (claude.ResumeResult, error)
+	statusCalls int
+	resumes     []resumeCall
+	discovers   int
 }
 
 // resumeCall records one resume invocation.
@@ -65,32 +64,18 @@ func (p *providerStub) ResumeSession(_ context.Context, sessionID, message strin
 	fn := p.resumeFn
 	p.mu.Unlock()
 	if fn == nil {
-		return handoffResult(sessionID), nil
+		return resumeResult(sessionID), nil
 	}
 	return fn(sessionID, message)
 }
 
-// handoffResult is what a real `claude --bg --resume` acknowledges: a
-// `backgrounded` block naming the state id and the supervisor's label.
+// resumeResult is what a real `claude --resume <id> "<message>"` that ran its
+// turn to the end leaves behind: a zero exit status and nothing else.
 //
-// It is the default because print mode is retired (PRD 1): every resume ccresu
-// issues is a handoff, so a stub that answered with an in-place result would be
-// exercising a path production no longer has. A test that wants the retired
-// shape sets resumeFn explicitly.
-func handoffResult(id string) claude.ResumeResult {
-	short := id
-	if len(short) > 8 {
-		short = short[:8]
-	}
-	return claude.ResumeResult{
-		RequestedSessionID: id,
-		SessionID:          id,
-		Verified:           true,
-		Backgrounded:       true,
-		StateID:            "ab12cd34",
-		Name:               "ccresu-" + short,
-		Result:             "backgrounded",
-	}
+// That is the default because the exit status is the whole verdict. A test that
+// wants a different one sets resumeFn (or the stub's exit field) explicitly.
+func resumeResult(id string) claude.ResumeResult {
+	return claude.ResumeResult{RequestedSessionID: id, ExitCode: 0}
 }
 
 func (p *providerStub) resumeCount() int {
@@ -103,32 +88,6 @@ func (p *providerStub) statusCount() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.statusCalls
-}
-
-// PublishedListing implements claude.SessionProvider.
-//
-// The default is an empty, successful listing: a test that does not script the
-// supervisor's opinion exercises the path where the supervisor has nothing to
-// say about the session, which the mapping treats as "not observed" rather than
-// as a verdict.
-func (p *providerStub) PublishedListing(context.Context) (claude.PublishedListing, error) {
-	p.mu.Lock()
-	p.listingCalls++
-	call := p.listingCalls
-	fn := p.listingFn
-	p.mu.Unlock()
-	if fn == nil {
-		return claude.PublishedListing{ReadAt: time.Unix(0, 0).UTC()}, nil
-	}
-	return fn(call)
-}
-
-// publishedCount reports how many listing reads the stub has served, which is
-// how a test asserts that one pass issues one `agents --json --all`.
-func (p *providerStub) publishedCount() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.listingCalls
 }
 
 // growthProvider reports the baseline on the first status check and a grown
@@ -147,29 +106,6 @@ func staticProvider(lines, size int64) *providerStub {
 	return &providerStub{statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
 		return statusFor(sessionID, lines, size), nil
 	}}
-}
-
-// publishedWorking scripts the supervisor's listing with the given sessions in
-// the `working` state.
-//
-// It is what the "it continued on its own" branch rests on now that growth is a
-// diagnostic (PRD 2 / R3): a test that wants that branch must script the state
-// the supervisor published, because no transcript measurement can produce it.
-func publishedWorking(ids ...string) func(int) (claude.PublishedListing, error) {
-	entries := make([]claude.AgentEntry, 0, len(ids))
-	byID := make(map[string]claude.AgentEntry, len(ids))
-	for _, id := range ids {
-		entry := claude.AgentEntry{SessionID: id, Kind: "background", State: "working", Status: "busy"}
-		entries = append(entries, entry)
-		byID[id] = entry
-	}
-	return func(int) (claude.PublishedListing, error) {
-		return claude.PublishedListing{
-			Entries:     entries,
-			BySessionID: byID,
-			ReadAt:      time.Unix(0, 0).UTC(),
-		}, nil
-	}
 }
 
 // storeSeq makes every in-memory database distinct even when several are opened
@@ -229,19 +165,17 @@ func recoverableSession(id string) storage.Session {
 	}
 }
 
-// testManager builds a Manager with deterministic clock, backoff and a verifier
-// that checks once instead of waiting.
+// testManager builds a Manager with a deterministic clock and backoff, so every
+// pass is reproducible.
 func testManager(t *testing.T, store Store, provider claude.SessionProvider, mutate func(*Config)) *Manager {
 	t.Helper()
 	cfg := Config{
-		Store:               store,
-		Provider:            provider,
-		Clock:               clock.NewFake(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)),
-		Enabled:             true,
-		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
-		VerificationTimeout: -1,
-		HealthCheckInterval: -1,
-		Backoff:             Backoff{Initial: time.Second, Max: time.Minute, Multiplier: 2, Jitter: 0},
+		Store:    store,
+		Provider: provider,
+		Clock:    clock.NewFake(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)),
+		Enabled:  true,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Backoff:  Backoff{Initial: time.Second, Max: time.Minute, Multiplier: 2, Jitter: 0},
 	}
 	if mutate != nil {
 		mutate(&cfg)
@@ -328,10 +262,10 @@ func TestNewAppliesDocumentedDefaults(t *testing.T) {
 	}
 }
 
-func TestNewHonoursOverridesAndFillsTheVerifier(t *testing.T) {
+func TestNewHonoursOverridesAndFillsTheRecorder(t *testing.T) {
 	store := newTestStore(t)
 	provider := &providerStub{}
-	override := Verifier{Timeout: -1, Interval: -1}
+	override := Recorder{}
 	manager, err := New(Config{
 		Store:               store,
 		Provider:            provider,
@@ -340,7 +274,7 @@ func TestNewHonoursOverridesAndFillsTheVerifier(t *testing.T) {
 		MaxConcurrent:       2,
 		ContinuationMessage: "keep going",
 		Backoff:             Backoff{Initial: 2 * time.Second, Max: time.Minute, Multiplier: 2},
-		Verifier:            &override,
+		Recorder:            &override,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -354,11 +288,22 @@ func TestNewHonoursOverridesAndFillsTheVerifier(t *testing.T) {
 	if got := cap(manager.sem); got != 2 {
 		t.Errorf("concurrency budget = %d, want 2", got)
 	}
-	if manager.verifier.Provider != provider {
-		t.Error("the verifier must fall back to the manager's provider")
+	if manager.recorder.Provider != provider {
+		t.Error("the recorder must fall back to the manager's provider")
 	}
-	if manager.verifier.Clock == nil {
-		t.Error("the verifier must fall back to the manager's clock")
+}
+
+func TestTheRecorderDefaultsToTheProvidersStatus(t *testing.T) {
+	provider := &providerStub{}
+	manager, err := New(Config{Store: newTestStore(t), Provider: provider})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// A manager with no Recorder override still measures: the default
+	// recorder reads the provider that resumes the session, so the diagnostic
+	// exists without the host wiring anything.
+	if manager.recorder.Provider != provider {
+		t.Error("the default recorder must read through the manager's provider")
 	}
 }
 
@@ -375,13 +320,13 @@ func TestFromConfig(t *testing.T) {
 		MaxDelay:                config.NewDuration(time.Minute),
 		Multiplier:              2,
 		Jitter:                  0.1,
-		VerificationTimeout:     config.NewDuration(90 * time.Second),
-		HealthCheckInterval:     config.NewDuration(5 * time.Second),
+		TurnTimeout:             config.NewDuration(90 * time.Second),
 		MaxConcurrentRecoveries: 2,
 	}
 	cfg.Claude = config.Claude{ContinuationMessage: "carry on"}
 
-	manager, err := FromConfig(cfg, newTestStore(t), &providerStub{}, clock.System())
+	provider := &providerStub{}
+	manager, err := FromConfig(cfg, newTestStore(t), provider, clock.System())
 	if err != nil {
 		t.Fatalf("FromConfig: %v", err)
 	}
@@ -394,8 +339,12 @@ func TestFromConfig(t *testing.T) {
 	if manager.Backoff().Initial != 5*time.Second {
 		t.Errorf("Backoff().Initial = %s, want 5s", manager.Backoff().Initial)
 	}
-	if manager.verifier.Timeout != 90*time.Second || manager.verifier.Interval != 5*time.Second {
-		t.Errorf("verifier = %+v, want the configured timeout and interval", manager.verifier)
+	// The turn timeout bounds one `claude --resume` invocation, so it is not
+	// recovery policy: the manager never waits on a turn the way it waited on a
+	// backgrounded handoff the old supervisor ran, and its recorder reads once
+	// instead of polling.
+	if manager.recorder.Provider != provider {
+		t.Error("the recorder must read through the configured provider")
 	}
 	if got := cap(manager.sem); got != 2 {
 		t.Errorf("concurrency budget = %d, want 2", got)
@@ -471,12 +420,11 @@ func TestRecoverResumesAndProvesTheConversationContinued(t *testing.T) {
 	if stored.LastError != "" {
 		t.Errorf("LastError = %q, want it cleared after success", stored.LastError)
 	}
-	if stored.TranscriptLines != 10 {
-		// The handoff is not measured under ccresu's process: the transcript
-		// belongs to the supervisor from the moment the block is printed, so the
-		// stored snapshot keeps the pre-resume measurement instead of pretending
-		// ccresu watched it grow (PRD 2 / R3).
-		t.Errorf("TranscriptLines = %d, want the pre-resume snapshot kept", stored.TranscriptLines)
+	if stored.TranscriptLines != 12 {
+		// The resume ran the turn itself, so the transcript is measured once it
+		// returns and the grown figure is what `ccresu inspect` reads back. It is
+		// a diagnostic: the RESUMED state above rests on the exit status.
+		t.Errorf("TranscriptLines = %d, want the post-resume measurement recorded", stored.TranscriptLines)
 	}
 
 	history, err := manager.History(context.Background(), sessionA)
@@ -531,85 +479,6 @@ func TestRecoverUsesTheRequestMessageAndLimit(t *testing.T) {
 	}
 	if !strings.Contains(outcome.Attempt.Command, "continuation message") {
 		t.Errorf("attempt command = %q, want a redacted summary", outcome.Attempt.Command)
-	}
-}
-
-func TestRecoverRecognisesASessionThatAlreadyContinued(t *testing.T) {
-	store := newTestStore(t)
-	seedSession(t, store, recoverableSession(sessionA))
-	provider := &providerStub{
-		statusFn: func(_ int, sessionID string) (claude.SessionStatus, error) {
-			status := statusFor(sessionID, 14, 280)
-			status.Running = true
-			return status, nil
-		},
-		// The supervisor says the conversation is working, which is what makes
-		// this a resume ccresu must recognise instead of re-issue (PRD 2 / R3).
-		listingFn: publishedWorking(sessionA),
-	}
-	manager := testManager(t, store, provider, nil)
-
-	outcome, err := manager.Recover(context.Background(), sessionA)
-	if err != nil {
-		t.Fatalf("Recover: %v", err)
-	}
-	if outcome.State != StateResumed || !outcome.Resumed || !outcome.Verification.Proven {
-		t.Fatalf("outcome = %+v, want an already-proven resume", outcome)
-	}
-	if provider.resumeCount() != 0 {
-		t.Error("an already-working session must not be resumed again")
-	}
-	if !containsNote(outcome.Verification.Notes, "continued on its own") {
-		t.Errorf("notes = %v, want the already-resumed explanation", outcome.Verification.Notes)
-	}
-	stored, err := store.GetSession(context.Background(), sessionA)
-	if err != nil {
-		t.Fatalf("get session: %v", err)
-	}
-	if stored.TranscriptLines != 14 {
-		t.Errorf("TranscriptLines = %d, want the observed measurement", stored.TranscriptLines)
-	}
-}
-
-func TestRecoverWaitsWhenTheLimitIsStillInForce(t *testing.T) {
-	store := newTestStore(t)
-	seedSession(t, store, recoverableSession(sessionA))
-	provider := growthProvider(10, 12)
-	manager := testManager(t, store, provider, func(cfg *Config) {
-		cfg.LimitRecheck = func(context.Context, string) (bool, error) { return false, nil }
-	})
-
-	outcome, err := manager.Recover(context.Background(), sessionA)
-	if !errors.Is(err, ErrLimitNotCleared) {
-		t.Fatalf("Recover error = %v, want ErrLimitNotCleared", err)
-	}
-	if outcome.State != StateWaitingForReset {
-		t.Errorf("outcome state = %s, want WAITING_FOR_RESET", outcome.State)
-	}
-	if outcome.Resumed {
-		t.Error("Resumed = true, want false")
-	}
-	if provider.resumeCount() != 0 {
-		t.Error("a session whose limit is still active must not be resumed")
-	}
-}
-
-func TestRecoverRetriesWhenTheLimitCheckFails(t *testing.T) {
-	store := newTestStore(t)
-	seedSession(t, store, recoverableSession(sessionA))
-	manager := testManager(t, store, growthProvider(10, 12), func(cfg *Config) {
-		cfg.LimitRecheck = func(context.Context, string) (bool, error) {
-			return false, errors.New("connection reset by peer")
-		}
-	})
-
-	outcome, err := manager.Recover(context.Background(), sessionA)
-	var retry *RetryError
-	if !errors.As(err, &retry) {
-		t.Fatalf("Recover error = %v, want a RetryError", err)
-	}
-	if outcome.State != StateWaitingForReset || outcome.Delay != retry.Delay {
-		t.Errorf("outcome = %+v, want WAITING_FOR_RESET with the same delay %s", outcome, retry.Delay)
 	}
 }
 
@@ -731,38 +600,6 @@ func TestRecoverRecordsAFailedPreResumeCheckWithTheBudgetSpent(t *testing.T) {
 	}
 }
 
-func TestRecoverRecordsAFailedLimitCheckAsARetryWait(t *testing.T) {
-	store := newTestStore(t)
-	session := recoverableSession(sessionA)
-	session.State = StateWaitingForReset
-	seedSession(t, store, session)
-	ctx := context.Background()
-
-	manager := testManager(t, store, growthProvider(10, 12), func(cfg *Config) {
-		cfg.LimitRecheck = func(context.Context, string) (bool, error) {
-			return false, errors.New("invalid api key")
-		}
-	})
-
-	outcome, err := manager.Recover(ctx, sessionA)
-	var retry *RetryError
-	if !errors.As(err, &retry) {
-		t.Fatalf("Recover error = %v, want a RetryError, not a rejected transition", err)
-	}
-	if outcome.State != StateWaitingForReset {
-		t.Errorf("outcome state = %s, want WAITING_FOR_RESET", outcome.State)
-	}
-	transitions, err := store.ListTransitions(ctx, sessionA, 0)
-	if err != nil {
-		t.Fatalf("list transitions: %v", err)
-	}
-	last := transitions[len(transitions)-1]
-	if last.FromState != StateWaitingForReset || last.ToState != StateWaitingForReset {
-		t.Errorf("last transition = %s -> %s, want WAITING_FOR_RESET -> WAITING_FOR_RESET",
-			last.FromState, last.ToState)
-	}
-}
-
 func TestRecoverSchedulesARetryAfterATransientFailure(t *testing.T) {
 	store := newTestStore(t)
 	seedSession(t, store, recoverableSession(sessionA))
@@ -839,12 +676,18 @@ func TestRecoverStopsOnANonRetryableFailure(t *testing.T) {
 	}
 }
 
-func TestRecoverTreatsAnErrorResultAsAFailure(t *testing.T) {
+// TestRecoverTreatsANonZeroExitAsAFailure pins the verdict: the provider turns a
+// non-zero exit into an error, and the recovery has nothing else to judge by.
+//
+// There is no result block to re-read and no second opinion to take, so an exit
+// the CLI reports as failed is simply a failed attempt.
+func TestRecoverTreatsANonZeroExitAsAFailure(t *testing.T) {
 	store := newTestStore(t)
 	seedSession(t, store, recoverableSession(sessionA))
 	provider := growthProvider(10, 12)
 	provider.resumeFn = func(sessionID, _ string) (claude.ResumeResult, error) {
-		return claude.ResumeResult{RequestedSessionID: sessionID, IsError: true, Result: "still limited\nsecond line"}, nil
+		return claude.ResumeResult{RequestedSessionID: sessionID, ExitCode: 3},
+			fmt.Errorf("%w: exit status 3", claude.ErrResumeFailed)
 	}
 	manager := testManager(t, store, provider, nil)
 
@@ -1203,7 +1046,8 @@ func TestRecoverEnforcesTheConcurrencyLimit(t *testing.T) {
 // TestAProcessExitIsNotAFailedRecovery is PRD 3 R6's acceptance criterion.
 //
 // A restart of ccresu leaves the attempt row open, because the process that owned
-// it is gone. The supervisor may still be running the session — restarting it,
+// it is gone. Something outside ccresu may still be running the session —
+// restarting it,
 // moving it across an update, or having idle-stopped it are all normal — so the
 // close records *interrupted*, not `Success: false`, the attempt spends no
 // budget, and the pass ends without handing off again: the next pass re-observes
@@ -1215,7 +1059,7 @@ func TestAProcessExitIsNotAFailedRecovery(t *testing.T) {
 	seedSession(t, store, session)
 	ctx := context.Background()
 
-	interrupted, err := store.StartAttempt(ctx, sessionA, 0, "claude --bg --resume "+sessionA)
+	interrupted, err := store.StartAttempt(ctx, sessionA, 0, "claude --resume "+sessionA)
 	if err != nil {
 		t.Fatalf("start attempt: %v", err)
 	}
@@ -1235,7 +1079,7 @@ func TestAProcessExitIsNotAFailedRecovery(t *testing.T) {
 
 	// Nothing was handed off and nothing was asked about the session: the pass
 	// ends at the close, which is what stops a restart from manufacturing a second
-	// recovery on top of the one the supervisor may already be running.
+	// recovery on top of one something else may already be running.
 	if got := provider.resumeCount(); got != 0 {
 		t.Errorf("resumes = %d, want 0: an interrupted attempt is re-observed, not re-handed-off", got)
 	}
@@ -1306,28 +1150,7 @@ func TestAProcessExitIsNotAFailedRecovery(t *testing.T) {
 	}
 }
 
-func TestRecoverKeepsGoingAfterAnUnprovenResume(t *testing.T) {
-	store := newTestStore(t)
-	seedSession(t, store, recoverableSession(sessionA))
-	provider := growthProvider(10, 12)
-	provider.resumeFn = func(_ string, _ string) (claude.ResumeResult, error) {
-		return claude.ResumeResult{RequestedSessionID: sessionA, SessionID: sessionB, Verified: false}, nil
-	}
-	manager := testManager(t, store, provider, nil)
-
-	outcome, err := manager.Recover(context.Background(), sessionA)
-	if !errors.Is(err, ErrVerificationFailed) {
-		t.Fatalf("Recover error = %v, want ErrVerificationFailed", err)
-	}
-	if outcome.Verification.Proven {
-		t.Error("Proven = true, want false")
-	}
-	if outcome.State != StateWaitingForReset {
-		t.Errorf("outcome state = %s, want WAITING_FOR_RESET for a retryable verification failure", outcome.State)
-	}
-}
-
-func TestRecoverRetriesWhenThePostResumeCheckFails(t *testing.T) {
+func TestRecoverSucceedsEvenWhenThePostResumeReadFails(t *testing.T) {
 	store := newTestStore(t)
 	seedSession(t, store, recoverableSession(sessionA))
 	provider := &providerStub{statusFn: func(call int, sessionID string) (claude.SessionStatus, error) {
@@ -1336,30 +1159,33 @@ func TestRecoverRetriesWhenThePostResumeCheckFails(t *testing.T) {
 		}
 		return claude.SessionStatus{}, errors.New("transcript vanished")
 	}}
-	// The resume is scripted as an in-place continuation rather than a handoff,
-	// because this test is about the post-resume check failing: a handoff is
-	// proven by the CLI's own block and never re-reads the status.
 	provider.resumeFn = func(sessionID, _ string) (claude.ResumeResult, error) {
 		return goodResult(sessionID), nil
 	}
 	manager := testManager(t, store, provider, nil)
 
+	// The exit status settled it: the turn ran, so a read taken afterwards
+	// cannot turn that into a failure. The missing measurement is recorded as
+	// absent and the session still ends RESUMED.
 	outcome, err := manager.Recover(context.Background(), sessionA)
-	if err == nil {
-		t.Fatal("Recover = nil error, want the verification failure")
+	if err != nil {
+		t.Fatalf("Recover = %v, want success: the post-resume read is a diagnostic, not a verdict", err)
 	}
-	if outcome.State != StateWaitingForReset {
-		t.Errorf("outcome state = %s, want WAITING_FOR_RESET", outcome.State)
+	if outcome.State != StateResumed || !outcome.Resumed {
+		t.Errorf("outcome = %+v, want RESUMED", outcome)
+	}
+	if !outcome.Verification.Proven {
+		t.Error("Proven = false, want true: the resume exited zero")
+	}
+	if !containsNote(outcome.Verification.Notes, "not measured") {
+		t.Errorf("notes = %v, want the failed read recorded", outcome.Verification.Notes)
 	}
 	attempts, listErr := store.ListAttempts(context.Background(), sessionA, 0)
 	if listErr != nil {
 		t.Fatalf("list attempts: %v", listErr)
 	}
-	if len(attempts) != 1 || attempts[0].FinishedAt.IsZero() {
-		t.Errorf("attempts = %+v, want one finished attempt", attempts)
-	}
-	if attempts[0].SessionIDVerified == nil || !*attempts[0].SessionIDVerified {
-		t.Errorf("session id verified = %v, want true: the CLI did report the right id", attempts[0].SessionIDVerified)
+	if len(attempts) != 1 || attempts[0].Success == nil || !*attempts[0].Success {
+		t.Fatalf("attempts = %+v, want one recorded success", attempts)
 	}
 	if attempts[0].TranscriptGrew == nil || *attempts[0].TranscriptGrew {
 		t.Errorf("transcript grew = %v, want false: growth could not be measured", attempts[0].TranscriptGrew)
@@ -1515,14 +1341,20 @@ func TestGrew(t *testing.T) {
 
 func TestCommandPreviewAndFormattingHelpers(t *testing.T) {
 	preview := commandPreview(sessionA, "continue please")
-	want := "claude --bg --resume " + sessionA + " --name " + claude.HandoffLabel(sessionA)
+	want := "claude --resume " + sessionA
 	if !strings.Contains(preview, want) {
-		t.Errorf("commandPreview = %q, want the handoff command %q", preview, want)
+		t.Errorf("commandPreview = %q, want the resume command %q", preview, want)
 	}
-	for _, retired := range []string{"-p ", "--print", "--output-format"} {
+	// The preview is what an operator reads back, so it must not name a flag
+	// the command no longer carries: the resume passes the session id and the
+	// message and nothing else.
+	for _, retired := range []string{"-p ", "--print", "--output-format", "--bg", "--name"} {
 		if strings.Contains(preview, retired) {
-			t.Errorf("commandPreview = %q still records the retired print-mode flag %q", preview, retired)
+			t.Errorf("commandPreview = %q still records the retired flag %q", preview, retired)
 		}
+	}
+	if !strings.Contains(preview, "--resume") {
+		t.Errorf("commandPreview = %q, want the resume subcommand named", preview)
 	}
 	if !strings.Contains(preview, "15-byte continuation message") {
 		t.Errorf("commandPreview = %q, want the message summarised", preview)

@@ -265,7 +265,7 @@ func TestDisableKeepsTheRecordedError(t *testing.T) {
 	ctx := context.Background()
 	session := mustSeedSession(t, store, "parked")
 
-	const failure = "claude: the handoff printed no backgrounded block"
+	const failure = "claude: the resume exited 1 with no message"
 	if err := store.SetSessionError(ctx, session.ID, failure); err != nil {
 		t.Fatalf("record error: %v", err)
 	}
@@ -579,7 +579,7 @@ func TestAttemptCostIsPersistedOnlyWhenReported(t *testing.T) {
 	ctx := context.Background()
 	session := mustSeedSession(t, store, "attempt-cost")
 
-	reported, err := store.StartAttempt(ctx, session.ID, 0, "claude --bg --resume attempt-cost")
+	reported, err := store.StartAttempt(ctx, session.ID, 0, "claude --resume attempt-cost")
 	if err != nil {
 		t.Fatalf("start reported: %v", err)
 	}
@@ -594,7 +594,7 @@ func TestAttemptCostIsPersistedOnlyWhenReported(t *testing.T) {
 		t.Fatalf("finish reported: %v", err)
 	}
 
-	unknown, err := store.StartAttempt(ctx, session.ID, 0, "claude --bg --resume attempt-cost")
+	unknown, err := store.StartAttempt(ctx, session.ID, 0, "claude --resume attempt-cost")
 	if err != nil {
 		t.Fatalf("start unknown: %v", err)
 	}

@@ -38,7 +38,6 @@ func Defaults() Config {
 			PollInterval:                NewDuration(30e9),
 			UnknownResetInitialInterval: NewDuration(5 * 60e9),
 			UnknownResetMaxInterval:     NewDuration(30 * 60e9),
-			RecheckBeforeResume:         true,
 		},
 		// Recovery's TurnTimeout default is the timeout the resume invocation
 		// uses: claude.DefaultTurnTimeout, half an hour. The resume runs the whole

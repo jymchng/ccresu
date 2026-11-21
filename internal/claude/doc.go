@@ -1,5 +1,4 @@
-// Package claude implements discovery of Claude Code sessions and hands a
-// paused session to the background supervisor.
+// Package claude discovers Claude Code sessions and resumes a paused one.
 //
 // Discovery relies only on interfaces verified against the installed CLI
 // (Claude Code 2.1.257 or newer -- see [MinimumVersion]):
@@ -9,32 +8,37 @@
 //	~/.claude/projects/<slugified-cwd>/<session-id>.jsonl
 //	~/.claude/session-env/<session-id>/
 //
-// Resumption is a handoff, not a run:
+// Resumption is one blocking command, not a handoff:
 //
-//	claude --bg --resume <session-id> --name <label> "<continuation message>"
+//	claude --resume <session-id> "<continuation message>"
 //
-// That command returns as soon as the supervisor accepts the session, and the
-// CLI reports the acceptance by printing a `backgrounded · <short-id> · <name>`
-// block. [ParseHandoff] reads that block, including the `note:` line the CLI adds
-// when the continuation landed in a copy rather than in place, and `--name`
-// makes the recovered session identifiable in agent view without consulting
-// ccresu's database.
+// [ResumeArgs] builds exactly that vector and nothing else. The command runs the
+// turn in the session's own working directory and returns when the turn is over,
+// so the process exit status is the verdict: zero means the continuation ran,
+// and any other status is the failure, carrying its code and the captured
+// streams. [DefaultTurnTimeout] bounds the whole turn rather than a handshake,
+// because a bound that expired while the work was still going would kill every
+// resume that was doing what it was asked to do.
 //
-// Acceptance is not completion. The supervisor owns the turn, so nothing here
-// waits for it, counts transcript growth or claims the work happened; what the
-// session is actually doing is read later from its published state.
+// There is no background dispatch left to describe: no background flag, no
+// session label, no print mode and no guardrail flags. A label exists to name a
+// supervisor's job and a print mode exists to make a run parsable; neither has
+// anything to name or parse once the resume is itself the run. Continuing an
+// existing session and print mode cannot be combined at all, so there is no
+// second resume vector to fall back to.
 //
-// Print mode is retired rather than optional. `--bg` and `-p`/`--print` cannot
-// be combined, so [HandoffArgs] has no flag that could switch into it and there
-// is no second resume vector. `claude stop <job-id>` is the one remaining
-// verified command that acts on a running agent; its argument is the eight
-// lower-case hex job name the CLI prints, never the session UUID, which
-// `claude stop` answers with "No job matching" and exit 1.
+// A refusal that is not a crash is named rather than guessed at: an untrusted
+// working directory is [ErrWorkspaceNotTrusted], and a resume asked for with no
+// directory at all is [ErrResumeDirectoryMissing]. Neither is retried, because
+// repeating the same command cannot change either answer and the remedy is the
+// operator's decision.
 //
-// A refusal that is not a crash is named: an untrusted workspace is
-// [ErrWorkspaceNotTrusted] and output without a `backgrounded` block is
-// [ErrHandoffNotAcknowledged]. Neither is retried, because repeating the same
-// handoff cannot change either answer.
+// What a finished resume proves is settled by its exit status and nothing here.
+// The transcript can be measured once afterwards to say whether the conversation
+// grew, and internal/recovery does exactly that, but the measurement is a
+// diagnostic rather than evidence: a session can be continued without the file
+// ccresu watches changing shape, and a file can grow without the original
+// conversation being the one that advanced.
 //
 // Sessions that cannot be resumed are reported as UNRECOVERABLE together with a
 // reason; the package never invents a command for them.
@@ -58,9 +62,14 @@
 //		if err != nil {
 //			return err
 //		}
-//		// The supervisor accepted the work; the session is identifiable by
-//		// StateID and Name from now on, and nothing waits for it to finish.
-//		log.Printf("handed off %s as %s (%s)", result.SessionID, result.StateID, result.Name)
+//		// ResumeSession returned after the turn finished, so the exit status
+//		// is the outcome: zero is the continuation, anything else is the
+//		// failure and the caller decides what to do about it.
+//		if result.ExitCode != 0 {
+//			log.Printf("%s: resume exited %d", session.ID, result.ExitCode)
+//			continue
+//		}
+//		log.Printf("continued %s with %v", session.ID, result.Command)
 //	}
 //
 // Tests use [FakeProvider] and [FakeExecer] so no real CLI is required.

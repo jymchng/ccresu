@@ -127,7 +127,7 @@ e60a3100  DISCOVERED  none (no usage limit detect...  yes      yes          /hom
       kind: "ul",
       items: [
         "`SESSION` is the first eight characters of the session ID; commands need the full ID.",
-        "`STATE` is the state-machine position — DISCOVERED, WAITING_FOR_RESET, RESUMING, RESUMED, RETRY_WAIT, DISCOVERED and so on.",
+        "`STATE` is the state-machine position — DISCOVERED, WAITING_FOR_RESET, RESUMING or RESUMED, or one of the three verdicts COMPLETED, DISABLED and UNRECOVERABLE.",
         "`NEXT ATTEMPT` is when ccresu will touch the row and why: `in 2h14m` while a wait is pending, `none (<reason>)` when nothing is scheduled.",
         "`RECOVERABLE` and `NOTE` explain why a session is or is not actionable.",
       ],
@@ -197,9 +197,8 @@ polls:         0
 phrase:        7:29pm (UTC)
 
 Recent transitions
-WHEN                     TRANSITION                                 REASON
-2026-11-05 03:28:16 +08  DISCOVERED -> USAGE_LIMIT_DETECTED         usage limit detected in the transcript
-2026-11-05 03:28:16 +08  USAGE_LIMIT_DETECTED -> WAITING_FOR_RESET  waiting until 2026-11-04T19:29:00Z`,
+WHEN                     TRANSITION                                REASON
+2026-11-05 03:28:16 +08  DISCOVERED -> WAITING_FOR_RESET           waiting until 2026-11-04T19:29:00Z`,
     },
     {
       kind: "code",
@@ -248,10 +247,10 @@ WAITING_FOR_RESET  1`,
       kind: "p",
       text: "`next wake` is the moment the daemon will act, in UTC. If the reset time could not be extracted from the banner, the session is still scheduled: ccresu polls with a backoff (`scheduler.unknown_reset_initial_interval` up to `scheduler.unknown_reset_max_interval`) until the limit clears, and `inspect` shows `unknown reset: yes`.",
     },
-    { kind: "h2", text: "Step 9 — Watch the handoff happen" },
+    { kind: "h2", text: "Step 9 — Watch the resume happen" },
     {
       kind: "p",
-      text: "When the reset time arrives, ccresu re-checks the session, checks that the limit has actually cleared, and hands the same session ID to Claude Code's background supervisor with `claude --bg --resume <session-id> --name ccresu-<first 8 hex> \"<continuation message>\"`. The invocation returns as soon as the supervisor prints its `backgrounded · <short-id> · <name>` block, and that block — not a transcript measurement — is what proves the recovery. `ccresu history` is the audit trail; `--limit N` caps how many transitions are shown (default 50, newest kept).",
+      text: "When the instant the banner named arrives, ccresu resumes the same session ID in the session's own working directory with one blocking command: `claude --resume <session-id> \"<continuation message>\"`. The exit status is the verdict — 0 means the turn ran to the end and the session is `RESUMED` — and the transcript is measured afterwards as a diagnostic, never as a proof. Nothing reads the limit before the resume: a usage window can only be learned from `claude`, so the resume is the check, and a refusal parks the session on the reset the refusal names without spending an attempt. `ccresu history` is the audit trail; `--limit N` caps how many transitions are shown (default 50, newest kept).",
     },
     {
       kind: "code",
@@ -261,16 +260,12 @@ session:       3f9d1c07-1111-4222-8333-444455556666
 state:         RESUMED
 
 #  STATE    STARTED                  FINISHED                 RESULT     ERROR
-1  RESUMED  2026-11-05 03:29:03 +08  2026-11-05 03:29:03 +08  succeeded
+1  RESUMED  2026-11-05 03:29:03 +08  2026-11-05 03:31:40 +08  succeeded
 
-WHEN                     TRANSITION                                 REASON
-2026-11-05 03:28:16 +08  DISCOVERED -> USAGE_LIMIT_DETECTED         usage limit detected in the transcript
-2026-11-05 03:28:16 +08  USAGE_LIMIT_DETECTED -> WAITING_FOR_RESET  waiting until 2026-11-04T19:29:00Z
-2026-11-05 03:29:03 +08  WAITING_FOR_RESET -> RESET_TIME_REACHED    the scheduled reset time has arrived
-2026-11-05 03:29:03 +08  RESET_TIME_REACHED -> CHECKING_SESSION     checking the session before resuming
-2026-11-05 03:29:03 +08  CHECKING_SESSION -> CHECKING_LIMIT         checking the usage limit has cleared
-2026-11-05 03:29:03 +08  CHECKING_LIMIT -> RESUMING                 resuming the original session
-2026-11-05 03:29:03 +08  RESUMING -> RESUMED                        the supervisor accepted the continuation as 837eaaea (ccresu-3f9d1c07)`,
+WHEN                     TRANSITION                                REASON
+2026-11-05 03:28:16 +08  DISCOVERED -> WAITING_FOR_RESET           waiting until 2026-11-04T19:29:00Z
+2026-11-05 03:29:03 +08  WAITING_FOR_RESET -> RESUMING             resuming the original session
+2026-11-05 03:31:40 +08  RESUMING -> RESUMED                       the resume finished its turn and the transcript grew`,
     },
     { kind: "h2", text: "Step 10 — Act manually" },
     {
@@ -293,27 +288,31 @@ ccresu disable <id>`,
       kind: "code",
       label: "A refusal, verbatim",
       code: `$ ccresu recover 3f9d1c07-1111-4222-8333-444455556666
-ccresu: recover 3f9d1c07-1111-4222-8333-444455556666: recovery: session is not eligible for recovery: session 3f9d1c07-1111-4222-8333-444455556666 is RESUMED and cannot become CHECKING_SESSION
+ccresu: recover 3f9d1c07-1111-4222-8333-444455556666: recovery: session is not eligible for recovery: session 3f9d1c07-1111-4222-8333-444455556666 is RESUMED and cannot become RESUMING
 $ echo $?
 4
 
 $ ccresu recover e60a3100-123a-4deb-b146-54705ff80268
-ccresu: recover e60a3100-123a-4deb-b146-54705ff80268: recovery: invalid state transition: DISCOVERED -> CHECKING_SESSION (legal targets: DISABLED, DISCOVERED, RUNNING, UNRECOVERABLE)`,
+ccresu: recover e60a3100-123a-4deb-b146-54705ff80268: recovery: session is not eligible for recovery: session e60a3100-123a-4deb-b146-54705ff80268 is COMPLETED and cannot become RESUMING`,
+    },
+    {
+      kind: "p",
+      text: "Both refusals come from the edge table, and the table is closed. Recovery has exactly seven states — `DISCOVERED`, `WAITING_FOR_RESET`, `RESUMING`, `RESUMED`, `COMPLETED`, `DISABLED` and `UNRECOVERABLE` — and only `DISCOVERED` and `WAITING_FOR_RESET` have an edge into `RESUMING`. From `DISCOVERED` the machine may move to `COMPLETED`, `DISABLED`, `DISCOVERED`, `RESUMING`, `UNRECOVERABLE` or `WAITING_FOR_RESET`, and an edge outside that list is refused by name: `recovery: invalid state transition: DISCOVERED -> RESUMED (legal targets: COMPLETED, DISABLED, DISCOVERED, RESUMING, UNRECOVERABLE, WAITING_FOR_RESET)`. A pass cannot claim a resume that has not run, which is why that particular edge is not in the table.",
     },
     { kind: "h2", text: "Step 11 — When the resume fails" },
     {
       kind: "p",
-      text: "Failures are retried with exponential backoff, and every attempt is numbered against `recovery.max_attempts`. The delays come from `recovery.initial_delay` (30s), `recovery.multiplier` (2.0), `recovery.max_delay` (15m) and `recovery.jitter` (0.15), which is why the values are not exactly 30s, 60s, 2m. Between attempts the session sits in RETRY_WAIT and the wait is a stored instant, not just prose.",
+      text: "Failures are retried with exponential backoff, and every attempt is numbered against `recovery.max_attempts`. The delays come from `recovery.initial_delay` (30s), `recovery.multiplier` (2.0), `recovery.max_delay` (15m) and `recovery.jitter` (0.15), which is why the values are not exactly 30s, 60s, 2m. Between attempts the session is parked in `WAITING_FOR_RESET` with a `retry_at` instant: the wait is a stored schedule, and the state alone will not tell you which kind of wait it is, so the reason does.",
     },
     {
       kind: "code",
       label: "The budget being spent",
-      code: `2026-11-05 03:27:03 +08  RESUMING -> RETRY_WAIT  attempt 1/10 failed (retryable); next attempt in 28.99625...
-2026-11-05 03:27:03 +08  RESUMING -> RETRY_WAIT  attempt 2/10 failed (retryable); next attempt in 1m4.2447...
+      code: `2026-11-05 03:27:03 +08  RESUMING -> WAITING_FOR_RESET  attempt 1/10 failed (retryable); next attempt in 28.99625...
+2026-11-05 03:27:03 +08  RESUMING -> WAITING_FOR_RESET  attempt 2/10 failed (retryable); next attempt in 1m4.2447...
 
 $ ccresu sessions
-SESSION   STATE       NEXT ATTEMPT  ENABLED  RECOVERABLE  PROJECT                 LAST SEEN                NOTE
-3f9d1c07  RETRY_WAIT  in 58s        yes      yes          /home/you/projects/demo 2026-11-05 03:45:04 +08  resume session 3f9d1c07-1111-4222-833...
+SESSION   STATE              NEXT ATTEMPT  ENABLED  RECOVERABLE  PROJECT                 LAST SEEN                NOTE
+3f9d1c07  WAITING_FOR_RESET  in 58s        yes      yes          /home/you/projects/demo 2026-11-05 03:45:04 +08  resume session 3f9d1c07-1111-4222-833...
 
 $ ccresu inspect 3f9d1c07-1111-4222-8333-444455556666 | head -13
 ...
@@ -325,11 +324,11 @@ why:           retrying after a failed attempt`,
       kind: "code",
       label: "When the budget is exhausted",
       code: `$ ccresu sessions --all
-SESSION   STATE               NEXT ATTEMPT                    ENABLED  RECOVERABLE  PROJECT                 LAST SEEN                NOTE
-7c1b2a44  DISCOVERED  none (attempt budget spent;...  yes      yes          /home/you/projects/demo 2026-11-05 03:28:24 +08  resume session 7c1b2a44-0000-4000-800...
+SESSION   STATE       NEXT ATTEMPT                    ENABLED  RECOVERABLE  PROJECT                 LAST SEEN                NOTE
+7c1b2a44  DISCOVERED  none (returned to discovery;\u2026  yes      yes          /home/you/projects/demo 2026-11-05 03:28:24 +08  resume session 7c1b2a44-0000-4000-800...
 
 $ ccresu retry 7c1b2a44-0000-4000-8000-abcdefabcdef
-ccresu: retry 7c1b2a44-0000-4000-8000-abcdefabcdef: recovery: session 7c1b2a44-0000-4000-8000-abcdefabcdef ended in DISCOVERED: resume session 7c1b2a44-0000-4000-8000-abcdefabcdef: claude: malformed claude output: empty resume output`,
+ccresu: retry 7c1b2a44-0000-4000-8000-abcdefabcdef: recovery: session 7c1b2a44-0000-4000-8000-abcdefabcdef ended its cycle in DISCOVERED: resume session 7c1b2a44-0000-4000-8000-abcdefabcdef: claude --resume failed (exit 1): Invalid API key · Please run /login: claude: exit status 1`,
     },
     {
       kind: "p",
@@ -347,8 +346,8 @@ session 7c1b2a44-0000-4000-8000-abcdefabcdef: enabled=yes`,
     {
       kind: "note",
       tone: "info",
-      title: "A handoff returns; the work does not",
-      text: "A recovery does not run the continuation itself: it hands it to Claude Code's background supervisor and returns. One failure is therefore not the session's fault at all — a workspace the CLI does not trust, or a supervisor that never answers, is reported as its own outcome rather than retried into the same silence. When the CLI does answer, it prints a `backgrounded · <short-id> · <name>` block, and that block is what the attempt records, so `claude attach <short-id>` reaches the conversation later without a lookup. If no block is printed, the handoff is an error rather than an unproven success, and the session lands in DISCOVERED, which is where `retry` and `recover --force` come in — or `disable`, if you would rather ccresu stopped trying at all.",
+      title: "The resume runs here, and it blocks",
+      text: "A recovery runs the continuation itself, in the foreground of the pass, so one attempt occupies one pass until the turn ends. `recovery.turn_timeout` (thirty minutes by default) bounds it; a turn that outlives the bound is killed and recorded as a failed attempt. One failure is therefore not the session's fault: a workspace the CLI does not trust, or a directory that no longer exists, is reported as its own outcome rather than retried into the same silence. A non-zero exit lands the session in DISCOVERED with its exit code and stderr, which is where `retry` and `recover --force` come in — or `disable`, if you would rather ccresu stopped trying at all.",
     },
     { kind: "h2", text: "Step 12 — Turn on Telegram notifications (optional)" },
     {

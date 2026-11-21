@@ -37,12 +37,16 @@ ExecStart=%h/.local/bin/ccresu daemon
 # stops the unit after repeated failures).
 Restart=on-failure
 RestartSec=10s
-# ccresu owns no Claude Code child: a session's work belongs to `claude`'s own
-# supervisor, which survives this unit and is never stopped with it. The only
-# children left are query-timeout-bounded commands (`--version`, `agents --json`,
-# `daemon status`, `logs`, `--bg`), and a stop that lands mid-handoff is a
-# retryable outcome rather than lost work, so the timeout is sized for a bounded
-# command instead of for a `claude -p --resume`.
+# ccresu runs one long child at a time: `claude --resume <session-id>
+# "<message>"`, which runs the whole turn and is bounded by
+# recovery.turn_timeout (claude.DefaultTurnTimeout, thirty minutes, by default).
+# A stop deliberately does not wait for that turn. SIGTERM cancels the run, the
+# transcript keeps everything written up to that point, and the next pass
+# resumes the same session again, so an interrupted turn is retried rather than
+# lost. The timeout below is sized for the daemon's own bookkeeping, not for the
+# turn: sizing it for the turn would make every stop hang for up to half an
+# hour. The short, bounded children (`--version`, `agents --json`) finish well
+# inside it.
 KillSignal=SIGTERM
 TimeoutStopSec=35s
 

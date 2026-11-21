@@ -58,15 +58,14 @@ func TestClassify(t *testing.T) {
 		{"empty message", claude.ErrEmptyMessage, ClassPermanent},
 		{"message too long", claude.ErrMessageTooLong, ClassPermanent},
 		{"session not preserved", claude.ErrSessionNotPreserved, ClassPermanent},
-		// A handoff the supervisor refused, never acknowledged, or could not be
-		// pointed at is not a transient failure: the same arguments produce the
-		// same answer, so the attempt is not spent again on a backoff.
+		// A resume the CLI refused to run is not a transient failure: the same
+		// arguments produce the same answer, so the attempt is not spent again on
+		// a backoff.
 		{"workspace not trusted", claude.ErrWorkspaceNotTrusted, ClassPermanent},
-		{"handoff not acknowledged", claude.ErrHandoffNotAcknowledged, ClassPermanent},
-		{"handoff directory missing", claude.ErrHandoffDirectoryMissing, ClassPermanent},
-		{"wrapped handoff refusal", fmt.Errorf("resume: %w", claude.ErrWorkspaceNotTrusted), ClassPermanent},
-		{"handoff refusal beside a retryable marker",
-			fmt.Errorf("timeout: %w", claude.ErrHandoffNotAcknowledged), ClassPermanent},
+		{"resume directory missing", claude.ErrResumeDirectoryMissing, ClassPermanent},
+		{"wrapped resume refusal", fmt.Errorf("resume: %w", claude.ErrWorkspaceNotTrusted), ClassPermanent},
+		{"resume refusal beside a retryable marker",
+			fmt.Errorf("timeout: %w", claude.ErrResumeDirectoryMissing), ClassPermanent},
 		{"session not found", claude.ErrSessionNotFound, ClassPermanent},
 		{"store not found", storage.ErrNotFound, ClassPermanent},
 		{"wrapped sentinel", fmt.Errorf("resume: %w", claude.ErrCLIUnavailable), ClassPermanent},
@@ -124,8 +123,8 @@ func TestClassify(t *testing.T) {
 	}
 }
 
-func TestHandoffSentinelsAreNeverRetried(t *testing.T) {
-	// The handoff's refusals are the ones `claude.Resume` documents as "not
+func TestResumeRefusalsAreNeverRetried(t *testing.T) {
+	// The resume's refusals are the ones `claude.Resume` documents as "not
 	// retried, because neither gets better by trying again with the same
 	// arguments". That sentence is only true if the classifier agrees, and the
 	// recovery pages say the session lands in DISCOVERED rather than on a
@@ -135,10 +134,9 @@ func TestHandoffSentinelsAreNeverRetried(t *testing.T) {
 		err  error
 	}{
 		{"workspace not trusted", claude.ErrWorkspaceNotTrusted},
-		{"handoff not acknowledged", claude.ErrHandoffNotAcknowledged},
-		{"handoff directory missing", claude.ErrHandoffDirectoryMissing},
+		{"resume directory missing", claude.ErrResumeDirectoryMissing},
 		{"wrapped workspace refusal", fmt.Errorf("resume session x: %w", claude.ErrWorkspaceNotTrusted)},
-		{"wrapped missing block", fmt.Errorf("resume session x: %w", claude.ErrHandoffNotAcknowledged)},
+		{"wrapped missing directory", fmt.Errorf("resume session x: %w", claude.ErrResumeDirectoryMissing)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

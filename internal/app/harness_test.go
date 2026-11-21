@@ -242,10 +242,6 @@ func newHarnessWith(t *testing.T, limits recovery.SpendLimits) *harness {
 		// PRD 5's caps, supplied by the caller so a notification test can reach
 		// the spend stop without seeding a second manager.
 		Limits: limits,
-		// A fake clock never advances on its own, so the verification poll must
-		// be "check once" instead of "wait for the transcript to grow".
-		VerificationTimeout: -1,
-		HealthCheckInterval: -1,
 		// The daemon always supplies the refusal parker, so the harness does too:
 		// a refusal that is not planned would leave the session waiting with no
 		// schedule, which is not a state production can reach.
@@ -405,8 +401,8 @@ func (p *pacedInput) send(t *testing.T, keys string) {
 // waitForScreen blocks until the newest frame contains marker.
 //
 // It reads the frame the browser has most recently painted rather than everything
-// it has ever written, so "the supervisor block appeared" cannot be satisfied by
-// an earlier screen that happened to contain the same words.
+// it has ever written, so "the detail page appeared" cannot be satisfied by an
+// earlier screen that happened to contain the same words.
 func (p *pacedInput) waitForScreen(t *testing.T, marker string) {
 	t.Helper()
 	p.waitForScreenWithin(t, marker, 5*time.Second)

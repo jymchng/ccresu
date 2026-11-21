@@ -90,8 +90,8 @@ export const cliDoc: DocPage = {
     {
       kind: "note",
       tone: "info",
-      title: "`recover` hands the session over; it does not run it",
-      text: "`ccresu recover <id>` issues one handoff — `claude --bg --resume <session-id> --name ccresu-<first 8 hex> \"<continuation message>\"` — in the session's own working directory. It returns as soon as the supervisor prints its `backgrounded · <short-id> · <name>` block, and that block is what the attempt records: the state id and the label, so `claude attach <short-id>` works later without a lookup. Print mode plays no part, because `--bg` cannot be combined with `-p`/`--print`. The work itself continues under the supervisor and outlives ccresu: `claude logs` reads what it did and `claude stop <short-id>` stops it, but neither is something a recovery does.",
+      title: "`recover` runs the turn, and its exit status is the verdict",
+      text: "`ccresu recover <id>` issues one command — `claude --resume <session-id> \"<continuation message>\"` — in the session's own working directory, and waits for the whole turn. Exit status 0 means the conversation continued; a non-zero status is a failed attempt, recorded with its exit code and stderr and scheduled again with backoff and jitter. `recovery.turn_timeout` (thirty minutes by default) bounds the turn, and a resume that overruns it is killed and treated as a failure. The message is the last argument, print mode plays no part, and nothing is left running behind ccresu when the command returns.",
     },
     {
       kind: "note",

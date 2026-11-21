@@ -29,8 +29,15 @@ export const recoveryDoc: DocPage = {
         "`--resume <session-id>` continues the conversation that already exists. The identifier is the one discovery reported for the blocked session.",
         "The continuation message is a positional argument and comes last. It defaults to the configured `claude.continuation_message` and can be overridden per session.",
         "The resume runs in the session's own working directory — a git worktree included — so relative paths and project configuration still apply.",
-        "The process runs to the end of the turn in the foreground of the pass. ccresu does not background it, name it, or leave a supervisor holding it.",
+        "The process runs to the end of the turn in the foreground of the pass. ccresu does not background it, name it, or leave another process holding it.",
       ],
+    },
+    {
+      kind: "diagram",
+      id: "resume",
+      label: "One resume, from the invocation to the verdict",
+      description:
+        "Two steps and nothing in between: ccresu runs `claude --resume` in the session's own directory, waits for the turn, and reads the exit status as the verdict. There is no acceptance block and no separate observation afterwards.",
     },
     {
       kind: "h2",
@@ -59,6 +66,13 @@ export const recoveryDoc: DocPage = {
       ],
     },
     {
+      kind: "diagram",
+      id: "state-machine",
+      label: "The chain, the retry loop and the two ways out",
+      description:
+        "Discovery leads to detection, then to the wait for the reset instant, then to one resume. A failed attempt returns to the session check while budget remains; a settled session, or one an operator disabled, leaves the chain.",
+    },
+    {
       kind: "h2",
       text: "Proving it end to end",
     },
@@ -69,10 +83,14 @@ export const recoveryDoc: DocPage = {
     {
       kind: "ul",
       items: [
-        "`TestResumeArgsExact` asserts the joined argument vector, so a reordering or an added flag is a failing test rather than a puzzling runtime refusal.",
-        "`TestResumeArgsNeverCarriesPrintMode` fails if a print-mode flag is ever added back.",
-        "The end-to-end test asserts that a stub exiting 0 marks the session recovered, and that a stub exiting 1 records a failed attempt and leaves it eligible for the next pass.",
+        "`TestResumeArgsIsExactlyTheVerifiedOne` (`internal/claude/cli_test.go`) compares the vector against `--resume <session-id> <message>` element by element for several messages — including `-p` and one containing a newline — so a reordering, an added flag or a dropped message fails a test instead of puzzling someone at runtime.",
+        "`TestNoRecoveryArgumentCarriesPrintMode` walks that same vector and fails on `-p`, `--print`, any output-format flag, or a leading bare `--`, so print mode cannot come back beside the resume.",
+        "The end-to-end run keeps three stub sessions: one that exits 0 and grows the transcript, one that exits 0 without growing anything, and one the API refuses with status 1. All three are judged by the exit status alone — a refusal is recorded as `failed (exit 1)` with the stub's stderr and returns the session to discovery, where the next pass re-reads the transcript instead of reading the failure as a verdict on the conversation.",
       ],
+    },
+    {
+      kind: "capture",
+      id: "e2e",
     },
   ],
 };

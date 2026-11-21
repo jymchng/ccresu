@@ -71,7 +71,6 @@ func envSetters() []envSetter {
 		{EnvPrefix + "SCHEDULER__POLL_INTERVAL", setDuration(func(c *Config) *Duration { return &c.Scheduler.PollInterval })},
 		{EnvPrefix + "SCHEDULER__UNKNOWN_RESET_INITIAL_INTERVAL", setDuration(func(c *Config) *Duration { return &c.Scheduler.UnknownResetInitialInterval })},
 		{EnvPrefix + "SCHEDULER__UNKNOWN_RESET_MAX_INTERVAL", setDuration(func(c *Config) *Duration { return &c.Scheduler.UnknownResetMaxInterval })},
-		{EnvPrefix + "SCHEDULER__RECHECK_BEFORE_RESUME", setBool(func(c *Config) *bool { return &c.Scheduler.RecheckBeforeResume })},
 
 		{EnvPrefix + "RECOVERY__ENABLED", setBool(func(c *Config) *bool { return &c.Recovery.Enabled })},
 		{EnvPrefix + "RECOVERY__MAX_ATTEMPTS", setInt(func(c *Config) *int { return &c.Recovery.MaxAttempts })},

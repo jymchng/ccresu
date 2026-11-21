@@ -58,9 +58,27 @@ The one exception is a key this release has *retired*: a file written for an
 older version still loads, the key is dropped before the strict decode, and the
 load prints a warning naming it (`telegram.notify_needs_input is no longer a
 configuration key: it is ignored, not rejected …`) so the stale line can be
-deleted. The list is closed and permanent — today it holds exactly
-`telegram.notify_needs_input`, withdrawn in 0.9.0 — so a typo of a retired key
-(`notify_needs_inputt`) and a key that never existed both still fail.
+deleted. A file carrying several of them gets one warning that lists them all.
+The list is closed and permanent:
+
+| Retired key | Withdrawn in | Why it is gone |
+| --- | --- | --- |
+| `telegram.notify_needs_input` | 0.9.0 | A `blocked` session is resumed rather than announced, so there is no needs-input message to switch on. |
+| `scheduler.recheck_before_resume` | 0.10.0 | A usage window can only be learned from the resume itself, so the resume *is* the recheck. |
+| `recovery.startup_timeout` | 0.10.0 | It bounded watching a child start; a resume is one blocking command. |
+| `recovery.verification_timeout` | 0.10.0 | It bounded polling a transcript for growth; the transcript is now measured once, after the turn, as a diagnostic. |
+| `recovery.health_check_interval` | 0.10.0 | It was the gap between those polls, which no longer happen. |
+| `recovery.guardrails.model` | 0.10.0 | It rode the retired handoff vector as a CLI flag, and a resume carries no flags at all. |
+| `recovery.guardrails.effort` | 0.10.0 | Same: it rode the handoff vector. |
+| `recovery.guardrails.fallback_model` | 0.10.0 | Same: it rode the handoff vector. |
+| `recovery.guardrails.permission_mode` | 0.10.0 | Same: it rode the handoff vector. |
+
+The two spend caps in the same `recovery.guardrails` section —
+`max_cost_usd_per_session` and `max_cost_usd_per_attempt` — are **not** retired:
+they are ccresu's own checks over the series of attempts rather than CLI flags, so
+a value left in an old file still applies. Strictness is unchanged everywhere
+else: a typo of a retired key (`notify_needs_inputt`) and a key that never existed
+both still fail.
 
 ## Environment overrides
 
@@ -103,8 +121,8 @@ For the three Telegram settings the plain variables `TELEGRAM_ENABLED`,
 | `monitored_sessions` | `[]` | Extra session ids to watch beyond auto-discovery. |
 | `discover_all_sessions` | `true` | Discover every session, not just the current directory's. |
 | `resume_enabled` | `true` | Global switch for resuming. |
-| `default_model` | `""` | Empty means inherit the original session's model. |
-| `default_effort` | `""` | Empty means inherit the original session's effort. |
+| `default_model` | `""` | Accepted and validated, but not applied: a resume carries no model flag, so the session's own model stands. |
+| `default_effort` | `""` | Accepted and validated, but not applied, for the same reason. |
 | `continuation_message` | see below | The prompt sent when resuming. |
 
 The default continuation message is:
@@ -157,7 +175,12 @@ detector:
 | `poll_interval` | `30s` | How often due schedules are checked. |
 | `unknown_reset_initial_interval` | `5m` | First re-poll when the message carried no reset time. |
 | `unknown_reset_max_interval` | `30m` | Ceiling for the exponential re-poll. |
-| `recheck_before_resume` | `true` | Re-read the session's state immediately before resuming. |
+
+There is no pre-resume recheck switch. A usage window can only be learned from a
+`claude` run, so the resume is the recheck: a refusal parks the session on the
+reset its banner named and spends no attempt, which is why nothing needs to ask
+the question twice. `scheduler.recheck_before_resume`, documented before 0.10.0,
+was never read by any release and is now retired.
 
 ### `recovery`
 
@@ -169,9 +192,7 @@ detector:
 | `max_delay` | `15m` | Retry delay ceiling. |
 | `multiplier` | `2.0` | Exponential growth factor. |
 | `jitter` | `0.15` | ±15% randomisation so retries do not synchronise. |
-| `startup_timeout` | `2m` | How long ccresu waits for the `claude --bg --resume` handoff to be accepted — the bound on the handoff invocation itself (`claude.CLIOptions.HandoffTimeout`), and on nothing else: the resumed work runs under the supervisor and outlives ccresu. The default is the two minutes the handoff call used before this key had a reader, so the wiring changed nothing for a configuration that never set it; raise it on a host where starting the background service is slow. |
-| `verification_timeout` | `120s` | How long the verifier polls the transcript for growth after a resume that did not hand off. The handoff — the only resume ccresu issues — never reaches that poll: `Verify` returns through `acceptHandoff` as soon as the CLI prints its `backgrounded` block, and the published-state observation has no timeout of its own. Growth is a diagnostic either way: the block proves a handoff, the published state proves any other resume. |
-| `health_check_interval` | `10s` | Gap between transcript reads inside that same growth poll. Nothing polls a handed-off session. |
+| `turn_timeout` | `30m` | The one timeout a resume has: `claude --resume <session-id> "<continuation message>"` is a blocking turn, and this bounds the whole of it (`claude.DefaultTurnTimeout`). A turn that overruns the bound is killed and recorded as a failed attempt with its exit code and stderr, then retried on the backoff schedule like any other failure. |
 | `max_concurrent_recoveries` | `3` | Parallel resumes. |
 
 These five retry-policy values are validated, never silently clamped: a
@@ -190,15 +211,11 @@ ccresu had before the section existed: no flag is added and no check runs.
 | --- | --- | --- |
 | `max_cost_usd_per_session` | `0` (off) | Before an attempt starts, ccresu sums the costs the CLI reported for this session's attempts and refuses to start when the sum has reached this figure. The refusal spends nothing: the check runs before an attempt row exists. |
 | `max_cost_usd_per_attempt` | `0` (off) | After an attempt resolves, a recorded cost above this figure stops automatic recovery for the session. It guards the case the session cap cannot see: one very expensive turn. |
-| `model` | empty | `--model <value>` on the handoff. |
-| `effort` | empty | `--effort <value>` on the handoff. |
-| `fallback_model` | empty | `--fallback-model <value>` on the handoff; the CLI accepts a comma-separated chain. |
-| `permission_mode` | empty | `--permission-mode <value>` on the handoff. `dontAsk` is the recommended unattended value; `bypassPermissions` is passed but may be ignored by a background session, so it is warned about at load time. |
 
-The four flags are the ones a `--bg` handoff accepts. The flags that bound cost
-per run — `--max-budget-usd`, `--max-turns`, `--json-schema`,
-`--permission-prompts` — are documented as print mode only and are never passed;
-the two spend caps above are ccresu's replacement for them.
+These two caps are the whole section, and ccresu enforces both itself: the
+session cap before an attempt is started, the attempt cap after one resolves. No
+guardrail option is passed to the CLI — the resume command is
+`claude --resume <session-id> "<continuation message>"` and nothing else.
 
 A session stopped by either cap is `DISABLED`, which no reconcile pass resumes —
 and a spend stop and an operator's `ccresu disable` are deliberately the same
@@ -212,7 +229,7 @@ still recorded and the override is logged.
 
 A cost the CLI did not report is recorded as *unknown*, not as zero: it neither
 counts toward a cap nor blocks a resume. The figure is the CLI's own client-side
-estimate, the same one its `--max-budget-usd` would use, so it can differ from the
+estimate the CLI itself records, so it can differ from the
 bill and spend can pass the cap — leave headroom.
 
 ### `telegram`
@@ -224,8 +241,8 @@ rejected at config validation because the templates emit HTML), and the
 `waiting`
 (default `false`), `recovery_started`, `recovery_success`,
 `recovery_failure`, `permanent_failure`, `session_completed` — the rest `true` by
-default). There is no needs-input switch: a session the supervisor publishes as
-`blocked` is resumed rather than announced.
+default). There is no needs-input switch: a session that stops waiting on a human is
+resumed rather than announced.
 
 ### `server`
 

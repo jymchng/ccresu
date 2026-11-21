@@ -10,9 +10,10 @@ import (
 //
 // The resume runs the whole turn. `claude --resume <id> "<message>"` returns
 // when the continuation is finished rather than when it is accepted, so the
-// bound has to cover the work: a handshake timeout would kill every resume that
-// was doing what it was asked to do. A turn that outlives the bound is killed
-// and reported as a deadline, which is a failed attempt rather than a crash.
+// bound has to cover the work: a bound sized for a handshake would kill every
+// resume that was doing what it was asked to do. A turn that outlives the bound
+// is killed and reported as a deadline, which is a failed attempt rather than a
+// crash.
 const DefaultTurnTimeout = 30 * time.Minute
 
 // Errors raised by the resume path.

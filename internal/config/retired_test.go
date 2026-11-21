@@ -3,8 +3,10 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A configuration file written for 0.8.x carries telegram.notify_needs_input.
@@ -288,5 +290,270 @@ func TestRetiredKeysAreDocumentedAsPermanent(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("telegram.notify_needs_input is no longer tolerated: an 0.8.x file will not load")
+	}
+}
+
+// TestRetiredRecheckBeforeResumeStillLoads covers the 0.10.0 half of the same
+// bargain. scheduler.recheck_before_resume was documented through 0.9.x and no
+// release ever read it — and 0.10.0 deleted even the engine hook it would have
+// fed, because a usage window can only be learned from the resume itself.
+// Removing the key must therefore not make a 0.9.x file unloadable, and must not
+// start pretending a check happens.
+func TestRetiredRecheckBeforeResumeStillLoads(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parse([]byte(`
+app:
+  name: recheck
+scheduler:
+  poll_interval: 45s
+  recheck_before_resume: true
+  unknown_reset_max_interval: 20m
+`), noEnv)
+	if err != nil {
+		t.Fatalf("retired key refused the document: %v", err)
+	}
+
+	if got := cfg.RetiredKeys(); len(got) != 1 || got[0] != "scheduler.recheck_before_resume" {
+		t.Fatalf("RetiredKeys() = %v, want [scheduler.recheck_before_resume]", got)
+	}
+	if warnings := strings.Join(cfg.Warnings(), "\n"); !strings.Contains(warnings, "scheduler.recheck_before_resume") {
+		t.Fatalf("no warning names the ignored key: %q", warnings)
+	}
+
+	// Tolerated is not honoured, and its neighbours are untouched: the keys
+	// either side of the retired one still land where the document put them.
+	if got := cfg.Scheduler.PollInterval.Duration; got != 45*time.Second {
+		t.Errorf("poll_interval = %s, want 45s", got)
+	}
+	if got := cfg.Scheduler.UnknownResetMaxInterval.Duration; got != 20*time.Minute {
+		t.Errorf("unknown_reset_max_interval = %s, want 20m", got)
+	}
+	// The default it used to carry is gone, so nothing inherits `true`.
+	if got := Defaults().Scheduler.PollInterval.Duration; got != 30*time.Second {
+		t.Errorf("scheduler default poll_interval = %s, want 30s", got)
+	}
+}
+
+// TestRecheckBeforeResumeIsNotAKey proves the retirement is not a tolerance for
+// a key that quietly came back: the loading path has no field to set, and the
+// environment override that used to reach it is gone too.
+func TestRecheckBeforeResumeIsNotAKey(t *testing.T) {
+	t.Parallel()
+
+	for _, setter := range envSetters() {
+		if strings.Contains(setter.key, "RECHECK") {
+			t.Fatalf("%s is still registered, so an operator can still set a key nothing reads", setter.key)
+		}
+	}
+
+	// A typo of the retired key is still refused, exactly like any other unknown
+	// key: the tolerance names one path, not a family.
+	if _, err := parse([]byte("app:\n  name: ok\nscheduler:\n  recheck_before_resum: true\n"), noEnv); err == nil {
+		t.Fatal("a typo of the retired key was accepted")
+	}
+}
+
+// TestRetiredRecoveryKeysFrom09StillLoad covers the rest of the 0.10.0 batch:
+// the three timeouts that bounded the old handshake and the four guardrail flags
+// that rode the handoff vector. All seven were documented in 0.9.x and all seven
+// are gone, so a file carrying them must still start — and, because the two spend
+// caps sit in the same `recovery.guardrails` mapping, the pass must take the flags
+// without taking the caps with them.
+func TestRetiredRecoveryKeysFrom09StillLoad(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parse([]byte(`
+app:
+  name: from-09
+recovery:
+  enabled: true
+  max_attempts: 4
+  startup_timeout: 2m
+  verification_timeout: 10m
+  health_check_interval: 5s
+  turn_timeout: 45m
+  max_concurrent_recoveries: 2
+  guardrails:
+    model: opus
+    effort: high
+    fallback_model: sonnet
+    permission_mode: acceptEdits
+    max_cost_usd_per_session: 12.5
+    max_cost_usd_per_attempt: 3
+`), noEnv)
+	if err != nil {
+		t.Fatalf("a 0.9.x recovery section refused the document: %v", err)
+	}
+
+	want := []string{
+		"recovery.startup_timeout",
+		"recovery.verification_timeout",
+		"recovery.health_check_interval",
+		"recovery.guardrails.model",
+		"recovery.guardrails.effort",
+		"recovery.guardrails.fallback_model",
+		"recovery.guardrails.permission_mode",
+	}
+	if got := cfg.RetiredKeys(); !slices.Equal(got, want) {
+		t.Fatalf("RetiredKeys() = %v, want %v", got, want)
+	}
+
+	// Tolerated is not honoured, and the neighbours are untouched: the keys
+	// that kept their meaning still land where the document put them.
+	if got := cfg.Recovery.MaxAttempts; got != 4 {
+		t.Errorf("max_attempts = %d, want 4", got)
+	}
+	if got := cfg.Recovery.TurnTimeout.Duration; got != 45*time.Minute {
+		t.Errorf("turn_timeout = %s, want 45m", got)
+	}
+	if got := cfg.Recovery.MaxConcurrentRecoveries; got != 2 {
+		t.Errorf("max_concurrent_recoveries = %d, want 2", got)
+	}
+	if got := cfg.Recovery.Guardrails.MaxCostUSDPerSession; got != 12.5 {
+		t.Errorf("max_cost_usd_per_session = %v, want 12.5: the retired flags took the cap with them", got)
+	}
+	if got := cfg.Recovery.Guardrails.MaxCostUSDPerAttempt; got != 3 {
+		t.Errorf("max_cost_usd_per_attempt = %v, want 3: the retired flags took the cap with them", got)
+	}
+
+	warnings := strings.Join(cfg.Warnings(), "\n")
+	// The one-key message is quoted verbatim in the manual, so a file carrying
+	// seven must not reuse its singular grammar.
+	if strings.Contains(warnings, " is no longer a configuration key") {
+		t.Errorf("seven retired keys were reported in the singular: %q", warnings)
+	}
+	if !strings.Contains(warnings, "are no longer configuration keys") {
+		t.Errorf("warning does not say the keys are gone: %q", warnings)
+	}
+	for _, path := range want {
+		if !strings.Contains(warnings, path) {
+			t.Errorf("warning does not name %s: %q", path, warnings)
+		}
+	}
+}
+
+// TestRetiredGuardrailFlagsInAOneLineSection is the shape an operator's file
+// takes after the keys were documented as a flow mapping: the pruning pass walks
+// mappings, not lines, so the same paths have to be dropped here too.
+func TestRetiredGuardrailFlagsInAOneLineSection(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := parse([]byte(`
+app:
+  name: flow
+recovery: {turn_timeout: 20m, guardrails: {model: opus, max_cost_usd_per_session: 5}}
+`), noEnv)
+	if err != nil {
+		t.Fatalf("retired flag in a flow mapping refused the document: %v", err)
+	}
+
+	if got := cfg.RetiredKeys(); !slices.Equal(got, []string{"recovery.guardrails.model"}) {
+		t.Fatalf("RetiredKeys() = %v, want [recovery.guardrails.model]", got)
+	}
+	if got := cfg.Recovery.Guardrails.MaxCostUSDPerSession; got != 5 {
+		t.Errorf("max_cost_usd_per_session = %v, want 5", got)
+	}
+	if got := cfg.Recovery.TurnTimeout.Duration; got != 20*time.Minute {
+		t.Errorf("turn_timeout = %s, want 20m", got)
+	}
+}
+
+// TestRetiredRecoveryKeyTyposStillRejected is the other half of the same
+// bargain for the 0.10.0 batch: the tolerance names seven exact paths, not the
+// idea of a timeout or a guardrail flag. A near miss, and the same name under a
+// section that never had it, stay fatal.
+func TestRetiredRecoveryKeyTyposStillRejected(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"startup_timeouts":       "recovery:\n  startup_timeouts: 2m\n",
+		"startup_timeout_":       "recovery:\n  startup_timeout_: 2m\n",
+		"verification_timout":    "recovery:\n  verification_timout: 10m\n",
+		"health_check_interval_": "recovery:\n  health_check_interval_: 5s\n",
+		"guardrails modell":      "recovery:\n  guardrails:\n    modell: opus\n",
+		"guardrails effortt":     "recovery:\n  guardrails:\n    effortt: high\n",
+		"guardrails fallbacks":   "recovery:\n  guardrails:\n    fallback_models: sonnet\n",
+		"guardrails permission":  "recovery:\n  guardrails:\n    permission_modee: acceptEdits\n",
+		"top-level timeout":      "startup_timeout: 2m\n",
+		"scheduler section":      "schedule:\n  startup_timeout: 2m\n",
+		"guardrails top level":   "guardrails:\n  model: opus\n",
+	}
+	for name, doc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := parse([]byte(doc), noEnv); err == nil {
+				t.Fatalf("%q was silently ignored", doc)
+			}
+		})
+	}
+}
+
+// TestRetiredRecoveryKeysLoadFromDisk is the upgrade as an operator walks it: a
+// whole 0.9.x file on disk loads through LoadWithEnv, the loader reports the seven
+// keys it dropped, and it leaves the operator's file exactly as it found it.
+func TestRetiredRecoveryKeysLoadFromDisk(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := `app:
+  name: from-disk-09
+recovery:
+  startup_timeout: 2m
+  verification_timeout: 10m
+  health_check_interval: 5s
+  turn_timeout: 15m
+  guardrails:
+    effort: high
+    max_cost_usd_per_attempt: 2
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadWithEnv(path, noEnv)
+	if err != nil {
+		t.Fatalf("LoadWithEnv refused a 0.9.x file: %v", err)
+	}
+	if cfg.Recovery.TurnTimeout.Duration != 15*time.Minute {
+		t.Errorf("turn_timeout = %s, want 15m", cfg.Recovery.TurnTimeout.Duration)
+	}
+	if cfg.Recovery.Guardrails.MaxCostUSDPerAttempt != 2 {
+		t.Errorf("max_cost_usd_per_attempt = %v, want 2", cfg.Recovery.Guardrails.MaxCostUSDPerAttempt)
+	}
+	if got := len(cfg.RetiredKeys()); got != 4 {
+		t.Fatalf("RetiredKeys() has %d entries, want the four keys the file carries: %v",
+			got, cfg.RetiredKeys())
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if string(after) != body {
+		t.Fatalf("loader rewrote the configuration file:\n%s", after)
+	}
+}
+
+// TestRetiredKeysMatchTheDocumentedList keeps the manual's closed list and the
+// loader's in step. docs/configuration.md tells an operator exactly which keys are
+// tolerated and that the list is permanent and closed; a path added here but not
+// there is a promise the reader cannot check, and a path documented there but
+// missing here is the promise this file exists to keep.
+func TestRetiredKeysMatchTheDocumentedList(t *testing.T) {
+	t.Parallel()
+
+	body, err := os.ReadFile(filepath.Join("..", "..", "docs", "configuration.md"))
+	if err != nil {
+		t.Fatalf("read docs/configuration.md: %v", err)
+	}
+	page := string(body)
+
+	for _, path := range retiredKeys {
+		dotted := strings.Join(path, ".")
+		if !strings.Contains(page, dotted) {
+			t.Errorf("%s is tolerated by the loader but docs/configuration.md does not list it", dotted)
+		}
 	}
 }

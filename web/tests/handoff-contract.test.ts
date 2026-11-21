@@ -60,6 +60,10 @@ function documentationCorpus(): string[] {
     path.join("web", "lib", "landing.ts"),
     path.join("web", "lib", "static-pages.ts"),
     path.join("web", "lib", "captures", "index.ts"),
+    // The site's own contributor notes state the content rules, so they are
+    // held to them too: a README that describes the retired invocation is the
+    // same drift as a page that does.
+    path.join("web", "README.md"),
   ]) {
     if (existsSync(path.join(repoRoot, extra))) {
       files.push(extra);
@@ -84,7 +88,6 @@ function pageText(page: DocPage): string {
     for (const block of blocks) {
       switch (block.kind) {
         case "h2":
-        case "h3":
         case "p":
           parts.push(block.text);
           break;
@@ -105,7 +108,7 @@ function pageText(page: DocPage): string {
           }
           break;
         case "diagram":
-          parts.push(block.title, ...block.lines);
+          parts.push(block.label, block.description);
           break;
         default:
           break;
@@ -126,6 +129,14 @@ const FORBIDDEN = [
   "claude attach",
   "claude logs",
   "backgrounded",
+  // Retired field of the `POST /sessions/{id}/recover` payload: the verdict is
+  // the resume's exit status now, so no page may offer it as something to read.
+  "session_id_preserved",
+  // The supervisor claimed the continuation and answered with a state id and a
+  // label. Nothing does that any more: the resume is one blocking run, and its
+  // exit status is the whole verdict.
+  "the supervisor accepted",
+  "state id and the label",
 ];
 
 describe("resume contract", () => {

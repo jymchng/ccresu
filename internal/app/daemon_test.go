@@ -199,15 +199,15 @@ func TestDaemonActsOnADueSchedule(t *testing.T) {
 		s.TranscriptLines = 1
 		s.TranscriptSize = 10
 	})
-	// The transcript must have grown by the time verification looks, otherwise
-	// the resume is correctly judged unproven.
+	// The transcript has a measurement before the turn; the resort below is only
+	// the diagnostic a post-resume read records.
 	h.provider.Statuses[canonicalSessionID] = claude.SessionStatus{
 		Session:    claude.Session{ID: canonicalSessionID, Recoverable: true},
 		Transcript: claude.TranscriptInfo{Path: "/tmp/t.jsonl", Size: 400, Lines: 9},
 	}
-	// A handoff is what proves the continuation (PRD 2 / R3): the CLI's
-	// `backgrounded` block, not a transcript measurement. The fake still appends
-	// to the transcript, and it is recorded as a diagnostic.
+	// The resume reports exit zero, and that exit status is the verdict. The
+	// transcript the fake appends to is measured afterwards and recorded as a
+	// diagnostic only.
 	h.provider.OnResume = func(context.Context, string, string) (claude.ResumeResult, error) {
 		h.provider.Statuses[canonicalSessionID] = claude.SessionStatus{
 			Session:    claude.Session{ID: canonicalSessionID, Recoverable: true},
@@ -215,13 +215,7 @@ func TestDaemonActsOnADueSchedule(t *testing.T) {
 		}
 		return claude.ResumeResult{
 			RequestedSessionID: canonicalSessionID,
-			SessionID:          canonicalSessionID,
-			Verified:           true,
-			Backgrounded:       true,
-			StateID:            claude.StateIDFor(canonicalSessionID),
-			Name:               claude.HandoffLabel(canonicalSessionID),
-			Subtype:            "success",
-			Result:             "backgrounded",
+			ExitCode:           0,
 		}, nil
 	}
 
@@ -336,10 +330,7 @@ func TestDaemonRecoversPendingSessions(t *testing.T) {
 		}
 		return claude.ResumeResult{
 			RequestedSessionID: retryID,
-			SessionID:          retryID,
-			Verified:           true,
-			Subtype:            "success",
-			Result:             "continued",
+			ExitCode:           0,
 		}, nil
 	}
 
@@ -672,12 +663,13 @@ func TestDaemonLeavesAPlannedRefusalWaitAlone(t *testing.T) {
 	}
 }
 
-// TestDaemonAdvancesThePollWhenTheLimitHasNotCleared covers the other half of
-// the same branch: the pre-resume limit check reports ErrLimitNotCleared without
-// planning anything, so no schedule was written and the due poll is still the
-// only wait there is. It must be advanced, otherwise an unknown-reset schedule
-// stays due and every pass asks the same question again.
-func TestDaemonAdvancesThePollWhenTheLimitHasNotCleared(t *testing.T) {
+// TestDaemonAdvancesThePollWhenTheRefusalCouldNotPlan covers the other half of
+// the same branch: a resume the CLI refused reports ErrLimitNotCleared, but a
+// parker that could not plan leaves the refusal with no instant, so no schedule
+// was written and the due poll is still the only wait there is. It must be
+// advanced, otherwise an unknown-reset schedule stays due and every pass asks
+// the same question again.
+func TestDaemonAdvancesThePollWhenTheRefusalCouldNotPlan(t *testing.T) {
 	h := newHarness(t)
 	session := h.seedSession(t, canonicalSessionID, func(s *storage.Session) {
 		s.State = storage.StateWaitingForReset
@@ -688,17 +680,25 @@ func TestDaemonAdvancesThePollWhenTheLimitHasNotCleared(t *testing.T) {
 		Session:    claude.Session{ID: canonicalSessionID, Recoverable: true},
 		Transcript: claude.TranscriptInfo{Path: "/tmp/t.jsonl", Size: 27472239, Lines: 8470},
 	}
+	// The resume runs and is refused by the CLI: this is the only way ccresu
+	// learns the window has not reopened.
+	h.provider.ResumeErr = &claude.CLIError{
+		What:     "claude --resume",
+		ExitCode: 1,
+		Stdout:   []byte(usageLimitBanner),
+		Kind:     claude.ErrUsageLimitInForce,
+	}
 	manager, err := recovery.New(recovery.Config{
-		Store:               h.store,
-		Provider:            h.provider,
-		Clock:               h.clock,
-		Enabled:             true,
-		MaxAttempts:         3,
-		VerificationTimeout: -1,
-		HealthCheckInterval: -1,
-		LimitPark:           limitParker(h.store, h.rt.Scheduler, h.rt.Detector, h.clock, nil),
-		// The limit has not cleared: the manager says so and plans nothing.
-		LimitRecheck: func(context.Context, string) (bool, error) { return false, nil },
+		Store:       h.store,
+		Provider:    h.provider,
+		Clock:       h.clock,
+		Enabled:     true,
+		MaxAttempts: 3,
+		// A parker that cannot plan: the refusal is still a wait, but it names no
+		// instant, so the manager writes no schedule and the due poll stands.
+		LimitPark: func(context.Context, string, string) (recovery.Wait, error) {
+			return recovery.Wait{}, errors.New("cannot resolve the reset phrase")
+		},
 	})
 	if err != nil {
 		t.Fatalf("recovery manager: %v", err)
@@ -719,10 +719,17 @@ func TestDaemonAdvancesThePollWhenTheLimitHasNotCleared(t *testing.T) {
 		t.Fatalf("step: %v", err)
 	}
 
+	// The pass did run the command — the refusal is the CLI's answer — so exactly
+	// one resume was attempted, and the second pass is what the advanced poll
+	// buys rather than a second resume in this one.
+	resumes := 0
 	for _, call := range h.provider.Calls() {
 		if call.Name == "ResumeSession" {
-			t.Fatalf("a session whose limit has not cleared was resumed")
+			resumes++
 		}
+	}
+	if resumes != 1 {
+		t.Fatalf("resume calls = %d, want 1: the refusal comes from the resume", resumes)
 	}
 
 	schedules, err := h.rt.Scheduler.Restore(context.Background())

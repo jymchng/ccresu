@@ -151,30 +151,100 @@ func TestRecoveryFromConfigMatchesThePackageConstructor(t *testing.T) {
 	}
 }
 
-// TestClaudeOptionsFromConfigCarriesTheStartupTimeout is the reader
-// recovery.startup_timeout never had: the key was accepted, validated, defaulted
-// and env-overridable, and read by nothing, so every handoff was pinned at
-// claude.DefaultHandoffTimeout whatever the configuration said. Delete the
-// HandoffTimeout line from claudeOptionsFromConfig and this fails with 0s, which
-// is exactly the regression it exists to catch.
-func TestClaudeOptionsFromConfigCarriesTheStartupTimeout(t *testing.T) {
+// TestClaudeOptionsFromConfigCarriesTheTurnTimeout is the reader
+// recovery.turn_timeout has: the key bounds one `claude --resume` invocation,
+// which runs the whole turn, so without this wiring every resume would be pinned
+// at claude.DefaultTurnTimeout whatever the configuration said.
+func TestClaudeOptionsFromConfigCarriesTheTurnTimeout(t *testing.T) {
 	cfg := runtimeConfig(t)
-	cfg.Recovery.StartupTimeout = config.NewDuration(45 * time.Second)
+	cfg.Recovery.TurnTimeout = config.NewDuration(45 * time.Second)
 
 	opts := claudeOptionsFromConfig(cfg, clock.NewFake(harnessBaseTime), nil)
-	if opts.HandoffTimeout != 45*time.Second {
-		t.Fatalf("HandoffTimeout = %s, want 45s: recovery.startup_timeout must reach the handoff call", opts.HandoffTimeout)
+	if opts.TurnTimeout != 45*time.Second {
+		t.Fatalf("TurnTimeout = %s, want 45s: recovery.turn_timeout must reach the resume call", opts.TurnTimeout)
+	}
+	// The mapping is only half the chain. The value has to survive the provider's
+	// defaulting and become the deadline of the resume invocation itself, or the
+	// key is filled in and still unread by the call it names.
+	got := resumeTurnTimeout(t, opts)
+	if got > 45*time.Second || got <= 44*time.Second {
+		t.Fatalf("the resume ran under %s, want 45s from recovery.turn_timeout", got)
 	}
 }
 
-// TestStartupTimeoutDefaultMatchesTheHandoffDefault pins the default to the fixed
-// timeout the handoff invocation used before the key had a reader. Wiring the key
-// must not shorten the wait for a configuration that never set it, and an edit to
+// TestClaudeOptionsFromConfigFallsBackToTheDefaultTurnTimeout covers the other
+// half of the same key: unset, the mapping offers nothing and the provider must
+// fall back to claude.DefaultTurnTimeout. Without this an unset key would read as
+// "no bound at all" and a stalled turn would never be killed.
+func TestClaudeOptionsFromConfigFallsBackToTheDefaultTurnTimeout(t *testing.T) {
+	cfg := runtimeConfig(t)
+	cfg.Recovery.TurnTimeout = config.Duration{}
+
+	opts := claudeOptionsFromConfig(cfg, clock.NewFake(harnessBaseTime), nil)
+	if opts.TurnTimeout != 0 {
+		t.Fatalf("TurnTimeout = %s with the key unset, want 0 so the provider applies its default", opts.TurnTimeout)
+	}
+	got := resumeTurnTimeout(t, opts)
+	if got > claude.DefaultTurnTimeout || got <= claude.DefaultTurnTimeout-time.Minute {
+		t.Fatalf("the resume ran under %s, want %s (claude.DefaultTurnTimeout)", got, claude.DefaultTurnTimeout)
+	}
+}
+
+// resumeTurnTimeout builds the provider the daemon builds and reports the bound
+// the resume invocation actually ran under, which is where claude.Options'
+// TurnTimeout ends up and the only place it can be observed once the provider has
+// applied its defaults.
+func resumeTurnTimeout(t *testing.T, opts claude.Options) time.Duration {
+	t.Helper()
+	execer := &deadlineExecer{}
+	// The two options the mapping does not own: a temporary Claude Code home, so
+	// the test touches no real installation, and the recording execer.
+	opts.Home = t.TempDir()
+	opts.Execer = execer
+
+	provider, err := claude.New(opts)
+	if err != nil {
+		t.Fatalf("claude.New: %v", err)
+	}
+	if _, err := provider.CLI().Resume(context.Background(), canonicalSessionID, "continue the paused goal", t.TempDir()); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if !execer.sawDeadline {
+		t.Fatal("the resume ran under no deadline, so nothing bounds the turn")
+	}
+	return execer.timeout
+}
+
+// deadlineExecer stands in for the claude binary and records the deadline the
+// adapter put on the resume.
+type deadlineExecer struct {
+	sawDeadline bool
+	timeout     time.Duration
+}
+
+// Run implements claude.Execer.
+func (d *deadlineExecer) Run(ctx context.Context, _ string, args []string, _ claude.RunOptions) (claude.Output, error) {
+	for _, arg := range args {
+		if arg == "--resume" {
+			if deadline, ok := ctx.Deadline(); ok {
+				d.sawDeadline = true
+				d.timeout = time.Until(deadline)
+			}
+			return claude.Output{ExitCode: 0}, nil
+		}
+	}
+	// Everything else here is the version probe the resume performs first.
+	return claude.Output{Stdout: []byte("2.1.257 (Claude Code)\n")}, nil
+}
+
+// TestTurnTimeoutDefaultMatchesTheResumeDefault pins the default to the fixed
+// timeout the resume invocation uses when the key is unset. Wiring the key must
+// not shorten a wait for a configuration that never set it, and an edit to
 // either constant alone would silently do exactly that.
-func TestStartupTimeoutDefaultMatchesTheHandoffDefault(t *testing.T) {
+func TestTurnTimeoutDefaultMatchesTheResumeDefault(t *testing.T) {
 	cfg := config.Defaults()
-	if got := cfg.Recovery.StartupTimeout.Duration; got != claude.DefaultHandoffTimeout {
-		t.Fatalf("recovery.startup_timeout default = %s, want %s (claude.DefaultHandoffTimeout): the wiring must change no existing behaviour", got, claude.DefaultHandoffTimeout)
+	if got := cfg.Recovery.TurnTimeout.Duration; got != claude.DefaultTurnTimeout {
+		t.Fatalf("recovery.turn_timeout default = %s, want %s (claude.DefaultTurnTimeout): the wiring must change no existing behaviour", got, claude.DefaultTurnTimeout)
 	}
 }
 

@@ -15,7 +15,9 @@ COVERAGE_MIN   := 80.0
 
 .PHONY: help
 help: ## Print available targets
-	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
+	@c=$$(printf '\033[36m'); r=$$(printf '\033[0m'); if [ ! -t 1 ]; then c=''; r=''; fi; \
+	 grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | sort | \
+	 awk -v c="$$c" -v r="$$r" 'BEGIN {FS = ":.*?## "}; {printf "  %s%-18s%s %s\n", c, $$1, r, $$2}'
 
 .PHONY: build
 build: ## Build ./ccresu with version metadata
@@ -53,7 +55,7 @@ test: ## Run the unit and integration tests
 	go test ./...
 
 .PHONY: e2e
-e2e: ## Prove the `claude --bg --resume` handoff against a stub claude CLI
+e2e: ## Prove the `claude --resume <session-id> "<message>"` run against a stub claude CLI
 	tests/scripts/background-resume-e2e.sh
 
 .PHONY: web-captures

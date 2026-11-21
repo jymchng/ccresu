@@ -132,7 +132,7 @@ export function createInstallationDoc(
       kind: "ul",
       items: [
         "Claude Code installed and logged in: discovery runs `claude agents --json`, so `claude` must be on PATH.",
-        "Read access to `~/.claude/projects` and `~/.claude/session-env` for detection and diagnostics: the usage limit is read from the transcript and growth is recorded there. Verification rests on the supervisor instead — the `backgrounded` block it prints, or the state it publishes.",
+        "Read access to `~/.claude/projects` and `~/.claude/session-env` for detection and diagnostics: the usage limit is read from the transcript, and growth is measured there afterwards as a diagnostic.",
         "No root privileges: everything lives under your home directory, and the installer refuses to run as root.",
         `The raw scripts the two lines above pipe into a shell: \`${installScripts.unix}\` and \`${installScripts.windows}\`.`,
       ],

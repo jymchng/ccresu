@@ -113,10 +113,11 @@ func mapError(err error) *apiError {
 		errors.Is(err, recovery.ErrUnrecoverable):
 		return errNotEligible(err.Error())
 	case errors.Is(err, recovery.ErrLimitNotCleared):
-		// Both a refusal (*LimitInForceError, which reports the sentinel through
-		// Is) and the pre-resume limit check arrive here. Without this case they
-		// fell through to the default branch and answered 500 for the most
-		// routine outcome in the product: the window has not reopened yet.
+		// A refusal (*LimitInForceError) reports the sentinel through Is, and it
+		// is the only producer: no pre-resume check can report this. Without
+		// this case a refusal fell through to the default branch and answered
+		// 500 for the most routine outcome in the product: the window has not
+		// reopened yet.
 		return errLimitNotCleared(err.Error())
 	case errors.Is(err, storage.ErrInvalid):
 		return errInvalid(err.Error())

@@ -88,16 +88,16 @@ describe("documentation", () => {
     expect(
       screen.getByRole("heading", {
         level: 2,
-        name: "The operator exits from DISCOVERED",
+        name: "How the outcome is decided",
       }),
     ).toBeInTheDocument();
 
     const body = document.body.textContent ?? "";
-    expect(body).toContain('"--name", HandoffLabel(sessionID),');
-    expect(body).toContain(
-      "claude --bg --resume <session-id> --name ccresu-<hex> <N-byte continuation message>",
-    );
-    expect(body).toContain("claude attach <short-id>");
+    expect(body).toContain('claude --resume <session-id> "<continuation message>"');
+    expect(body).toContain("The exit status is the verdict");
+    expect(body).toContain("recovery.turn_timeout");
+    expect(body).not.toContain("--bg");
+    expect(body).not.toContain("backgrounded");
   });
 
   it("returns undefined for an unknown slug instead of inventing a page", () => {

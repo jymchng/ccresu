@@ -117,14 +117,15 @@ func Render(event storage.NotificationEvent, data EventData) (string, error) {
 		fmt.Fprintf(&body, "%s\n", Bold("Recovery started"))
 		fmt.Fprintf(&body, "Session: %s\n", session)
 		fmt.Fprintf(&body, "Attempt: %s\n", Escape(attemptText(data)))
-		body.WriteString("Resuming the original conversation in the background with ")
-		fmt.Fprintf(&body, "%s.\n", Code("claude --bg --resume "+data.SessionID))
+		body.WriteString("Resuming the original conversation with ")
+		fmt.Fprintf(&body, "%s.\n", Code("claude --resume "+data.SessionID))
+		body.WriteString("The resume runs the whole turn, so its exit status decides the outcome.\n")
 
 	case storage.EventRecoverySuccess:
 		fmt.Fprintf(&body, "%s\n", Bold("Recovery succeeded"))
 		fmt.Fprintf(&body, "Session: %s\n", session)
 		fmt.Fprintf(&body, "Attempt: %s\n", Escape(attemptText(data)))
-		body.WriteString("The original conversation continues under the background supervisor.")
+		body.WriteString("The original conversation continued in its own session, and the resume exited 0.")
 		if data.Duration > 0 {
 			fmt.Fprintf(&body, "\nDuration: %s", Escape(data.Duration.Round(time.Second).String()))
 		}

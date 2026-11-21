@@ -15,7 +15,7 @@ import (
 func seedCostedAttempt(t *testing.T, h *harness, cost *float64) storage.RecoveryAttempt {
 	t.Helper()
 	ctx := context.Background()
-	attempt, err := h.store.StartAttempt(ctx, canonicalSessionID, 0, "claude --bg --resume <id>")
+	attempt, err := h.store.StartAttempt(ctx, canonicalSessionID, 0, "claude --resume <id>")
 	if err != nil {
 		t.Fatalf("start attempt: %v", err)
 	}

@@ -91,16 +91,35 @@ var (
 	ErrUnsupportedVersion = errors.New("claude: unsupported claude code version")
 	// ErrUnrecognizedVersion reports a version string that cannot be parsed.
 	ErrUnrecognizedVersion = errors.New("claude: unrecognized claude code version")
-	// ErrMalformedOutput reports JSON that does not match the verified shape.
+	// ErrMalformedOutput reports JSON that does not match the verified shape:
+	// the `claude agents --json` listing, or one line of a transcript.
 	ErrMalformedOutput = errors.New("claude: malformed claude output")
-	// ErrNoSessionIDReported reports resume output without a session id. Without
-	// it ccresu cannot prove the original conversation was continued, so the
-	// attempt is treated as failed rather than assumed successful.
+	// ErrNoSessionIDReported reports a resume whose output named no session id.
+	//
+	// A blocking `claude --resume <session-id> "<message>"` names the session in
+	// its argument vector and prints the turn, not a reply, so there is no id to
+	// read back and nothing in this package returns this error any more. It is
+	// kept as the name for that condition, so a caller written against the
+	// earlier handshake still compiles and still says what it means.
 	ErrNoSessionIDReported = errors.New("claude: resume output reported no session id")
 	// ErrSessionNotPreserved reports a resume that produced a different session
 	// id, i.e. a new conversation instead of the original one.
+	//
+	// The same is true of it: with the id in the argument vector a substituted
+	// one cannot be observed, so the shipped path never returns it. recovery's
+	// non-retryable list still names it, because a session that came back as a
+	// different conversation is permanent rather than something to retry, and
+	// this is that condition's name.
 	ErrSessionNotPreserved = errors.New("claude: resumed session id did not match the requested session")
-	// ErrResumeFailed reports a resume whose JSON output carried is_error.
+	// ErrResumeFailed names a resume that ran and did not succeed.
+	//
+	// The verdict arrives as an exit status, not as a reply: CLI.Resume wraps a
+	// non-zero one in *CLIError, which carries the exit code and the captured
+	// streams, and whose Kind says whether the run was a usage-limit refusal or
+	// an unclassified crash. This sentinel is the bare name for the same verdict,
+	// for a caller that already holds the failure and has to say what it was.
+	// errors.Is against it answers only for errors that carry it explicitly; a
+	// *CLIError does not.
 	ErrResumeFailed = errors.New("claude: resume reported an error")
 )
 
@@ -292,9 +311,9 @@ type ResumeResult struct {
 	// ExitCode is the process exit status of the resume.
 	//
 	// Zero is the verdict that the continuation ran. It is the only success
-	// signal the command has: on a pipe the CLI prints a result block rather
-	// than a handshake, so there is no acknowledgement to parse and nothing
-	// else to compare against.
+	// signal the command has: `claude --resume <session-id> "<message>"` returns
+	// when the turn is over, and prints the turn rather than a reply, so there is
+	// no acknowledgement to parse and nothing else to compare against.
 	ExitCode int
 	// CWD is the working directory the resume was given.
 	CWD string
@@ -357,13 +376,15 @@ func sortSessions(sessions []Session) {
 // ParseReportedCost reads the cost the CLI reported for a turn, or nil when it
 // reported none.
 //
-// The handoff's human block carries no price, so the only source is a JSON result
-// object the CLI prints alongside it — `{"type":"result","total_cost_usd":0.42}`.
-// It is scanned line by line rather than decoded as one document, because the
-// block and the result can share stdout. A value that is not a finite,
-// non-negative number reads as *unknown* rather than zero (R10): a zero would make
-// an unmeasured attempt look free, and a negative or absurd figure could move a
-// session past or below a cap.
+// The blocking resume prints the turn, and nothing in that output is priced, so
+// nil is the ordinary answer rather than a failure. The one shape worth scanning
+// for is a JSON result object printed alongside it —
+// `{"type":"result","total_cost_usd":0.42}` — because that is where the CLI has
+// ever stated a figure. It is scanned line by line rather than decoded as one
+// document, because the prose and the result can share stdout. A value that is
+// not a finite, non-negative number reads as *unknown* rather than zero (R10): a
+// zero would make an unmeasured attempt look free, and a negative or absurd
+// figure could move a session past or below a cap.
 func ParseReportedCost(stdout []byte) *float64 {
 	for _, line := range strings.Split(string(stdout), "\n") {
 		trimmed := strings.TrimSpace(line)

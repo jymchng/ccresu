@@ -117,13 +117,7 @@ func TestValidateFieldRules(t *testing.T) {
 		{"multiplier", func(c *Config) { c.Recovery.Multiplier = 0.5 }, "recovery.multiplier"},
 		{"negative jitter", func(c *Config) { c.Recovery.Jitter = -0.1 }, "recovery.jitter"},
 		{"jitter too large", func(c *Config) { c.Recovery.Jitter = 1 }, "recovery.jitter"},
-		{"startup timeout", func(c *Config) { c.Recovery.StartupTimeout = NewDuration(0) }, "recovery.startup_timeout"},
-		{"verification timeout", func(c *Config) {
-			c.Recovery.VerificationTimeout = NewDuration(0)
-		}, "recovery.verification_timeout"},
-		{"health check interval", func(c *Config) {
-			c.Recovery.HealthCheckInterval = NewDuration(0)
-		}, "recovery.health_check_interval"},
+		{"turn timeout", func(c *Config) { c.Recovery.TurnTimeout = NewDuration(0) }, "recovery.turn_timeout"},
 		{"max concurrent", func(c *Config) { c.Recovery.MaxConcurrentRecoveries = 0 }, "recovery.max_concurrent_recoveries"},
 
 		{"parse mode", func(c *Config) { c.Telegram.ParseMode = "Richtext" }, "telegram.parse_mode"},

@@ -39,16 +39,15 @@ import (
 //
 // The browser answers the keyboard, not `claude`. Four of its keys run a command
 // that invokes the CLI — enter and 'i' render the `sessions status` page, which
-// reads the supervisor on demand; 'n' runs a discovery pass; 'r' and 'R' run a
+// 'n' runs a discovery pass; 'r' and 'R' run a
 // whole recovery — and any of those can take seconds. So the work never runs on
 // the goroutine that paints:
 //
 //	terminal ──► readKeys (bytes, then keys) ──► loop ──► draw
 //	                                              │
 //	                     startAction ─────────────┴──► worker ──► results
-//	                     startFill  ────────────────────────────► fills
 //
-// The loop selects over the keyboard, finished actions, finished supervisor
+// The loop selects over the keyboard and finished actions, so neither can
 // reads, the context and a hangup channel. It is the only thing that paints and
 // the only thing that touches the browser's state, so the screens cannot race
 // each other. `ctrl-c` reaches it as a byte (ISIG is cleared) and cancels the
@@ -68,13 +67,6 @@ const (
 	// keystroke arrives — which is what made `esc` look broken on the detail
 	// screen.
 	tuiEscapeTimeout = 50 * time.Millisecond
-
-	// tuiSupervisorBudget bounds the background supervisor read behind the detail
-	// screen. It is a fill, not a wait: the page is painted from the store first,
-	// so the budget only decides how long the block says "reading…" before it
-	// says it could not read. A healthy `claude daemon status` costs about a
-	// second; a wedged supervisor is bounded by the CLI's own query timeout.
-	tuiSupervisorBudget = 5 * time.Second
 
 	tuiAltScreenOn  = "\x1b[?1049h"
 	tuiAltScreenOff = "\x1b[?1049l"
@@ -353,19 +345,6 @@ type actionResult struct {
 	status string
 }
 
-// detailFill is the supervisor read behind the detail screen. Its sequence number
-// is what makes a late answer for a screen the operator has left discardable.
-type detailFill struct {
-	seq    int
-	cancel context.CancelFunc
-}
-
-// supervisorFill is a finished supervisor read, reported to the loop.
-type supervisorFill struct {
-	seq    int
-	report supervisorReport
-}
-
 // browser is one interactive session listing.
 type browser struct {
 	app *App
@@ -394,13 +373,10 @@ type browser struct {
 	now       time.Time
 
 	// detail is the rendered `sessions status` page of the inspected session and
-	// detailOffset its scroll position. detailHead and detailTail are the store's
-	// half of that page, kept so the supervisor block can be filled in later
-	// without re-reading the session.
+	// detailOffset its scroll position. It is kept already rendered so a redraw
+	// does not re-read the session.
 	detail       []string
 	detailOffset int
-	detailHead   []string
-	detailTail   []string
 
 	// pendingDelete is the session id the confirm screen is asking about.
 	pendingDelete string
@@ -411,16 +387,10 @@ type browser struct {
 	actionSeq int
 	results   chan actionResult
 
-	// fill is the supervisor read in flight, or nil, and fills carries its
-	// outcome back to the loop.
-	fill    *detailFill
-	fillSeq int
-	fills   chan supervisorFill
-
-	// supervisorBudget bounds the supervisor fill and escapeTimeout a lone
-	// escape. They are fields rather than constants so a test can shrink them.
-	supervisorBudget time.Duration
-	escapeTimeout    time.Duration
+	// escapeTimeout bounds how long a lone escape waits for the byte that would
+	// make it a control sequence. It is a field rather than a constant so a test
+	// can shrink it.
+	escapeTimeout time.Duration
 
 	// done is closed when the loop returns, and hangup when a signal asks it to.
 	done   chan struct{}
@@ -430,19 +400,17 @@ type browser struct {
 // newBrowser assembles a browser over the injected streams.
 func newBrowser(a *App, rt *Runtime, in io.Reader, opts browserOptions) *browser {
 	return &browser{
-		app:              a,
-		rt:               rt,
-		out:              a.stdout,
-		in:               bufio.NewReader(in),
-		opts:             opts,
-		all:              opts.All,
-		mode:             tuiModeList,
-		results:          make(chan actionResult, 1),
-		fills:            make(chan supervisorFill, 1),
-		supervisorBudget: tuiSupervisorBudget,
-		escapeTimeout:    tuiEscapeTimeout,
-		done:             make(chan struct{}),
-		hangup:           make(chan struct{}),
+		app:           a,
+		rt:            rt,
+		out:           a.stdout,
+		in:            bufio.NewReader(in),
+		opts:          opts,
+		all:           opts.All,
+		mode:          tuiModeList,
+		results:       make(chan actionResult, 1),
+		escapeTimeout: tuiEscapeTimeout,
+		done:          make(chan struct{}),
+		hangup:        make(chan struct{}),
 	}
 }
 
@@ -547,7 +515,6 @@ func (b *browser) loop(ctx context.Context) error {
 			b.busy.cancel()
 			b.busy = nil
 		}
-		b.cancelFill()
 	}()
 
 	keys := make(chan keyEvent)
@@ -585,8 +552,6 @@ func (b *browser) loop(ctx context.Context) error {
 			b.draw()
 		case result := <-b.results:
 			b.finishAction(ctx, result)
-		case fill := <-b.fills:
-			b.applyFill(fill)
 		}
 	}
 }
@@ -948,7 +913,6 @@ func (b *browser) detailLimit() int {
 }
 
 // clampDetailOffset keeps the scroll position inside the page, which matters when
-// the supervisor block replaces the placeholder and the page grows.
 func (b *browser) clampDetailOffset() {
 	if limit := b.detailLimit(); b.detailOffset > limit {
 		b.detailOffset = limit
@@ -958,11 +922,9 @@ func (b *browser) clampDetailOffset() {
 	}
 }
 
-// closeDetail returns to the list and abandons the supervisor read behind it.
+// closeDetail returns to the list.
 func (b *browser) closeDetail() {
-	b.cancelFill()
 	b.detail, b.detailOffset = nil, 0
-	b.detailHead, b.detailTail = nil, nil
 	b.setMode(tuiModeList)
 }
 
@@ -1240,9 +1202,8 @@ func (b *browser) create(ctx context.Context) error {
 // openDetail renders the same page `ccresu sessions status <id>` prints, so the
 // browser cannot drift from the CLI.
 //
-// The store's half of the page is painted from the keystroke; the supervisor's
-// half is read behind it (startFill) because it costs an invocation of the CLI
-// and the operator must not be made to wait for a page they can already read.
+// The page is painted from the store alone, which is why it appears with the
+// keystroke: nothing here waits on the CLI.
 func (b *browser) openDetail(ctx context.Context) error {
 	session, ok := b.selected()
 	if !ok {
@@ -1253,108 +1214,13 @@ func (b *browser) openDetail(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var head, tail bytes.Buffer
-	b.app.writeDetailFacts(&head, detail)
-	b.app.writeDetailTail(&tail, detail)
-	b.detailHead = splitLines(head.String())
-	b.detailTail = splitLines(tail.String())
+	var page bytes.Buffer
+	b.app.writeDetailFacts(&page, detail)
+	b.app.writeDetailTail(&page, detail)
+	b.detail = splitLines(page.String())
 	b.detailOffset = 0
 	b.setMode(tuiModeDetail)
-	if reader, ok := b.supervisorReader(); ok {
-		b.detail = b.composeDetail(b.supervisorBlock(supervisorReport{
-			Status:  "reading\u2026",
-			Pending: true,
-		}))
-		b.startFill(ctx, reader, detail)
-	} else {
-		// A provider with no supervisor surface leaves the block out of the text
-		// rendering entirely, exactly as `sessions status` does.
-		b.detail = b.composeDetail(nil)
-	}
 	return nil
-}
-
-// supervisorReader reports the provider's supervisor surface, when it has one.
-func (b *browser) supervisorReader() (SupervisorReader, bool) {
-	if b.rt == nil || b.rt.Provider == nil {
-		return nil, false
-	}
-	reader, ok := b.rt.Provider.(SupervisorReader)
-	if !ok || reader == nil {
-		return nil, false
-	}
-	return reader, true
-}
-
-// startFill reads the supervisor in the background and reports it to the loop.
-//
-// Only one fill runs at a time: a new detail request cancels the previous one, and
-// the answer carries the sequence number of the request that started it, so a late
-// answer for a session the operator has left is discarded rather than painted.
-func (b *browser) startFill(ctx context.Context, reader SupervisorReader, detail sessionDetail) {
-	b.cancelFill()
-	b.fillSeq++
-	fillCtx, cancel := context.WithTimeout(ctx, b.supervisorBudget)
-	fill := &detailFill{seq: b.fillSeq, cancel: cancel}
-	b.fill = fill
-	budget := b.supervisorBudget
-	attempt, attemptErr := detail.Attempt, detail.AttemptErr
-	go func() {
-		report := b.app.readSupervisor(fillCtx, reader, attempt, attemptErr)
-		if errors.Is(fillCtx.Err(), context.DeadlineExceeded) {
-			// A budget that expires is a fact about the read, not about the
-			// session: say which call did not answer rather than reporting an
-			// empty supervisor.
-			report = supervisorReport{
-				Status: "not read",
-				Error: fmt.Sprintf("`claude daemon status` did not answer within %s; press 'i' to try again",
-					budget),
-			}
-		}
-		cancel()
-		select {
-		case b.fills <- supervisorFill{seq: fill.seq, report: report}:
-		case <-b.done:
-		}
-	}()
-}
-
-// cancelFill abandons the supervisor read in flight, if any.
-func (b *browser) cancelFill() {
-	if b.fill == nil {
-		return
-	}
-	b.fill.cancel()
-	b.fill = nil
-}
-
-// applyFill paints the supervisor block once it has been read.
-func (b *browser) applyFill(fill supervisorFill) {
-	if b.mode != tuiModeDetail || b.fill == nil || b.fill.seq != fill.seq {
-		return
-	}
-	b.fill.cancel()
-	b.fill = nil
-	b.detail = b.composeDetail(b.supervisorBlock(fill.report))
-	b.clampDetailOffset()
-	b.draw()
-}
-
-// supervisorBlock renders one supervisor report as the page's block.
-func (b *browser) supervisorBlock(report supervisorReport) []string {
-	var buf bytes.Buffer
-	b.app.writeSupervisorDetail(&buf, report)
-	return splitLines(buf.String())
-}
-
-// composeDetail joins the store's half of the page, the supervisor block and the
-// rest of the page into the lines the detail screen draws.
-func (b *browser) composeDetail(block []string) []string {
-	lines := make([]string, 0, len(b.detailHead)+len(block)+len(b.detailTail))
-	lines = append(lines, b.detailHead...)
-	lines = append(lines, block...)
-	lines = append(lines, b.detailTail...)
-	return lines
 }
 
 // splitLines splits rendered text into the lines a screen draws.
@@ -1509,11 +1375,6 @@ func (b *browser) drawDetail(out *strings.Builder) {
 	}
 	if b.status != "" {
 		fmt.Fprintf(out, "\n%s\n", truncateText(b.status, 160))
-	}
-	if b.fill != nil {
-		// The block itself sits further down the page than the first screen shows,
-		// so the fact that it is being read is stated where it can be seen.
-		out.WriteString("\nreading the supervisor\u2026 (the page fills in)\n")
 	}
 	out.WriteString("\n" + tuiDetailFooter() + "\n")
 }

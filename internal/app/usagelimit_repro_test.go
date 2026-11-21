@@ -98,14 +98,14 @@ type refusingProvider struct {
 	size   int64
 }
 
-// testHandoffDir is the directory the handoff is given. A handoff must be told
-// where it runs, so this test always provides one.
-const testHandoffDir = "/w/session"
+// testRunDir is the directory the resume is given. A resume runs the turn in
+// the session's own directory, so this test always provides one.
+const testRunDir = "/w/session"
 
 // ResumeSession routes the resume through the real CLI adapter, so a refusal
 // travels the production path instead of being simulated here.
 func (p *refusingProvider) ResumeSession(ctx context.Context, sessionID, message string) (claude.ResumeResult, error) {
-	return p.cli.Resume(ctx, sessionID, message, testHandoffDir)
+	return p.cli.Resume(ctx, sessionID, message, testRunDir)
 }
 
 // GetSessionStatus reports the transcript as the failed attempts left it: the
@@ -162,9 +162,7 @@ func newUsageLimitFixture(t *testing.T, grow bool) *usageLimitFixture {
 		Clock:    h.clock,
 		Enabled:  true,
 		// A fake clock never advances, so verification must be "check once".
-		MaxAttempts:         3,
-		VerificationTimeout: -1,
-		HealthCheckInterval: -1,
+		MaxAttempts: 3,
 		// The production seam: the refusal is planned by the detector and the
 		// scheduler, exactly as the daemon does it.
 		LimitPark: limitParker(h.store, h.rt.Scheduler, h.rt.Detector, h.clock, nil),
@@ -359,7 +357,7 @@ func TestARefusedResumeParksTheSessionUntilTheNextReset(t *testing.T) {
 	if strings.Contains(out, "interrupted by a process restart") {
 		t.Errorf("the refusal was rewritten as a restart:\n%s", out)
 	}
-	if strings.Contains(out, "already resumed") {
+	if strings.Contains(out, recovery.ReasonResumed) {
 		t.Errorf("inspect still claims the session resumed:\n%s", out)
 	}
 }
@@ -424,10 +422,10 @@ func TestARefusedResumeIsRecordedAsAWaitAtTheManager(t *testing.T) {
 }
 
 // TestARefusedAttemptsOwnWritesAreNotProofOfResumption drives the second half of
-// the misreport through the daemon. A refused `claude -p --resume` still appends
-// its refusal to the transcript, so the file has grown by the time the reset
-// arrives. That growth is the attempt's own: the pass after the reset must ask
-// again, not declare the session RESUMED / "already resumed" and stop.
+// the misreport through the daemon. A refused `claude --resume` still appends its
+// refusal to the transcript, so the file has grown by the time the reset arrives.
+// That growth is the attempt's own: the pass after the reset must ask again, not
+// declare the session RESUMED and stop.
 func TestARefusedAttemptsOwnWritesAreNotProofOfResumption(t *testing.T) {
 	// grow makes every refused attempt append a line to the transcript, which is
 	// what the real CLI does when it prints its banner into the conversation.
@@ -455,7 +453,7 @@ func TestARefusedAttemptsOwnWritesAreNotProofOfResumption(t *testing.T) {
 	if session.State != storage.StateWaitingForReset {
 		t.Errorf("state = %s, want %s\n%s", session.State, storage.StateWaitingForReset, got)
 	}
-	if out := f.inspect(t); strings.Contains(out, "already resumed") {
+	if out := f.inspect(t); strings.Contains(out, recovery.ReasonResumed) {
 		t.Errorf("inspect claims the session resumed on its own:\n%s", out)
 	}
 	if resumes := f.script.resumeCount(); resumes != 2 {

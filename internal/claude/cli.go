@@ -316,7 +316,7 @@ func (c *CLI) Resume(ctx context.Context, sessionID, message, dir string) (Resum
 // (PRD 6 R2): an inherited cwd is the same directory, but only because of how the
 // daemon happened to be started — under the shipped systemd unit that is `$HOME`.
 // Making it explicit means no invocation depends on that accident, and the one
-// invocation whose directory is *not* ccresu's own (the handoff) is the only
+// invocation whose directory is *not* ccresu's own (the resume) is the only
 // caller that supplies a different one.
 func (c *CLI) run(ctx context.Context, timeout time.Duration, stdin []byte, args ...string) (Output, error) {
 	return c.runIn(ctx, timeout, c.workDir, stdin, false, args...)
@@ -395,7 +395,7 @@ func describeRunError(what string, out Output, err error) error {
 // with errors.Is while the message stays readable; the captured streams stay
 // available as fields for anything that needs the raw output.
 type CLIError struct {
-	// What is the invocation being described, e.g. "claude --bg --resume".
+	// What is the invocation being described, e.g. "claude --resume <id>".
 	What string
 	// ExitCode is the process exit status.
 	ExitCode int

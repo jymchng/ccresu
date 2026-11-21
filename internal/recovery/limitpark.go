@@ -35,7 +35,7 @@ type Wait struct {
 
 // LimitPark records a usage-limit refusal and plans the wait until the reset.
 //
-// It is injected for the same reason LimitRecheck is: recognising a banner is
+// It is injected for the same reason LimitScan is: recognising a banner is
 // the detector's job and resolving a reset phrase is the scheduler's, so the
 // recovery engine asks for the wait instead of growing a second copy of either.
 // banner is the CLI's own output from the refused command, verbatim, so the
@@ -81,8 +81,9 @@ func (e *LimitInForceError) Error() string {
 	return fmt.Sprintf("%s: usage limit in force, waiting %s: %s", e.SessionID, when, e.Banner)
 }
 
-// Is reports the refusal as ErrLimitNotCleared as well, so a caller that only
-// knows about the pre-resume limit check treats both the same way.
+// Is reports the refusal as ErrLimitNotCleared as well, so a caller reading the
+// bare sentinel — the API's 409, the CLI's exit code — treats it as the wait it
+// is without knowing this type exists.
 func (e *LimitInForceError) Is(target error) bool { return target == ErrLimitNotCleared }
 
 // Unwrap exposes the adapter's error, which carries claude.ErrUsageLimitInForce.

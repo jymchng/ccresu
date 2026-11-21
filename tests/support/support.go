@@ -276,8 +276,8 @@ type ResumeCall struct {
 // the session keeps its id and its transcript grows afterwards.
 //
 // It is used instead of the package fake because the suites need a provider
-// whose post-resume status changes, which is exactly the signal the verifier
-// has to observe.
+// whose post-resume status changes, which is exactly the signal the
+// post-resume measurement reads.
 type GrowingProvider struct {
 	mu          sync.Mutex
 	statusCalls int
@@ -289,6 +289,9 @@ type GrowingProvider struct {
 	Session claude.Session
 	// ResumeErr, when set, is returned instead of a successful resume.
 	ResumeErr error
+	// ResumeExitCode is the exit status a successful resume reports. Zero is a
+	// turn that ran to its end, which is the whole verdict.
+	ResumeExitCode int
 	// FailStatus, when set, makes GetSessionStatus fail.
 	FailStatus error
 }
@@ -321,7 +324,7 @@ func (p *GrowingProvider) GetSession(context.Context, string) (claude.Session, e
 // GetSessionStatus implements claude.SessionProvider.
 //
 // Before a resume it reports LinesBefore; after one it reports LinesAfter, which
-// is what makes the verifier's growth check meaningful.
+// is what makes the post-resume growth measurement meaningful.
 func (p *GrowingProvider) GetSessionStatus(_ context.Context, _ string) (claude.SessionStatus, error) {
 	p.mu.Lock()
 	p.statusCalls++
@@ -350,16 +353,6 @@ func (p *GrowingProvider) GetSessionStatus(_ context.Context, _ string) (claude.
 	}, nil
 }
 
-// PublishedListing implements claude.SessionProvider.
-//
-// The suite's provider predates the published-state read, so it reports nothing:
-// an empty successful listing means the supervisor has no opinion, which the
-// recovery mapping treats as "not observed" rather than as a verdict. Tests that
-// need a published state script it explicitly.
-func (p *GrowingProvider) PublishedListing(context.Context) (claude.PublishedListing, error) {
-	return claude.PublishedListing{ReadAt: BaseTime}, nil
-}
-
 // ResumeSession implements claude.SessionProvider.
 func (p *GrowingProvider) ResumeSession(_ context.Context, id, message string) (claude.ResumeResult, error) {
 	if p.ResumeErr != nil {
@@ -368,24 +361,13 @@ func (p *GrowingProvider) ResumeSession(_ context.Context, id, message string) (
 	p.mu.Lock()
 	p.resumes = append(p.resumes, ResumeCall{SessionID: id, Message: message})
 	p.mu.Unlock()
-	// The CLI accepted the handoff and named the state it created. That block,
-	// not a reported session id, is what a resumed recovery is proven by now.
+	// The resume runs the turn and reports through its exit status, so that is
+	// all a fake has to produce: a zero exit means the continuation ran.
 	return claude.ResumeResult{
 		RequestedSessionID: id,
-		SessionID:          id,
-		Backgrounded:       true,
-		StateID:            claude.StateIDFor(id),
-		Name:               claude.HandoffLabel(id),
-		Handoff: claude.Handoff{
-			Acknowledged: true,
-			StateID:      claude.StateIDFor(id),
-			Name:         claude.HandoffLabel(id),
-			Raw:          "backgrounded \u00b7 " + claude.StateIDFor(id) + " \u00b7 " + claude.HandoffLabel(id),
-		},
-		Result:   "continued the paused goal",
-		Subtype:  "success",
-		NumTurns: 1,
-		Command:  append([]string{"claude"}, claude.HandoffArgs(id, message)...),
+		CWD:                p.Session.RunsInPath,
+		ExitCode:           p.ResumeExitCode,
+		Command:            append([]string{"claude"}, claude.ResumeArgs(id, message)...),
 	}, nil
 }
 
@@ -397,18 +379,16 @@ func (p *GrowingProvider) ResumeCalls() []ResumeCall {
 }
 
 // NewManager builds a recovery manager with the documented policy and a
-// verification pass that measures once instead of waiting on the wall clock.
+// measurement recorder that reads once instead of waiting on the wall clock.
 func NewManager(t testing.TB, store recovery.Store, provider claude.SessionProvider, clk clock.Clock, maxAttempts int) *recovery.Manager {
 	t.Helper()
 	manager, err := recovery.New(recovery.Config{
-		Store:               store,
-		Provider:            provider,
-		Clock:               clk,
-		Logger:              QuietLogger(),
-		Enabled:             true,
-		MaxAttempts:         maxAttempts,
-		VerificationTimeout: -1,
-		HealthCheckInterval: -1,
+		Store:       store,
+		Provider:    provider,
+		Clock:       clk,
+		Logger:      QuietLogger(),
+		Enabled:     true,
+		MaxAttempts: maxAttempts,
 	})
 	if err != nil {
 		t.Fatalf("recovery manager: %v", err)

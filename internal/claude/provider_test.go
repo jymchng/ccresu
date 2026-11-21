@@ -52,7 +52,7 @@ func scriptedProviderWithLogger(t *testing.T, home string, script cliScript, log
 		script.agents = testAgentsJSON
 	}
 	if script.resume == "" {
-		script.resume = testHandoffBlock
+		script.resume = testResumeOutput
 	}
 
 	execer := NewFakeExecer(func(call Call) (Output, error) {
@@ -69,7 +69,7 @@ func scriptedProviderWithLogger(t *testing.T, home string, script cliScript, log
 				Stdout:   []byte(script.agents),
 				ExitCode: script.agentsExit,
 			}, script.agentsErr
-		case strings.HasPrefix(argv, "--bg --resume"):
+		case strings.HasPrefix(argv, "--resume"):
 			return Output{
 				Stdout:   []byte(script.resume),
 				Stderr:   []byte(script.resumeStderr),
@@ -377,7 +377,7 @@ func TestProviderGetSessionStatusFreshTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore() error = %v", err)
 	}
-	// A real directory, because PRD 6 R2 resolves the handoff directory and
+	// A real directory, because PRD 6 R2 resolves the resume directory and
 	// refuses a path that is not one.
 	project := t.TempDir()
 	writeTranscript(t, store, project, testSessionID, 4)
@@ -429,7 +429,7 @@ func TestProviderResume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore() error = %v", err)
 	}
-	// PRD 6: the handoff runs in the session's own directory, so the fixture has
+	// PRD 6: the resume runs in the session's own directory, so the fixture has
 	// to be a directory that exists. The listing is empty on purpose — the
 	// session is then discovered from its transcript, which names the launch
 	// project (PRD 6 §6.2).
@@ -442,16 +442,16 @@ func TestProviderResume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResumeSession() error = %v", err)
 	}
-	if !result.Backgrounded || result.StateID == "" {
-		t.Errorf("result = %+v, want an acknowledged handoff", result)
+	if result.ExitCode != 0 {
+		t.Errorf("result = %+v, want a resume that ran to the end of its turn", result)
 	}
-	if result.SessionID != testSessionID {
-		t.Errorf("SessionID = %q, want %q", result.SessionID, testSessionID)
+	if result.RequestedSessionID != testSessionID {
+		t.Errorf("RequestedSessionID = %q, want %q", result.RequestedSessionID, testSessionID)
 	}
 
 	calls := execer.Calls()
 	last := calls[len(calls)-1]
-	want := strings.Join(HandoffArgs(testSessionID, "continue the goal"), " ")
+	want := strings.Join(ResumeArgs(testSessionID, "continue the goal"), " ")
 	if got := strings.Join(last.Args, " "); got != want {
 		t.Errorf("resume argv = %q, want %q", got, want)
 	}

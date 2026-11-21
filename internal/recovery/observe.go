@@ -19,15 +19,16 @@ const (
 	// attempt — an ineligible session, a spent budget — has started nothing.
 	MilestoneStarted MilestoneKind = "recovery_started"
 	// MilestoneSucceeded is reported when the conversation is proven to have
-	// continued: either ccresu resumed it and the transcript grew, or the
-	// session had already resumed on its own once the window reset.
+	// continued: the resume command exited 0, so its turn ran to the end. The
+	// transcript measurement recorded beside it is a diagnostic, never what
+	// decides this.
 	MilestoneSucceeded MilestoneKind = "recovery_success"
 	// MilestoneFailed is reported for a retryable failure: the attempt failed,
 	// the session is parked on a retry instant, and ccresu will try again by
 	// itself.
 	//
 	// A failure reported before the resume was issued — the pre-resume status
-	// check, the limit check or the spend cap — is announced too: it also rests
+	// check or the spend cap — is announced too: it also rests
 	// on a retry instant, and it is the only notice an operator gets that ccresu
 	// is looping without spending budget. A usage-limit refusal is not announced
 	// at all: it is a wait with a known end, not a failure, and the limit

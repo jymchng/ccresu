@@ -111,21 +111,26 @@ type DetectorPattern struct {
 }
 
 // Scheduler holds reset-polling settings.
+//
+// It has no pre-resume recheck switch, and that is deliberate rather than an
+// omission: a usage window can only be learned from a `claude` run, so the
+// resume is the recheck. A refusal is not a failed attempt — it parks the
+// session on the reset its banner named — so there is no second resume for a
+// pre-flight check to prevent.
 type Scheduler struct {
 	PollInterval                Duration `yaml:"poll_interval"`
 	UnknownResetInitialInterval Duration `yaml:"unknown_reset_initial_interval"`
 	UnknownResetMaxInterval     Duration `yaml:"unknown_reset_max_interval"`
-	RecheckBeforeResume         bool     `yaml:"recheck_before_resume"`
 }
 
 // Recovery holds retry and concurrency settings.
 type Recovery struct {
-	Enabled                 bool     `yaml:"enabled"`
-	MaxAttempts             int      `yaml:"max_attempts"`
-	InitialDelay            Duration `yaml:"initial_delay"`
-	MaxDelay                Duration `yaml:"max_delay"`
-	Multiplier              float64  `yaml:"multiplier"`
-	Jitter                  float64  `yaml:"jitter"`
+	Enabled      bool     `yaml:"enabled"`
+	MaxAttempts  int      `yaml:"max_attempts"`
+	InitialDelay Duration `yaml:"initial_delay"`
+	MaxDelay     Duration `yaml:"max_delay"`
+	Multiplier   float64  `yaml:"multiplier"`
+	Jitter       float64  `yaml:"jitter"`
 	// TurnTimeout bounds one resume turn: the whole `claude --resume` run,
 	// including the model's own time to answer.
 	TurnTimeout             Duration `yaml:"turn_timeout"`
@@ -147,11 +152,22 @@ func (c *Config) Warnings() []string {
 		return nil
 	}
 	var warnings []string
-	if len(c.retired) > 0 {
-		warnings = append(warnings, strings.Join(c.retired, ", ")+
-			" is no longer a configuration key: it is ignored, not rejected, so a"+
-			" file written for an older release still starts. Nothing enables it and"+
-			" nothing reads it — delete the line to keep the file honest")
+	if n := len(c.retired); n > 0 {
+		// The singular wording is what the manual quotes for the one-key case
+		// (`docs/configuration.md`, `docs/upgrade.md`), so it is kept verbatim;
+		// a file from 0.9.x can carry seven of them at once, and "a, b, c is no
+		// longer a configuration key" would read as a bug rather than a warning.
+		if n == 1 {
+			warnings = append(warnings, c.retired[0]+
+				" is no longer a configuration key: it is ignored, not rejected, so a"+
+				" file written for an older release still starts. Nothing enables it and"+
+				" nothing reads it — delete the line to keep the file honest")
+		} else {
+			warnings = append(warnings, strings.Join(c.retired, ", ")+
+				" are no longer configuration keys: they are ignored, not rejected, so a"+
+				" file written for an older release still starts. Nothing enables them and"+
+				" nothing reads them — delete the lines to keep the file honest")
+		}
 	}
 	return warnings
 }

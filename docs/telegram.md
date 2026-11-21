@@ -61,16 +61,16 @@ observer that renders and queues it (`internal/app/notifications.go`); and
 recovery engine at all.
 
 There is no "needs your input" message, and no hook to install to get one. A
-session the supervisor publishes as `blocked` is handed a continuation like any
-other: ccresu does not park it and does not ask you about it, so "this session
-needs you" is never a true statement about a session it manages.
+session that stops waiting on a human is continued like any other: ccresu does
+not park it and does not ask you about it, so "this session needs you" is never a
+true statement about a session it manages.
 
 | Event | YAML key | Subject | Queued today |
 | --- | --- | --- | --- |
 | Usage limit detected | `notify_limit_detected` | Usage limit detected | yes, on the first sighting of a banner |
 | Waiting for the reset | `notify_waiting` (default `false`) | Waiting for the usage limit to reset | yes, when the banner named no reset |
 | Recovery started | `notify_recovery_started` | Recovery started | yes, once per attempt, when the attempt row is written |
-| Recovery succeeded | `notify_recovery_success` | Recovery succeeded | yes, once per proven resume |
+| Recovery succeeded | `notify_recovery_success` | Recovery succeeded | yes, once per resume that exited 0 |
 | Attempt failed | `notify_recovery_failure` | Recovery attempt failed | yes, once per attempt that is parked in `WAITING_FOR_RESET` with a retry instant |
 | Permanent failure | `notify_permanent_failure` | Automatic recovery stopped | yes, once per failure classified `recovery.ClassPermanent` |
 | Session completed | `notify_session_completed` | Session completed | yes, once per session that settles as `COMPLETED` |
@@ -82,13 +82,13 @@ time and ccresu has to poll for the window to clear. Turn it on to hear about
 that wait as it begins.
 
 The recovery events are rendered from the milestone the engine reports, so a
-successful recovery looks like this (`internal/telegram/template.go:123-131`):
+successful recovery looks like this (`internal/telegram/template.go:124-132`):
 
 ```text
 Recovery succeeded
 Session: 4d1f9c2a-7e35-4b18-9a6f-2c8d0e1f3a45
 Attempt: 1/10
-The original conversation continues under the background supervisor.
+The original conversation continued in its own session, and the resume exited 0.
 Duration: 2m14s
 ```
 

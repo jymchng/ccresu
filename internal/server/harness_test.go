@@ -75,10 +75,8 @@ func newHarness(t *testing.T, options ...harnessOption) *harness {
 		Logger:      slog.New(slog.DiscardHandler),
 		Enabled:     true,
 		MaxAttempts: 3,
-		// A fake clock never advances by itself, so verification must be
-		// "measure once" rather than "wait for growth".
-		VerificationTimeout: -1,
-		HealthCheckInterval: -1,
+		// The post-resume measurement reads once and never waits, so it needs no
+		// interval and no timeout: an exit status is not something to poll for.
 	})
 	if err != nil {
 		t.Fatalf("recovery manager: %v", err)
@@ -190,27 +188,19 @@ func (h *harness) makeRecoverable(id string) {
 		Session:    resumed,
 		Transcript: claude.TranscriptInfo{Path: "/tmp/t.jsonl", Size: 400, Lines: 9},
 	}
-	// The resume is a handoff, because print mode is retired (PRD 1): the CLI
-	// acknowledges it with a `backgrounded` block, and that acknowledgement is
-	// what proves the continuation — the transcript is a diagnostic afterwards
-	// (PRD 2 / R3).
-	h.provider.ResumeResults[id] = claude.ResumeResult{
-		RequestedSessionID: id,
-		SessionID:          id,
-		Verified:           true,
-		Backgrounded:       true,
-		StateID:            claude.StateIDFor(id),
-		Name:               claude.HandoffLabel(id),
-		Handoff:            claude.Handoff{Acknowledged: true, StateID: claude.StateIDFor(id), Name: claude.HandoffLabel(id)},
-		Result:             "backgrounded",
-		Subtype:            "success",
-	}
-	h.provider.OnResume = func(context.Context, string, string) (claude.ResumeResult, error) {
+	// The resume runs the turn itself, so its exit status is the whole verdict:
+	// the fake reports exit zero and nothing else. The transcript is read once
+	// afterwards and the growth it shows is a diagnostic (PRD 2 / R3).
+	h.provider.OnResume = func(_ context.Context, sessionID, message string) (claude.ResumeResult, error) {
 		h.provider.Statuses[id] = claude.SessionStatus{
 			Session:    resumed,
 			Transcript: claude.TranscriptInfo{Path: "/tmp/t.jsonl", Size: 8192, Lines: 64},
 		}
-		return h.provider.ResumeResults[id], nil
+		return claude.ResumeResult{
+			RequestedSessionID: sessionID,
+			ExitCode:           0,
+			Command:            append([]string{claude.DefaultExecutable}, claude.ResumeArgs(sessionID, message)...),
+		}, nil
 	}
 }
 

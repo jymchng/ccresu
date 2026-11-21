@@ -197,8 +197,8 @@ func TestResumeRefusalIsARecognisableCondition(t *testing.T) {
 	if !errors.As(err, &cliErr) {
 		t.Fatalf("error = %v, want *CLIError", err)
 	}
-	if cliErr.What != "claude --bg --resume" {
-		t.Errorf("What = %q, want %q", cliErr.What, "claude --bg --resume")
+	if cliErr.What != "claude --resume" {
+		t.Errorf("What = %q, want %q", cliErr.What, "claude --resume")
 	}
 	if cliErr.ExitCode != 1 {
 		t.Errorf("ExitCode = %d, want 1", cliErr.ExitCode)

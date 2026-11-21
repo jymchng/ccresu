@@ -50,17 +50,20 @@ python3 -m http.server 8899 --directory /tmp/site
 ## Content rules
 
 - Nothing on the site may claim a behaviour the Go implementation does not have.
-  The resume vector is the clearest case: every page describes the **handoff**
-  `claude --bg --resume <session-id> --name ccresu-<first 8 hex of the id>
-  "<continuation message>"`, which is `claude.HandoffArgs` argument for argument,
-  and the attempt ends when the CLI prints its `backgrounded · <short-id> ·
-  <name>` block and returns. Print mode (`claude -p --resume`), `--output-format
-  json`, stop-then-resume retries and "wait for the transcript to grow" are
-  retired: they are not described anywhere, and the one print-mode sentence the
-  copy keeps is the negation that explains why there is no second path (`--bg`
-  cannot be combined with `-p`/`--print`).
+  The resume vector is the clearest case: every page describes the single command
+  `claude --resume <session-id> "<continuation message>"` — one blocking run in
+  the session's own working directory, the message last — which is
+  `claude.ResumeArgs` argument for argument, and the verdict is the exit status
+  of that process. The background handoff it replaced, print mode
+  (`claude -p --resume`), `--output-format json`, stop-then-resume retries and
+  "wait for the transcript to grow" are retired: they are not described anywhere,
+  and the one print-mode sentence the copy keeps is the negation that explains
+  why there is no second path: print mode and the background flag cannot be
+  combined.
+- Transcript growth is documented as a diagnostic, never as proof: a resume that
+  exits 0 is recovered even when the transcript did not grow.
 - `tests/handoff-contract.test.ts` enforces that rule from the artefacts rather
-  than from memory. It pins the argument order against `internal/claude/handoff.go`,
+  than from memory. It pins the argument order against `internal/claude/resume.go`,
   fails on any retired claim returning to a doc, landing or diagram module, and
   pins the scope boundary: 15 routes, no dashboard, no auth, no analytics, and no
   client-side request to the loopback API.

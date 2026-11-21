@@ -311,3 +311,39 @@ func TestRenderShowsTheTwoDirectoriesDistinctly(t *testing.T) {
 		t.Errorf("body %q lost the project directory", body)
 	}
 }
+
+// TestRecoveryMessagesDescribeTheBlockingResume pins the two recovery bodies to
+// the resume ccresu actually runs.
+//
+// A recovery is one blocking command, `claude --resume <session-id>
+// "<continuation message>"`, and its exit status is the verdict. The started
+// message therefore names the invocation without the continuation message — the
+// prompt can be long or sensitive, and the session id is the part a reader
+// copies or checks — and the success message says how the outcome was decided
+// rather than describing a background dispatch that no longer exists. The
+// success sentence is quoted verbatim in docs/telegram.md, so a template that
+// drifted from it would leave the manual wrong as well.
+func TestRecoveryMessagesDescribeTheBlockingResume(t *testing.T) {
+	data := fullEventData()
+
+	started, err := Render(storage.EventRecoveryStarted, data)
+	if err != nil {
+		t.Fatalf("Render(recovery_started) = %v, want nil", err)
+	}
+	invocation := "<code>claude --resume " + data.SessionID + "</code>."
+	if !strings.Contains(started, invocation) {
+		t.Errorf("recovery_started body %q does not name the invocation %q", started, invocation)
+	}
+	if !strings.Contains(started, "exit status") {
+		t.Errorf("recovery_started body %q does not say the exit status decides", started)
+	}
+
+	succeeded, err := Render(storage.EventRecoverySuccess, data)
+	if err != nil {
+		t.Fatalf("Render(recovery_success) = %v, want nil", err)
+	}
+	want := "The original conversation continued in its own session, and the resume exited 0."
+	if !strings.Contains(succeeded, want) {
+		t.Errorf("recovery_success body %q does not state the verdict as %q", succeeded, want)
+	}
+}

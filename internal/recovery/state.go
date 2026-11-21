@@ -32,10 +32,11 @@ const (
 	// the transcript and the session is parked on the instant it named.
 	StateWaitingForReset = storage.StateWaitingForReset
 	// StateResuming is the third beat: the instant arrived and the continuation
-	// is being handed to the backgrounded session.
+	// is being run, as one blocking `claude --resume` in the session's own
+	// directory.
 	StateResuming = storage.StateResuming
-	// StateResumed is the fourth beat: the handoff was verified and the session
-	// is alive again.
+	// StateResumed is the fourth beat: the resume exited 0, so its turn ran to
+	// the end and the session is alive again.
 	//
 	// It exists as a state, rather than as an immediate return to DISCOVERED,
 	// for one reason: the banner that parked the session is still inside the
@@ -69,10 +70,11 @@ var ErrInvalidTransition = errors.New("recovery: invalid state transition")
 // Each beat does exactly one thing. DISCOVERED reads the transcript and parses
 // the reset time out of a limit banner. WAITING_FOR_RESET sits on that instant
 // with the wait on a persisted schedule, so a restart or a reboot resumes
-// waiting instead of losing the session. RESUMING spends an attempt handing the
-// backgrounded session a continuation. RESUMED is the landing beat, and the
-// edge back to DISCOVERED is what makes the loop a loop: the next scan notices
-// the next limit and the lap starts again.
+// waiting instead of losing the session. RESUMING spends an attempt running one
+// blocking `claude --resume <session-id> "<message>"` in the session's own
+// directory — the command is the attempt, and it returns when the turn is over.
+// RESUMED is the landing beat, and the edge back to DISCOVERED is what makes the
+// loop a loop: the next scan notices the next limit and the lap starts again.
 //
 // WAITING_FOR_RESET -> WAITING_FOR_RESET is a re-entry rather than progress: a
 // banner that named no reset time is polled, and every poll re-parks the session
@@ -80,13 +82,20 @@ var ErrInvalidTransition = errors.New("recovery: invalid state transition")
 //
 // # The four exits
 //
-// Every live beat — DISCOVERED, WAITING_FOR_RESET, RESUMING and RESUMED — has
-// the same four ways out, so no beat can strand a session:
+// Every beat a pass can begin in — DISCOVERED, WAITING_FOR_RESET and RESUMED —
+// has the same four ways out, so no beat can strand a session:
 //
 //   - DISCOVERED, the way back into the loop. A failed attempt, a spent attempt
 //     budget and a wait that no longer applies all return here rather than to a
 //     failure state, which is why the loop needs no operator to keep going.
 //   - COMPLETED, DISABLED and UNRECOVERABLE, the three verdicts that stop it.
+//
+// RESUMING is the one exception, and it is a matter of timing rather than of
+// policy: it is entered immediately before the resume runs and left by that
+// resume's exit status, so no pass is ever looking at a session in RESUMING and
+// nothing can notice a completion there. It keeps three of the four exits —
+// DISCOVERED, DISABLED and UNRECOVERABLE — and has no COMPLETED edge, because an
+// entry no pass can take is a promise the machine would not keep.
 //
 // # The edges that are deliberately absent
 //
@@ -94,17 +103,13 @@ var ErrInvalidTransition = errors.New("recovery: invalid state transition")
 // just resumed must be observed again before it is parked again, or the stale
 // banner in its tail would drive a resume per pass.
 //
-// # The two observing edges into RESUMED
+// # The one way into RESUMED
 //
-// DISCOVERED -> RESUMED and WAITING_FOR_RESET -> RESUMED exist because a pass can
-// find the session already alive: the supervisor publishes `working`, `done`, or
-// `blocked` with a handoff outstanding, which is a session that continued on its
-// own once the window reset. No continuation is handed over and no attempt is
-// spent on that path, so it is an observation rather than a resume, and both
-// edges are entered only from the published state — never from a command.
-//
-// That is also why they do not weaken the stale-banner guard above: the guard is
-// about RESUMED's outgoing edges, and those are unchanged.
+// RESUMING -> RESUMED is the only entry. There is no observing edge from
+// DISCOVERED or from WAITING_FOR_RESET, because a pass has nothing left to
+// observe: it reads no published listing, and the resume it runs is one blocking
+// command whose exit status is the whole verdict. Nothing is recorded as having
+// continued until that command has returned.
 //
 // DISCOVERED -> RESUMING is the operator's way in: `ccresu recover` and
 // `ccresu retry` ask for a resume now instead of waiting for a parsed instant.
@@ -117,7 +122,6 @@ var transitions = map[State]map[State]struct{}{
 	StateDiscovered: {
 		StateWaitingForReset: {}, // a limit was parsed out of the transcript
 		StateResuming:        {}, // the operator asked for a resume now
-		StateResumed:         {}, // the supervisor says it is alive again already
 		StateDiscovered:      {}, // the scan found nothing; a lap that keeps going
 		StateCompleted:       {}, // it finished its last turn
 		StateDisabled:        {}, // the operator turned it off
@@ -126,17 +130,15 @@ var transitions = map[State]map[State]struct{}{
 	StateWaitingForReset: {
 		StateWaitingForReset: {}, // an unknown reset is polled again
 		StateResuming:        {}, // the parsed instant arrived
-		StateResumed:         {}, // it resumed itself once the window reset
 		StateDiscovered:      {}, // the wait no longer applies; a new lap
 		StateCompleted:       {},
 		StateDisabled:        {},
 		StateUnrecoverable:   {},
 	},
 	StateResuming: {
-		StateResumed:         {}, // the handoff was verified
+		StateResumed:         {}, // the resume exited 0
 		StateWaitingForReset: {}, // refused: the limit is still in force
 		StateDiscovered:      {}, // the attempt failed or its budget is spent
-		StateCompleted:       {}, // it finished while the continuation was prepared
 		StateDisabled:        {},
 		StateUnrecoverable:   {},
 	},

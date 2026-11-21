@@ -20,7 +20,7 @@ type State string
 // A session with nothing pending sits in DISCOVERED, where the scan reads its
 // transcript. A usage limit found there parks it in WAITING_FOR_RESET with the
 // reset instant on the schedule. When the instant arrives it is RESUMING, and a
-// successful handoff leaves it RESUMED until the next limit is noticed, which
+// successful resume leaves it RESUMED until the next limit is noticed, which
 // starts the loop again. Everything outside that loop is a verdict that stops
 // it, and there are only three.
 const (
@@ -282,33 +282,21 @@ type RecoveryAttempt struct {
 	// SessionIDVerified reports whether the resumed session kept the original
 	// session ID, i.e. the conversation was continued rather than restarted.
 	SessionIDVerified *bool
-	// TranscriptGrew reports whether the transcript gained lines, which is the
-	// cross-platform proof that the conversation actually advanced.
+	// TranscriptGrew reports whether the transcript gained content across the
+	// resume.
+	//
+	// It is a diagnostic rather than the verdict. The resume's exit status says
+	// whether the conversation continued; this measurement is what an operator
+	// reads afterwards, and a transcript that did not change shape does not turn a
+	// finished turn into a failure.
 	TranscriptGrew *bool
-	// HandoffStateID is the short state ID the CLI printed in its
-	// `backgrounded · <short-id> · <name>` block. It is not the session UUID:
-	// `claude attach`, `claude logs` and `claude stop` all take this one.
-	HandoffStateID string
-	// HandoffName is the label the handoff was given, normally
-	// `ccresu-<first eight characters of the session id>`.
-	HandoffName string
-	// HandoffAt is when the supervisor accepted the session. A non-zero value
-	// means the work is not ccresu's any more, so a restart of ccresu must not
-	// close the attempt as stale.
-	HandoffAt time.Time
-	// HandoffCopied reports whether the continuation landed in a copy rather
-	// than in place. Nil means no handoff was recorded.
-	HandoffCopied *bool
-	// Observation is the published session state this attempt saw. Its zero
-	// value means nothing was recorded, which `ccresu inspect` renders as "not
-	// recorded" — never as "nothing was happening".
-	Observation ObservationRecord
 	// CostUSD is what the CLI reported this attempt cost, in US dollars.
 	//
-	// Nil means *unknown*, not free: a `--bg` handoff usually reports no cost at
-	// all, and PRD 5 R10 requires that an unknown attempt neither counts toward a
-	// cap nor blocks a resume. The pointer is what keeps those two apart, so a
-	// later reader cannot mistake "we were not told" for "it cost nothing".
+	// Nil means *unknown*, not free: a CLI that reports no figure has not said the
+	// attempt was free, and PRD 5 R10 requires that an unknown attempt neither
+	// counts toward a cap nor blocks a resume. The pointer is what keeps those two
+	// apart, so a later reader cannot mistake "we were not told" for "it cost
+	// nothing".
 	CostUSD *float64
 }
 

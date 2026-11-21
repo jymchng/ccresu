@@ -1,36 +1,40 @@
 #!/usr/bin/env bash
 #
-# Proves the recovery handoff end to end, with the real ccresu binary and a stub
+# Proves the recovery end to end, with the real ccresu binary and a stub
 # `claude` on PATH -- not a Go-level fake.
 #
-# The contract under test is the handoff:
+# The contract under test is the resume:
 #
-#	claude --bg --resume <session-id> --name ccresu-<first-8-hex> <message>
+#	claude --resume <session-id> "<continuation message>"
 #
-# One invocation, one answer. The supervisor prints a
-# `backgrounded . <short-id> . <name>` block, ccresu records it, and the command
-# returns. There is no print mode, no `--output-format json`, no second resume
-# and no `claude stop`: recovery hands the conversation over and the supervisor
-# owns it from that moment. A harness that stopped the job and resumed again
+# One invocation, one verdict. The command runs the whole turn in the session's
+# own directory and returns when the turn is over, and its **exit status is the
+# only thing ccresu judges the recovery on**: exit 0 means the conversation
+# continued, and any other status is a failed attempt carrying its exit code and
+# its stderr. There is no print mode, no background flag, no session label, no
+# `claude stop` and no second resume. A harness that expected an acceptance block
 # would be describing a mechanism the binary no longer has, which is exactly the
 # drift this script exists to prevent.
 #
-# The stub is the whole point. It keeps a "published state" per session and
-# answers `claude agents --json --all` from it, so the real published-state read
-# -- not a mock -- is what ccresu decides on. It records every call with its argv
-# so the figure below can show the exact vector that was sent.
+# The transcript is measured once, after the exit, as a diagnostic. Session C
+# exists to prove that: its turn finishes without the transcript changing shape
+# and the session is still RESUMED, because growth is reported and never required.
 #
 # Three sessions are set up in one scratch HOME:
 #
-#   A  handed-off   -> the stub prints the block and publishes `working`; the
-#                      session must end RESUMED, with exactly one handoff and no
-#                      stop, and the audit row must carry the state id and label.
-#   B  refused      -> its handoff always fails with an authentication error, so
-#                      it ends DISCOVERED: a failed resume is not a verdict on
-#                      the conversation.
-#   C  silent       -> its handoff exits 0 but prints no `backgrounded` block, so
-#                      it ends DISCOVERED with `claude.ErrHandoffNotAcknowledged`
-#                      and is not retried.
+#   A  continues -> the stub exits 0 and appends the turn to the transcript, so
+#                   the session ends RESUMED and the attempt records the growth
+#                   the measurement found afterwards.
+#   B  refused   -> the resume exits 1 with an authentication error, so the
+#                   session ends DISCOVERED. An auth refusal classifies as
+#                   permanent: repeating it on this schedule cannot help, so no
+#                   retry instant is stored (`ccresu inspect` shows `at: none`)
+#                   and the next discovery pass re-reads the transcript and
+#                   decides afresh. It is rediscovered rather than abandoned
+#                   because a failed resume is not a verdict on the conversation.
+#   C  quiet     -> the resume exits 0 and writes nothing to the transcript, so
+#                   the session still ends RESUMED and the measurement records
+#                   that it did not grow.
 #
 # Usage: tests/scripts/background-resume-e2e.sh
 # The binary is built into the scratch directory from this checkout.
@@ -108,49 +112,38 @@ state="$STUB_STATE"
 
 case "${1:-}" in
 --version)
-	# The version floor moved to 2.1.257 when print mode was retired (PRD 1), so
-	# the stub must report a CLI that can hand off. Reporting the host's real
-	# version would make this suite depend on whatever is installed.
+	# The version floor is 2.1.257. Reporting the host's real version would make
+	# this suite depend on whatever is installed.
 	printf '2.1.257 (Claude Code)\n'
 	exit 0
 	;;
-daemon)
-	# `daemon status` answers exit 1 when no supervisor is running, which is the
-	# documented "there is none yet" answer and the normal state before a first
-	# handoff. It is not a failure, and ccresu must not treat it as one.
-	printf 'no supervisor is running\n' >&2
-	exit 1
-	;;
 agents)
-	# The listing is built from the per-session published-state files, so a state
-	# appears only once the stub has accepted a handoff for that session.
+	# What discovery reads. Every seeded session is reported once, in the shape
+	# `claude agents --json` prints. Nothing is published, because there is no
+	# supervisor to publish anything: the listing only says which sessions exist
+	# and where they run.
 	printf '['
 	sep=''
 	while IFS="$(printf '\t')" read -r id cwd; do
 		[ -n "$id" ] || continue
 		printf '%s' "$sep"
 		sep=','
-		if [ -f "$state/state-$id" ]; then
-			published=$(cat "$state/state-$id")
-			printf '{"id":"%s","sessionId":"%s","cwd":"%s","kind":"background","status":"busy","state":"%s"}' \
-				"$(printf '%s' "$id" | cut -c1-8)" "$id" "$cwd" "$published"
-		else
-			printf '{"id":"%s","sessionId":"%s","cwd":"%s","kind":"interactive","status":"idle"}' \
-				"$(printf '%s' "$id" | cut -c1-8)" "$id" "$cwd"
-		fi
+		printf '{"id":"%s","sessionId":"%s","cwd":"%s","kind":"interactive","status":"idle"}' \
+			"$(printf '%s' "$id" | cut -c1-8)" "$id" "$cwd"
 	done <"$state/sessions"
 	printf ']\n'
 	exit 0
 	;;
 stop)
-	# A stop is never part of a recovery. Recording it here means a regression
-	# that reintroduced one shows up in the call log instead of passing quietly.
+	# A stop is never part of a recovery. Recording it means a regression that
+	# reintroduced one shows up in the call log instead of passing quietly.
 	printf 'stopped %s\n' "${2:-}"
 	exit 0
 	;;
 esac
 
-# The handoff: `--bg --resume <id> --name <label> <message>`.
+# The resume: `--resume <id> <message>`. The message is positional and last, so
+# the session id is the only other argument there is to find.
 id=""
 previous=""
 for a in "$@"; do
@@ -158,29 +151,26 @@ for a in "$@"; do
 	previous=$a
 done
 
-if [ -f "$state/poison-$id" ]; then
+if [ -f "$state/refuse-$id" ]; then
 	# Octal escapes, not \xNN: this stub runs under /bin/sh, and POSIX printf
 	# defines \ooo but not \xNN.
 	printf 'Invalid API key \302\267 Please run /login\n' >&2
 	exit 1
 fi
-if [ -f "$state/silent-$id" ]; then
-	# Exit 0, but no block: the supervisor said nothing about the session it was
-	# given, which is a refusal ccresu names rather than retries.
-	printf 'Starting background service\342\200\246\n'
+if [ -f "$state/quiet-$id" ]; then
+	# Exit 0 and write nothing: a turn that ran without the transcript ccresu
+	# watches changing shape. The verdict is still the exit status.
+	printf 'continued the goal\n'
 	exit 0
 fi
 
-# Accepted. The supervisor owns the conversation from here: it publishes a state
-# for it and appends the turn it is running to the transcript, which is why the
-# growth below is a diagnostic and not the proof.
-short=$(printf '%s' "$id" | cut -c1-8)
-printf '%s' 'working' >"$state/state-$id"
+# A normal turn: it appends to the transcript and exits 0. The growth below is
+# what the diagnostic records afterwards; it is not what makes the recovery
+# succeed.
 transcript=$(cat "$state/transcript-path-$id")
 printf '{"type":"assistant","sessionId":"%s","timestamp":"%s","message":{"role":"assistant","content":[{"type":"text","text":"continued the goal"}]}}\n' \
 	"$id" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$transcript"
-printf 'Starting background service\342\200\246\n'
-printf 'backgrounded \302\267 %s \302\267 ccresu-%s\n' "$short" "$short"
+printf 'continued the goal\n'
 exit 0
 STUB
 chmod +x "$stub_dir/claude"
@@ -216,13 +206,14 @@ for id in "$session_a" "$session_b" "$session_c"; do
 	seed_transcript "$id"
 done
 
-# The sessions the stub's `agents` listing reports, and the two refusals.
+# The sessions the stub's `agents` listing reports, and the two shapes a resume
+# can come back in other than a plain success.
 printf '%s\t%s\n' \
 	"$session_a" "$project" \
 	"$session_b" "$project" \
 	"$session_c" "$project" >"$state/sessions"
-: >"$state/poison-$session_b"
-: >"$state/silent-$session_c"
+: >"$state/refuse-$session_b"
+: >"$state/quiet-$session_c"
 
 "$ccresu" config init >/dev/null
 
@@ -234,8 +225,8 @@ printf '%s\t%s\n' \
 printf '\n== pass 1: discover, opt in, then `ccresu recover` each session\n'
 # The first pass only discovers and detects: recovery is switched off for this
 # single invocation so the daemon records the usage limit and parks the sessions
-# instead of handing them off itself. `ccresu recover` is then the thing that
-# issues the handoff.
+# instead of resuming them itself. `ccresu recover` is then the thing that runs
+# the resume.
 CCRESU_RECOVERY__ENABLED=false "$ccresu" daemon --once || true
 for id in "$session_a" "$session_b" "$session_c"; do
 	"$ccresu" enable "$id" >/dev/null
@@ -262,70 +253,79 @@ state_field() { printf '%s' "$1" | sed -n 's/^state:[[:space:]]*\(.*\)$/\1/p' | 
 # ------------------------------------------------------------ the call log
 # Each line is CALL<US>arg<US>arg...; awk splits on that separator so an
 # invocation is matched field by field.
-handoff_count() { # handoff_count <session-id>
-	awk -F'\037' -v id="$1" '$2=="--bg" && $3=="--resume" && $4==id' "$state/calls.log" | wc -l | tr -d ' '
+resume_count() { # resume_count <session-id>
+	awk -F'\037' -v id="$1" '$2=="--resume" && $3==id' "$state/calls.log" | wc -l | tr -d ' '
 }
-handoff_a=$(handoff_count "$session_a")
-handoff_b=$(handoff_count "$session_b")
-handoff_c=$(handoff_count "$session_c")
+resume_a=$(resume_count "$session_a")
+resume_b=$(resume_count "$session_b")
+resume_c=$(resume_count "$session_c")
 
-# The exact vector, field by field: --bg --resume <id> --name <label> <message>.
-first_handoff=$(awk -F'\037' -v id="$session_a" '$2=="--bg" && $3=="--resume" && $4==id' "$state/calls.log" | sed -n '1p')
-printf '%s' "$first_handoff" | awk -F'\037' '{ for (i=2; i<=NF; i++) print $i }' >"$work/handoff.argv"
+# The exact vector, field by field: --resume <id> <message>. Three arguments,
+# nothing else: the message is positional and last, so there is no separator and
+# no flag between the id and the prompt.
+first_resume=$(awk -F'\037' -v id="$session_a" '$2=="--resume" && $3==id' "$state/calls.log" | sed -n '1p')
+printf '%s' "$first_resume" | awk -F'\037' '{ for (i=2; i<=NF; i++) print $i }' >"$work/resume.argv"
 {
-	printf '%s\n' "--bg" "--resume" "$session_a" "--name" "ccresu-aaaaaaaa" "$message"
-} >"$work/handoff.want"
-argv_diff=$(diff -u "$work/handoff.want" "$work/handoff.argv" || true)
-check "the handoff vector is --bg --resume <id> --name <label> <message>" "$argv_diff" ""
+	printf '%s\n' "--resume" "$session_a" "$message"
+} >"$work/resume.want"
+argv_diff=$(diff -u "$work/resume.want" "$work/resume.argv" || true)
+check 'the resume vector is --resume <id> "<message>" and nothing else' "$argv_diff" ""
 
-# Nothing print-mode shaped, anywhere: not on the handoff, not on any call.
-print_mode_calls=$(awk -F'\037' '{ for (i=2; i<=NF; i++) if ($i=="-p" || $i=="--print" || $i=="--output-format" || $i=="--json-schema" || $i=="--max-turns" || $i=="--max-budget-usd") { print; break } }' \
+# No resume may carry a fourth argument, and no call may carry a flag the
+# contract retired: no background flag, no session label, no print mode.
+resume_shapes=$(awk -F'\037' '$2=="--resume" && NF!=4' "$state/calls.log" | wc -l | tr -d ' ')
+check "every resume was exactly three arguments" "$resume_shapes" "0"
+retired_calls=$(awk -F'\037' '{ for (i=2; i<=NF; i++) if ($i=="--bg" || $i=="--name" || $i=="-p" || $i=="--print" || $i=="--output-format" || $i=="--max-turns" || $i=="--max-budget-usd" || $i=="--fallback-model" || $i=="--permission-mode") { print; break } }' \
 	"$state/calls.log" | wc -l | tr -d ' ')
-check "no call carried a print-mode flag" "$print_mode_calls" "0"
+check "no call carried a retired flag" "$retired_calls" "0"
 stop_calls=$(awk -F'\037' '$2=="stop"' "$state/calls.log" | wc -l | tr -d ' ')
 check "no stop was issued" "$stop_calls" "0"
+daemon_calls=$(awk -F'\037' '$2=="daemon"' "$state/calls.log" | wc -l | tr -d ' ')
+check "no supervisor was asked for" "$daemon_calls" "0"
 
+# ----------------------------------------------------------------- the verdict
 check "recover A exits 0" "$recover_a_code" "0"
 check "session A ends RESUMED" "$(state_field "$inspect_a")" "RESUMED"
-contains "recover A is proven by the supervisor's acceptance" "$recover_a" \
-	"proven: the continuation was handed to the background supervisor"
-check "the handoff ran exactly once for A" "$handoff_a" "1"
+contains "recover A is proven by the exit status" "$recover_a" \
+	"proven: the resume finished its turn and the transcript grew"
+check "the resume ran exactly once for A" "$resume_a" "1"
+
 check_nonzero "recover B is refused" "$recover_b_code"
-# B's refusal was a real attempt, not a skipped one: exactly one handoff was
-# sent for it, and the failure was not retried into a second.
-check "the refused handoff was attempted exactly once for B" "$handoff_b" "1"
+# B's refusal was a real attempt, not a skipped one: exactly one resume was sent
+# for it, and the failure was not retried into a second.
+check "the refused resume was attempted exactly once for B" "$resume_b" "1"
 check "session B is rediscovered" "$(state_field "$inspect_b")" "DISCOVERED"
-check_nonzero "recover C is refused" "$recover_c_code"
-check "session C is rediscovered" "$(state_field "$inspect_c")" "DISCOVERED"
-check "the silent handoff ran exactly once for C" "$handoff_c" "1"
+contains "the refusal records the exit status" "$recover_b" "failed (exit 1)"
+contains "the refusal keeps the stub's stderr" "$recover_b" "Invalid API key"
+
+# C is the whole point of the diagnostic being a diagnostic: its turn ran and the
+# transcript did not change shape, and the session is still RESUMED.
+check "recover C exits 0" "$recover_c_code" "0"
+check "session C ends RESUMED without the transcript growing" "$(state_field "$inspect_c")" "RESUMED"
+contains "C's verdict is the exit status" "$recover_c" "proven: the resume finished its turn"
+lacks "C's verification does not claim growth" "$recover_c" "the transcript grew"
+check "the resume ran exactly once for C" "$resume_c" "1"
 
 # ------------------------------------------------------------- the audit row
 history_a=$("$ccresu" history "$session_a" 2>&1)
-contains "history records the handoff as the success" "$history_a" "RESUMED"
-lacks "history does not credit transcript growth for the handoff" "$history_a" "transcript grew"
-
+contains "history records the resume as the success" "$history_a" "RESUMED"
 attempt=$("$ccresu" --json history "$session_a" 2>&1)
-contains "the audit row keeps the handoff command" "$attempt" "--bg --resume"
-contains "the audit row keeps the supervisor's state id" "$attempt" '"HandoffStateID": "aaaaaaaa"'
-contains "the audit row keeps the handoff label" "$attempt" '"HandoffName": "ccresu-aaaaaaaa"'
-contains "the audit row keeps the session id" "$attempt" '"SessionIDVerified": true'
-# A handoff is not proven by growth: the transcript is not measured for one at
-# all, so the row says so rather than claiming evidence it does not have.
-contains "the audit row does not claim growth proved the handoff" "$attempt" '"TranscriptGrew": false'
-contains "the reason names the acceptance, not the growth" "$attempt" \
-	"the supervisor accepted the continuation as aaaaaaaa (ccresu-aaaaaaaa)"
+contains "the audit row keeps the resume command" "$attempt" "--resume $session_a"
+contains "the audit row records the growth the measurement found" "$attempt" '"TranscriptGrew": true'
+# Nothing from the retired handoff may survive in the row an operator reads.
+lacks "the audit row carries no handoff state id" "$attempt" '"HandoffStateID"'
+lacks "the audit row carries no handoff label" "$attempt" '"HandoffName"'
+lacks "the audit row carries no supervisor acceptance" "$attempt" "background supervisor"
 
-# The refusal C produced is the named sentinel, not a generic failure.
-error_c=$("$ccresu" --json history "$session_c" 2>&1)
-contains "C records the missing block verbatim" "$error_c" "printed no backgrounded block"
+attempt_c=$("$ccresu" --json history "$session_c" 2>&1)
+contains "C's audit row says the transcript did not grow" "$attempt_c" '"TranscriptGrew": false'
 
 printf '\n== the stub claude call log\n'
 sed 's/^CALL //' "$state/calls.log" | tr '\037' ' '
 
 # ------------------------------------------------------- the removed commands
-# PERMANENTLY_FAILED no longer exists, so nothing needs `reset` or
-# `sessions clear` to get out of it. Both are gone; a script that still calls
-# them must fail loudly rather than silently doing nothing.
+# The retired commands must stay retired: a script that still calls them has to
+# fail loudly rather than silently doing nothing.
 printf '\n== pass 2: the retired commands are gone\n'
 set +e
 "$ccresu" reset "$session_b" >/dev/null 2>&1
@@ -341,4 +341,4 @@ if [ "$fail" -ne 0 ]; then
 	printf 'FAILED: at least one end-to-end expectation did not hold\n'
 	exit 1
 fi
-printf 'PASSED: the session was handed to the supervisor once, and the block it printed is the proof\n'
+printf 'PASSED: one resume per session, and its exit status is the verdict\n'

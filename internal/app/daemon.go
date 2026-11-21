@@ -433,11 +433,11 @@ func (d *Daemon) actOnSchedules(ctx context.Context) error {
 		})
 		// ErrLimitNotCleared says the limit is still in force; it does not say
 		// that a wait was planned. Only a refusal carries *LimitInForceError,
-		// and only a refusal whose parker succeeded carries an instant. The
-		// pre-resume limit check and a refusal whose parker could not plan
-		// write no schedule at all, so the due one this pass loaded is the only
-		// wait there is and must be advanced — otherwise an unknown-reset
-		// schedule stays due and every pass retries it.
+		// and only a refusal whose parker succeeded carries an instant. A
+		// refusal whose parker could not plan writes no schedule at all, so the
+		// due one this pass loaded is the only wait there is and must be
+		// advanced — otherwise an unknown-reset schedule stays due and every pass
+		// retries it.
 		var refusal *recovery.LimitInForceError
 		replanned := errors.As(recoverErr, &refusal) && !refusal.ResetAt.IsZero()
 		switch {

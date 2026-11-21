@@ -22,19 +22,16 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/jymchng/ccresu/internal/claude"
 	"github.com/jymchng/ccresu/internal/storage"
 )
 
-// blockingProvider is the harness provider plus the supervisor surface, with the
-// calls the browser makes held open on channels.
+// blockingProvider is the harness provider with the one call the browser makes
+// held open on a channel.
 //
 // It embeds *claude.FakeProvider rather than replacing it, so a test only has to
-// say which call should block; and it is a test double rather than a method on
-// FakeProvider because "a provider with no supervisor surface" is a real case the
-// browser must keep handling (see TestInspectSaysWhenThereIsNoSupervisor).
+// say which call should block.
 type blockingProvider struct {
 	*claude.FakeProvider
 
@@ -50,17 +47,6 @@ type blockingProvider struct {
 	// can tell "the browser cancelled the action" from "the action happened to
 	// finish quickly".
 	ignoreContext bool
-	// statusBlock does the same for DaemonStatus.
-	statusBlock   chan struct{}
-	statusStarted chan struct{}
-	statusOnce    sync.Once
-	cancelOnce    sync.Once
-	statusCalls   int
-	statusCancels chan struct{}
-	status        claude.SupervisorStatus
-	statusErr     error
-	daemonLog     claude.LogsResult
-	logs          claude.LogsResult
 }
 
 // Discover implements claude.SessionProvider, optionally holding the call open.
@@ -93,90 +79,38 @@ func (p *blockingProvider) Discover(ctx context.Context, filter claude.DiscoverF
 	return sessions, err
 }
 
-// DaemonStatus implements SupervisorReader, optionally holding the call open.
-func (p *blockingProvider) DaemonStatus(ctx context.Context) (claude.SupervisorStatus, error) {
-	p.mu.Lock()
-	p.statusCalls++
-	started, block := p.statusStarted, p.statusBlock
-	status, err := p.status, p.statusErr
-	p.mu.Unlock()
-	if started != nil {
-		p.statusOnce.Do(func() { close(started) })
-	}
-	if block != nil {
-		select {
-		case <-block:
-		case <-ctx.Done():
-			if p.statusCancels != nil {
-				p.cancelOnce.Do(func() { close(p.statusCancels) })
-			}
-			return claude.SupervisorStatus{}, ctx.Err()
-		}
-	}
-	if err != nil {
-		return status, err
-	}
-	return status, nil
-}
-
-// SessionLogs implements SupervisorReader.
-func (p *blockingProvider) SessionLogs(context.Context, string) (claude.LogsResult, error) {
-	return p.logs, nil
-}
-
-// DaemonLogs implements SupervisorReader.
-func (p *blockingProvider) DaemonLogs(context.Context) (claude.LogsResult, error) {
-	return p.daemonLog, nil
-}
-
-// counts reports how often each held-open call was made, and whether the
-// discovery call has finished.
-func (p *blockingProvider) counts() (discover, status int, discoverDone bool) {
+// counts reports how often the held-open call was made and whether it finished.
+func (p *blockingProvider) counts() (discover int, discoverDone bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.discoverCalls, p.statusCalls, p.discoverDone
+	return p.discoverCalls, p.discoverDone
 }
 
-// TestTheBrowserPaintsTheFactsWhileTheSupervisorIsRead is the reported defect
-// itself: Enter must paint the page from the store at once, and say that the
-// supervisor is being read, rather than painting nothing until the CLI answers.
-func TestTheBrowserPaintsTheFactsWhileTheSupervisorIsRead(t *testing.T) {
+// TestTheDetailPageIsPaintedFromTheStore is what is left of the reported defect.
+//
+// Enter has to paint the page with the keystroke. It no longer waits for a
+// supervisor that answers afterwards: there is no supervisor any more, so the
+// page is rendered from the store and opening it asks the CLI nothing at all.
+func TestTheDetailPageIsPaintedFromTheStore(t *testing.T) {
 	h := newHarness(t)
 	h.seedSession(t, canonicalSessionID, nil)
-	provider := &blockingProvider{
-		FakeProvider:  h.provider,
-		statusBlock:   make(chan struct{}),
-		statusStarted: make(chan struct{}),
-		status:        claude.SupervisorStatus{Running: true, State: "running"},
-	}
+	provider := &blockingProvider{FakeProvider: h.provider}
 	h.rt.Provider = provider
 
 	paced := h.startBrowser(t, "sessions")
 	paced.waitForScreen(t, "enter detail")
-	paced.send(t, "\r")
+	before := len(provider.Calls())
 
-	// The page is on screen, from the store, while the read is still held open.
-	paced.waitForScreen(t, "reading the supervisor")
-	screen := paced.screen()
+	paced.send(t, "\r")
+	paced.waitForScreen(t, "Next attempt")
 	for _, want := range []string{canonicalSessionID, "Next attempt", "j/k scroll"} {
-		if !strings.Contains(screen, want) {
-			t.Fatalf("the detail page is missing %q before the supervisor answered:\n%s", want, screen)
+		if !strings.Contains(paced.screen(), want) {
+			t.Fatalf("the detail page is missing %q:\n%s", want, paced.screen())
 		}
 	}
-	select {
-	case <-provider.statusStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("the supervisor read was never started")
-	}
-
-	// Releasing the read fills the block in. The block is below the first screen
-	// of a page this long, so the test scrolls to it exactly as the operator does.
-	close(provider.statusBlock)
-	paced.waitForScreenWithout(t, "reading the supervisor")
-	paced.send(t, "G")
-	paced.waitForScreen(t, "Supervisor")
-	if screen := paced.screen(); !strings.Contains(screen, "running") {
-		t.Fatalf("the supervisor block was not filled in:\n%s", screen)
+	if after := len(provider.Calls()); after != before {
+		t.Errorf("opening the detail page made %d CLI call(s), want none: the page is read from the store",
+			after-before)
 	}
 	if code := paced.quit(t); code != ExitOK {
 		t.Fatalf("exit = %d (stderr %q)", code, h.stderr.String())
@@ -184,48 +118,24 @@ func TestTheBrowserPaintsTheFactsWhileTheSupervisorIsRead(t *testing.T) {
 }
 
 // TestTheDetailPageMatchesSessionsStatus pins the promise the browser makes: the
-// page it shows is the page `sessions status` prints, supervisor block included.
+// page it shows is the page `sessions status` prints.
 func TestTheDetailPageMatchesSessionsStatus(t *testing.T) {
 	h := newHarness(t)
 	h.seedSession(t, canonicalSessionID, func(s *storage.Session) {
 		s.State = storage.StateWaitingForReset
 		s.Reason = "usage limit"
 	})
-	status := claude.SupervisorStatus{
-		Running:      true,
-		State:        "running",
-		Workers:      2,
-		WorkersKnown: true,
-		SocketDir:    "/tmp/cc-daemon-0/abc",
-	}
-	logs := claude.LogsResult{Text: "daemon line one\ndaemon line two"}
-	// The command is a batch command and may wait, so its provider answers at once.
-	h.rt.Provider = &blockingProvider{FakeProvider: h.provider, status: status, daemonLog: logs}
+	h.rt.Provider = &blockingProvider{FakeProvider: h.provider}
 	code, stdout, stderr := h.exec(t, "sessions", "status", canonicalSessionID)
 	if code != ExitOK {
 		t.Fatalf("sessions status exit = %d (stderr %q)", code, stderr)
 	}
 
-	// The browser's read is held open so that "the page was painted before the
-	// supervisor answered" is a fact the test can observe rather than a race it
-	// hopes for.
-	provider := &blockingProvider{
-		FakeProvider:  h.provider,
-		statusBlock:   make(chan struct{}),
-		statusStarted: make(chan struct{}),
-		status:        status,
-		daemonLog:     logs,
-	}
-	h.rt.Provider = provider
-
 	paced := h.startBrowser(t, "sessions")
 	paced.waitForScreen(t, "enter detail")
 	paced.send(t, "\r")
-	paced.waitForScreen(t, "reading the supervisor")
-	close(provider.statusBlock)
-	paced.waitForScreenWithout(t, "reading the supervisor")
+	paced.waitForScreen(t, "Next attempt")
 	paced.send(t, "G")
-	paced.waitForScreen(t, "daemon line two")
 	// The page is 21 lines and the screen shows 15, so the comparison is made
 	// against every frame the detail screen painted, not only the last one.
 	screens := h.stdout.String()
@@ -237,43 +147,6 @@ func TestTheDetailPageMatchesSessionsStatus(t *testing.T) {
 		if !strings.Contains(screens, line) {
 			t.Errorf("the detail screen is missing the CLI's line %q:\n%s", line, paced.screen())
 		}
-	}
-	if code := paced.quit(t); code != ExitOK {
-		t.Fatalf("exit = %d (stderr %q)", code, h.stderr.String())
-	}
-}
-
-// TestTheSupervisorFillGivesUpOnItsBudget: a supervisor that never answers must
-// cost the operator one line, not the page.
-func TestTheSupervisorFillGivesUpOnItsBudget(t *testing.T) {
-	h := newHarness(t)
-	h.seedSession(t, canonicalSessionID, nil)
-	provider := &blockingProvider{
-		FakeProvider:  h.provider,
-		statusBlock:   make(chan struct{}),
-		statusStarted: make(chan struct{}),
-		statusCancels: make(chan struct{}),
-	}
-	h.rt.Provider = provider
-	t.Cleanup(func() { close(provider.statusBlock) })
-
-	paced := h.startBrowser(t, "sessions")
-	paced.waitForScreen(t, "enter detail")
-	paced.send(t, "\r")
-	paced.waitForScreen(t, "reading the supervisor")
-	// The browser uses the shipped budget, so the assertion is that the block ends
-	// by itself rather than how quickly: the wait is deliberately longer than
-	// tuiSupervisorBudget.
-	paced.waitForScreenWithoutWithin(t, "reading the supervisor", tuiSupervisorBudget+5*time.Second)
-	paced.send(t, "G")
-	paced.waitForScreen(t, "not read")
-	screen := paced.screen()
-	if !strings.Contains(screen, "did not answer within") {
-		t.Fatalf("the block does not say why it was not read:\n%s", screen)
-	}
-	// The facts are still there: the budget bounds the read, not the page.
-	if !strings.Contains(screen, canonicalSessionID) {
-		t.Fatalf("the page lost the session's facts:\n%s", screen)
 	}
 	if code := paced.quit(t); code != ExitOK {
 		t.Fatalf("exit = %d (stderr %q)", code, h.stderr.String())
@@ -309,7 +182,7 @@ func TestGatedKeysAreRefusedWhileAnActionRuns(t *testing.T) {
 	paced.send(t, "n")
 	paced.waitForScreen(t, "busy: discovering")
 
-	discover, _, _ := provider.counts()
+	discover, _ := provider.counts()
 	if discover != 1 {
 		t.Fatalf("Discover was called %d times, want 1: a refused key started work", discover)
 	}
@@ -344,7 +217,7 @@ func TestCtrlCCancelsTheActionAndKeepsTheBrowser(t *testing.T) {
 	if screen := paced.screen(); !strings.Contains(screen, "enter detail") {
 		t.Fatalf("the browser did not return to the list after ctrl-c:\n%s", screen)
 	}
-	if _, _, done := provider.counts(); !done {
+	if _, done := provider.counts(); !done {
 		t.Fatal("ctrl-c did not cancel the action")
 	}
 	if code := paced.quit(t); code != ExitOK {
@@ -375,7 +248,7 @@ func TestQQuitsWithoutWaitingForTheAction(t *testing.T) {
 	if code := paced.wait(t); code != ExitOK {
 		t.Fatalf("exit = %d (stderr %q)", code, h.stderr.String())
 	}
-	if _, _, done := provider.counts(); done {
+	if _, done := provider.counts(); done {
 		t.Fatal("the browser waited for the action instead of cancelling it")
 	}
 	if out := h.stdout.String(); !strings.HasSuffix(out, tuiShowCursor+tuiAltScreenOff) {
@@ -482,19 +355,18 @@ func TestTheBrowserNeverCallsTheCLIOnTheKeystrokePath(t *testing.T) {
 		t.Fatalf("parse tui.go: %v", err)
 	}
 	forbidden := map[string]string{
-		"Discover":           "starts a discovery pass",
-		"Retry":              "runs a recovery",
-		"RecoverRequest":     "runs a recovery",
-		"Recover":            "runs a recovery",
-		"DaemonStatus":       "reads the supervisor",
-		"DaemonLogs":         "reads the supervisor",
-		"SessionLogs":        "reads the supervisor",
-		"readSupervisor":     "reads the supervisor",
-		"supervisorReport":   "reads the supervisor",
-		"writeSessionDetail": "reads the supervisor",
+		"Discover":         "starts a discovery pass",
+		"Retry":            "runs a recovery",
+		"RecoverRequest":   "runs a recovery",
+		"Recover":          "runs a recovery",
+		"ResumeSession":    "runs a resume",
+		"ResumeSessionIn":  "runs a resume",
+		"GetSessionStatus": "reads the CLI",
 	}
 	// The screens the keyboard reaches, plus the two functions that prepare work
 	// for a worker: everything they may do is dispatch, read the store, or draw.
+	// loadSessionDetail is deliberately absent from the map: it reads the store
+	// and nothing else, which is what lets Enter paint the page at once.
 	keystrokePath := map[string]bool{
 		"loop": true, "handle": true, "handleBusy": true, "handleList": true,
 		"handleDetail": true, "handleFilter": true, "handleHelp": true,
@@ -543,78 +415,9 @@ func receiverName(expr ast.Expr) string {
 	return ""
 }
 
-// TestTheFillIsDiscardedWhenTheScreenChanges: an answer that arrives after the
-// operator has left the detail screen must not be painted over the list.
-func TestTheFillIsDiscardedWhenTheScreenChanges(t *testing.T) {
-	h := newHarness(t)
-	h.seedSession(t, canonicalSessionID, nil)
-	provider := &blockingProvider{
-		FakeProvider:  h.provider,
-		statusBlock:   make(chan struct{}),
-		statusStarted: make(chan struct{}),
-		status:        claude.SupervisorStatus{Running: true, State: "running"},
-	}
-	h.rt.Provider = provider
-
-	paced := h.startBrowser(t, "sessions")
-	paced.waitForScreen(t, "enter detail")
-	paced.send(t, "\r")
-	paced.waitForScreen(t, "reading the supervisor")
-	// Leave the screen while the read is still held open, then let it answer.
-	paced.send(t, "q")
-	paced.waitForScreen(t, "ccresu sessions — 1 shown")
-	close(provider.statusBlock)
-	// Give the answer a moment to arrive and be discarded.
-	time.Sleep(50 * time.Millisecond)
-	if screen := paced.screen(); strings.Contains(screen, "Supervisor") {
-		t.Fatalf("a supervisor block was painted on the list:\n%s", screen)
-	}
-	if code := paced.quit(t); code != ExitOK {
-		t.Fatalf("exit = %d (stderr %q)", code, h.stderr.String())
-	}
-}
-
-// TestTheDetailFillIsCancelledByLeaving guards the resource the fill holds: leaving
-// the detail screen cancels the read rather than leaving it running.
-func TestTheDetailFillIsCancelledByLeaving(t *testing.T) {
-	h := newHarness(t)
-	h.seedSession(t, canonicalSessionID, nil)
-	provider := &blockingProvider{
-		FakeProvider:  h.provider,
-		statusBlock:   make(chan struct{}),
-		statusStarted: make(chan struct{}),
-		statusCancels: make(chan struct{}),
-	}
-	h.rt.Provider = provider
-	t.Cleanup(func() {
-		select {
-		case <-provider.statusBlock:
-		default:
-			close(provider.statusBlock)
-		}
-	})
-
-	paced := h.startBrowser(t, "sessions")
-	paced.waitForScreen(t, "enter detail")
-	paced.send(t, "\r")
-	paced.waitForScreen(t, "reading the supervisor")
-	paced.send(t, "\r") // back to the list: the fill is abandoned
-	paced.waitForScreen(t, "ccresu sessions — 1 shown")
-
-	select {
-	case <-provider.statusCancels:
-	case <-time.After(2 * time.Second):
-		t.Fatal("leaving the detail screen did not cancel the supervisor read")
-	}
-	if code := paced.quit(t); code != ExitOK {
-		t.Fatalf("exit = %d (stderr %q)", code, h.stderr.String())
-	}
-}
-
-// TestTheBrowserStillWorksWithoutASupervisorSurface keeps the "unavailable"
-// provider honest: no block, no fill, no goroutine, and the page is still the
-// page `sessions status` prints for that provider.
-func TestTheBrowserStillWorksWithoutASupervisorSurface(t *testing.T) {
+// TestTheDetailPageNamesNoSupervisor keeps the retired surface retired: neither
+// the CLI nor the page may offer a supervisor block that nothing fills in.
+func TestTheDetailPageNamesNoSupervisor(t *testing.T) {
 	h := newHarness(t)
 	h.seedSession(t, canonicalSessionID, nil)
 
@@ -623,7 +426,7 @@ func TestTheBrowserStillWorksWithoutASupervisorSurface(t *testing.T) {
 		t.Fatalf("sessions status exit = %d (stderr %q)", code, stderr)
 	}
 	if strings.Contains(stdout, "Supervisor") {
-		t.Fatalf("the CLI printed a supervisor block for a provider with no surface:\n%s", stdout)
+		t.Fatalf("the CLI printed a supervisor block:\n%s", stdout)
 	}
 
 	paced := h.startBrowser(t, "sessions")
@@ -662,7 +465,7 @@ func TestAnActionFailureKeepsTheBrowserRunning(t *testing.T) {
 		s.TranscriptLines = 1
 	})
 	h.provider.SetSession(claude.Session{ID: canonicalSessionID, ProjectPath: "/work/project", Recoverable: true})
-	// The handoff fails, which is what the status line has to report.
+	// The resume fails, which is what the status line has to report.
 	h.provider.ResumeErr = errors.New("claude: the session is already running")
 
 	paced := h.startBrowser(t, "sessions")
